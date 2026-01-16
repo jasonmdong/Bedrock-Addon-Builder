@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/mob_spec.schema.json",
+  "title": "BedrockMobSpec",
+  "type": "object",
+  "description": "Strict spec used to build a Bedrock mob pack.",
+  "additionalProperties": false,
+  "required": [
+    "identifier",
+    "display_name",
+    "short_name",
+    "engine_min",
+    "hp",
+    "damage",
+    "speed",
+    "collision_box",
+    "geometry",
+    "render_controller",
+    "texture_hint",
+    "egg_base",
+    "egg_overlay",
+    "scale"
+  ],
+  "properties": {
+    "identifier": {
+      "type": "string",
+      "description": "Full namespaced identifier namespace:mob",
+      "pattern": "^[a-z0-9_]+:[a-z0-9_]+$",
+      "default": "cont_stoo:stoopidcow"
+    },
+    "display_name": {
+      "type": "string",
+      "minLength": 1,
+      "default": "Stoopid Cow"
+    },
+    "short_name": {
+      "type": "string",
+      "description": "Slug used for filenames",
+      "pattern": "^[a-z0-9_]+$",
+      "default": "stoopidcow"
+    },
+    "engine_min": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 2000
+      },
+      "minItems": 3,
+      "maxItems": 3,
+      "default": [1, 21, 110]
+    },
+    "hp": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2048,
+      "default": 20
+    },
+    "damage": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 128,
+      "default": 4
+    },
+    "speed": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 2,
+      "default": 0.3
+    },
+    "collision_box": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["width", "height"],
+      "properties": {
+        "width": {
+          "type": "number",
+          "minimum": 0.1,
+          "maximum": 5,
+          "default": 0.9
+        },
+        "height": {
+          "type": "number",
+          "minimum": 0.5,
+          "maximum": 5,
+          "default": 1.4
+        }
+      }
+    },
+    "geometry": {
+      "type": "string",
+      "default": "geometry.cow"
+    },
+    "render_controller": {
+      "type": "string",
+      "default": "controller.render.default"
+    },
+    "texture_hint": {
+      "type": "string",
+      "description": "Plain language texture description",
+      "default": "solid red 128x128"
+    },
+    "egg_base": {
+      "type": "string",
+      "pattern": "^#[0-9a-fA-F]{6}$",
+      "default": "#FF0000"
+    },
+    "egg_overlay": {
+      "type": "string",
+      "pattern": "^#[0-9a-fA-F]{6}$",
+      "default": "#550000"
+    },
+    "scale": {
+      "type": "number",
+      "minimum": 0.2,
+      "maximum": 5,
+      "default": 1
+    }
+  }
+}

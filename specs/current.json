@@ -1,0 +1,23 @@
+{
+  "identifier": "cont_stoo:stoopidcow",
+  "display_name": "Stoopid Cow",
+  "short_name": "stoopidcow",
+  "engine_min": [
+    1,
+    21,
+    110
+  ],
+  "hp": 25,
+  "damage": 5.0,
+  "speed": 0.3,
+  "collision_box": {
+    "width": 0.9,
+    "height": 1.4
+  },
+  "geometry": "geometry.cow",
+  "render_controller": "controller.render.default",
+  "texture_hint": "solid red 128x128",
+  "egg_base": "#FFFF00",
+  "egg_overlay": "#550000",
+  "scale": 1.0
+}
