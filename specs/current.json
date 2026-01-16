@@ -8,7 +8,7 @@
     110
   ],
   "hp": 25,
-  "damage": 5.0,
+  "damage": 3.0,
   "speed": 0.3,
   "collision_box": {
     "width": 0.9,

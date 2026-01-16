@@ -712,30 +712,129 @@ INDEX_HTML = """
 <meta charset="utf-8">
 <title>Bedrock Add-on Builder</title>
 <style>
-  :root { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; }
-  body { margin: 2rem; color:#111; background:#f8fafc; }
-  main { max-width: 960px; margin: 0 auto; background: #fff; border-radius: 16px; padding: 2rem; box-shadow: 0 18px 35px rgba(15,23,42,.08); }
+  :root {
+    font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+    --bg: #f8fafc;
+    --text: #0f172a;
+    --card-bg: #ffffff;
+    --border: #e2e8f0;
+    --muted: #94a3b8;
+    --hint: #475569;
+    --editor-bg: #0f172a;
+    --editor-text: #e2e8f0;
+    --status-bg: #0f172a;
+    --status-text: #94a3b8;
+    --primary: #2563eb;
+    --secondary-bg: #e2e8f0;
+    --secondary-text: #0f172a;
+    --danger: #dc2626;
+    --ghost-bg: rgba(148,163,184,0.18);
+    --ghost-text: #0f172a;
+  }
+  body.theme-dark {
+    --bg: #05060b;
+    --text: #f8fafc;
+    --card-bg: #0f172a;
+    --border: #1f2937;
+    --muted: #cbd5f5;
+    --hint: #cbd5f5;
+    --editor-bg: #020617;
+    --editor-text: #e2e8f0;
+    --status-bg: #020617;
+    --status-text: #cbd5f5;
+    --primary: #38bdf8;
+    --secondary-bg: #1e293b;
+    --secondary-text: #f8fafc;
+    --danger: #f87171;
+    --ghost-bg: rgba(148,163,184,0.35);
+    --ghost-text: #f8fafc;
+  }
+  body {
+    margin: 2rem;
+    color: var(--text);
+    background: var(--bg);
+    transition: background .3s ease, color .3s ease;
+  }
+  main {
+    max-width: 960px;
+    margin: 0 auto;
+    background: var(--card-bg);
+    border-radius: 16px;
+    padding: 2rem;
+    box-shadow: 0 18px 35px rgba(15,23,42,.08);
+  }
   h1 { margin-top: 0; }
-  textarea { width:100%; min-height: 380px; font: 14px/1.4 ui-monospace, SFMono-Regular, Consolas, Menlo, monospace; padding: 1rem; border-radius: 12px; border:1px solid #e2e8f0; background:#0f172a; color:#e2e8f0; }
-  textarea:focus { outline: 2px solid #38bdf8; }
+  textarea {
+    width:100%;
+    min-height: 380px;
+    font: 14px/1.4 ui-monospace, SFMono-Regular, Consolas, Menlo, monospace;
+    padding: 1rem;
+    border-radius: 12px;
+    border:1px solid var(--border);
+    background: var(--editor-bg);
+    color: var(--editor-text);
+  }
+  textarea:focus { outline: 2px solid var(--primary); }
   .actions { display:flex; gap: 1rem; margin-top: 1rem; flex-wrap: wrap; }
-  button { padding: .75rem 1.4rem; border-radius: 999px; border: none; font-weight: 600; cursor: pointer; }
-  button.primary { background:#2563eb; color:#fff; }
-  button.secondary { background:#e2e8f0; color:#0f172a; }
-  button.danger { background:#dc2626; color:#fff; }
+  button { padding: .75rem 1.4rem; border-radius: 999px; border: none; font-weight: 600; cursor: pointer; transition: transform .2s ease; }
+  button:active { transform: scale(0.97); }
+  button.primary { background: var(--primary); color:#fff; }
+  button.secondary { background: var(--secondary-bg); color: var(--secondary-text); }
+  button.danger { background: var(--danger); color:#fff; }
+  button.ghost { background: var(--ghost-bg); color: var(--ghost-text); }
   label { font-weight: 600; display:block; margin-bottom: .35rem; }
-  input[type=file] { width:100%; padding:.35rem 0; }
-  input[type=password], select { width: 100%; padding: .6rem .75rem; border-radius: 10px; border:1px solid #cbd5f5; background:#fff; font: inherit; }
+  input[type=file] { width:100%; padding:.35rem 0; color: var(--text); }
+  input[type=password], select {
+    width: 100%;
+    padding: .6rem .75rem;
+    border-radius: 10px;
+    border:1px solid var(--border);
+    background: var(--card-bg);
+    color: var(--text);
+    font: inherit;
+  }
   .row { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin-top: 1rem; }
-  .llm-card { margin-top: 1.5rem; padding: 1rem; border-radius: 12px; border:1px solid #e2e8f0; background:#f1f5f9; }
-  #llm-prompt { min-height: 120px; background:#fff; color:#0f172a; }
-  .llm-footnote { color:#64748b; font-size:.85rem; }
-  #status { background:#0f172a; color:#94a3b8; padding: 1rem; border-radius: 12px; margin-top:1rem; min-height:3rem; white-space:pre-wrap; }
-  .hint { color:#475569; font-size:.95rem; margin-bottom:1rem; }
+  .llm-card { margin-top: 1.5rem; padding: 1.2rem 1.4rem; border-radius: 16px; border:1px solid var(--border); background: rgba(148,163,184,0.12); display:flex; flex-direction:column; gap:1rem; }
+  .llm-controls { display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:1rem; align-items:end; }
+  .llm-controls .field { min-width:0; }
+  .llm-controls .field label { font-size:.9rem; color: var(--hint); margin-bottom:.35rem; }
+  .llm-card select,
+  .llm-card input[type=password] {
+    height: 46px;
+    border-radius: 12px;
+    border:1px solid var(--border);
+    background: var(--card-bg);
+    color: var(--text);
+    padding: 0 .9rem;
+    font: inherit;
+  }
+  #llm-prompt {
+    min-height: 140px;
+    background: var(--card-bg);
+    color: var(--text);
+    border-radius: 12px;
+    border:1px solid var(--border);
+    resize: vertical;
+  }
+  .llm-footnote { color: var(--hint); font-size:.85rem; }
+  #status {
+    background: var(--status-bg);
+    color: var(--status-text);
+    padding: 1rem;
+    border-radius: 12px;
+    margin-top:1rem;
+    min-height:3rem;
+    white-space:pre-wrap;
+  }
+  .hint { color: var(--hint); font-size:.95rem; margin-bottom:1rem; }
   details { margin-top:1rem; }
   code { font-family: ui-monospace, SFMono-Regular, Consolas, Menlo, monospace; }
+  .toolbar { display:flex; justify-content:flex-end; margin-bottom:1rem; }
 </style>
 <main>
+  <div class="toolbar">
+    <button type="button" class="ghost" id="theme-toggle">🌙 Dark Mode</button>
+  </div>
   <h1>Bedrock Add-on Builder</h1>
   <p class="hint">
     Edit the JSON spec, save it, then build packs. Optional resource/behavior packs are merged in before bundling.
@@ -751,16 +850,19 @@ INDEX_HTML = """
     </div>
   </div>
   <div class="llm-card">
-    <label>LLM Assistant Prompt</label>
-    <div class="row">
-      <div>
+    <div>
+      <label style="font-size:1rem;">LLM Assistant Prompt</label>
+      <p class="hint" style="margin:.2rem 0 0;">Describe the change you want and let an LLM update the spec.</p>
+    </div>
+    <div class="llm-controls">
+      <div class="field">
         <label>Provider</label>
         <select id="llm-provider">
           <option value="openai">OpenAI</option>
           <option value="deepseek">DeepSeek</option>
         </select>
       </div>
-      <div>
+      <div class="field">
         <label>API Key</label>
         <input type="password" id="llm-key" placeholder="sk-..." autocomplete="off">
       </div>
@@ -771,6 +873,7 @@ INDEX_HTML = """
       <span class="llm-footnote">Paste an API key here or configure OPENAI_API_KEY / DEEPSEEK_API_KEY on the server.</span>
     </div>
   </div>
+  <pre id="status">Loading spec...</pre>
   <label style="margin-top:1rem;">Mob Spec JSON</label>
   <textarea id="spec-editor" spellcheck="false" autocomplete="off"></textarea>
   <div class="actions">
@@ -778,13 +881,15 @@ INDEX_HTML = """
     <button type="button" class="danger" id="save">Save Spec</button>
     <button type="button" class="primary" id="build">Build Bundle</button>
   </div>
-  <pre id="status">Loading spec...</pre>
   <details>
     <summary>View schema (for LLM prompts)</summary>
-    <pre id="schema-view" style="background:#0f172a;color:#94a3b8;padding:1rem;border-radius:12px;overflow:auto;max-height:240px;"></pre>
+    <pre id="schema-view" style="background:var(--status-bg);color:var(--status-text);padding:1rem;border-radius:12px;overflow:auto;max-height:240px;"></pre>
   </details>
 </main>
 <script>
+const THEME_KEY = "builder_theme_preference";
+const LLM_PROVIDER_KEY = "builder_llm_provider";
+const LLM_API_KEY_STORAGE = "builder_llm_api_key";
 const editor = document.getElementById("spec-editor");
 const statusEl = document.getElementById("status");
 const schemaView = document.getElementById("schema-view");
@@ -794,6 +899,31 @@ const llmPrompt = document.getElementById("llm-prompt");
 const llmButton = document.getElementById("llm-run");
 const llmProvider = document.getElementById("llm-provider");
 const llmKey = document.getElementById("llm-key");
+const themeToggle = document.getElementById("theme-toggle");
+
+function applyTheme(theme) {
+  document.body.classList.toggle("theme-dark", theme === "dark");
+  if (themeToggle) {
+    themeToggle.textContent = theme === "dark" ? "☀ Light Mode" : "🌙 Dark Mode";
+  }
+}
+
+function initTheme() {
+  const stored = localStorage.getItem(THEME_KEY);
+  const theme = stored === "dark" ? "dark" : "light";
+  applyTheme(theme);
+}
+
+function loadLlmPrefs() {
+  const storedProvider = localStorage.getItem(LLM_PROVIDER_KEY);
+  const storedKey = localStorage.getItem(LLM_API_KEY_STORAGE);
+  if (storedProvider && llmProvider) {
+    llmProvider.value = storedProvider;
+  }
+  if (storedKey && llmKey) {
+    llmKey.value = storedKey;
+  }
+}
 
 function setStatus(message, isError=false) {
   statusEl.textContent = message;
@@ -914,7 +1044,20 @@ llmButton?.addEventListener("click", async (e) => {
   e.preventDefault();
   await requestLlm();
 });
+themeToggle?.addEventListener("click", () => {
+  const next = document.body.classList.contains("theme-dark") ? "light" : "dark";
+  applyTheme(next);
+  localStorage.setItem(THEME_KEY, next);
+});
+llmProvider?.addEventListener("change", () => {
+  localStorage.setItem(LLM_PROVIDER_KEY, llmProvider.value);
+});
+llmKey?.addEventListener("input", () => {
+  localStorage.setItem(LLM_API_KEY_STORAGE, llmKey.value.trim());
+});
 
+initTheme();
+loadLlmPrefs();
 loadSpec();
 </script>
 """
