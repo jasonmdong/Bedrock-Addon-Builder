@@ -1,3 +1,12 @@
 venv/
 __pycache__/
 *.pyc
+
+# Local build artifacts
+*.zip
+*.mcworld
+*.mcpack
+*.mcaddon
+
+# Environment variables
+.env

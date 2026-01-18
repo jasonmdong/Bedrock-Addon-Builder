@@ -7,7 +7,7 @@
     21,
     110
   ],
-  "hp": 25,
+  "hp": 5,
   "damage": 3.0,
   "speed": 0.3,
   "collision_box": {
@@ -16,8 +16,13 @@
   },
   "geometry": "geometry.cow",
   "render_controller": "controller.render.default",
-  "texture_hint": "solid red 128x128",
-  "egg_base": "#FFFF00",
-  "egg_overlay": "#550000",
-  "scale": 1.0
+  "texture_hint": "solid blue 128x128",
+  "egg_base": "#0000FF",
+  "egg_overlay": "#000055",
+  "scale": 1.0,
+  "color_rgb": [
+    40,
+    120,
+    255
+  ]
 }

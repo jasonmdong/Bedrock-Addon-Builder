@@ -66,6 +66,14 @@ HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 LLM_MODEL_NAME = os.environ.get("LLM_MODEL", "gpt-5")
 DEEPSEEK_MODEL_NAME = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
 DEFAULT_LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "openai")
+WORLD_TEMPLATE_BASES = [
+    BASE_DIR / "templates" / "base_world",
+    BASE_DIR / "templates" / "base_world.mcworld",
+    BASE_DIR / "templates" / "base_world.zip",
+    BASE_DIR / "base_world",
+    BASE_DIR / "base_world.mcworld",
+    BASE_DIR / "base_world.zip",
+]
 LLM_SYSTEM_PROMPT = """You edit Bedrock mob specs.
 Respond with a single JSON object matching the provided schema.
 Respect the existing namespace and only change fields the user mentions.
@@ -147,6 +155,42 @@ def _coerce_color(value, name: str) -> str:
     return value.upper()
 
 
+def _hex_to_rgb(value: str) -> Optional[tuple[int,int,int]]:
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if value.startswith("#"):
+        value = value[1:]
+    if len(value) != 6:
+        return None
+    try:
+        return (int(value[0:2],16), int(value[2:4],16), int(value[4:6],16))
+    except ValueError:
+        return None
+
+
+def _infer_color_rgb(spec: dict) -> tuple[int,int,int]:
+    raw = spec.get("color_rgb")
+    if isinstance(raw, (list, tuple)) and len(raw) == 3:
+        try:
+            return tuple(int(v) for v in raw)
+        except Exception:
+            pass
+    hint = (spec.get("texture_hint") or "").lower()
+    for word, rgb in COLOR_WORDS.items():
+        if word in hint:
+            return rgb
+    for key in ("color_hex", "color", "primary_color"):
+        rgb = _hex_to_rgb(spec.get(key))
+        if rgb:
+            return rgb
+    for egg_key in ("egg_base", "egg_overlay"):
+        rgb = _hex_to_rgb(spec.get(egg_key))
+        if rgb:
+            return rgb
+    return COLOR_WORDS["red"]
+
+
 def validate_spec(raw: dict) -> dict:
     if not isinstance(raw, dict):
         raise SpecValidationError("Spec must be a JSON object.")
@@ -200,6 +244,7 @@ def validate_spec(raw: dict) -> dict:
     merged["egg_base"] = _coerce_color(merged.get("egg_base"), "egg_base")
     merged["egg_overlay"] = _coerce_color(merged.get("egg_overlay"), "egg_overlay")
     merged["scale"] = _coerce_number(merged.get("scale"), "scale", minimum=0.2, maximum=5.0)
+    merged["color_rgb"] = list(_infer_color_rgb(merged))
 
     return merged
 
@@ -426,6 +471,55 @@ def unpack_if_given(path: Optional[Path], dest: Path):
                 break
     return dest
 
+
+def copy_world_template(dest: Path):
+    if dest.exists():
+        shutil.rmtree(dest, ignore_errors=True)
+    for cand in _world_template_candidates():
+        if cand.is_dir():
+            shutil.copytree(cand, dest, dirs_exist_ok=True)
+            _flatten_world_root(dest)
+            return
+        if cand.is_file():
+            tmp = Path(tempfile.mkdtemp(prefix="world_tpl_"))
+            try:
+                with zipfile.ZipFile(cand, "r") as zf:
+                    zf.extractall(tmp)
+                # Just copy everything from the extract root.
+                # _flatten_world_root will handle un-nesting if needed.
+                shutil.copytree(tmp, dest, dirs_exist_ok=True)
+                _flatten_world_root(dest)
+                return
+            finally:
+                shutil.rmtree(tmp, ignore_errors=True)
+    raise RuntimeError(
+        "World template not found. Place a base world directory or .mcworld/.zip under templates/base_world*."
+    )
+
+
+def _world_template_candidates():
+    seen = set()
+    for base in WORLD_TEMPLATE_BASES:
+        if base not in seen:
+            seen.add(base)
+            yield base
+    for pattern in ("*.mcworld", "*.zip"):
+        for path in BASE_DIR.glob(pattern):
+            if path not in seen:
+                seen.add(path)
+                yield path
+
+
+def _flatten_world_root(world_root: Path):
+    if (world_root / "level.dat").exists():
+        return
+    subdirs = [p for p in world_root.iterdir() if p.is_dir()]
+    if len(subdirs) == 1 and (subdirs[0] / "level.dat").exists():
+        nested = subdirs[0]
+        for child in nested.iterdir():
+            shutil.move(str(child), world_root)
+        shutil.rmtree(nested, ignore_errors=True)
+
 def patch_resource_pack(res_root: Path, spec: dict):
     ent_dir = res_root/"entity"
     ent_dir.mkdir(parents=True, exist_ok=True)
@@ -455,7 +549,7 @@ def patch_resource_pack(res_root: Path, spec: dict):
 
     scale = float(spec.get("scale", 1.0))
     client = {
-        "format_version":"1.10.0",
+        "format_version":"1.21.0",
         "minecraft:client_entity":{
             "description":{
                 "identifier": spec["identifier"],
@@ -492,6 +586,7 @@ def patch_resource_pack(res_root: Path, spec: dict):
     except Exception:
         pass
     man.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    return manifest
 
 def patch_behavior_pack(beh_root: Path, spec: dict):
     ent_dir = beh_root/"entities"
@@ -500,14 +595,14 @@ def patch_behavior_pack(beh_root: Path, spec: dict):
 
     # --- Hostile, pursuit-oriented cow ---
     entity = {
-        "format_version": "1.10.0",
+        "format_version": "1.21.10",
         "minecraft:entity": {
             "description": {
                 "identifier": spec["identifier"],
                 "is_spawnable": True,
                 "is_summonable": True,
                 "is_experimental": False,
-                "spawn_egg": { "base_color": DEFAULTS["egg_base"], "overlay_color": DEFAULTS["egg_overlay"] }
+                "spawn_egg": { "base_color": spec.get("egg_base", DEFAULTS["egg_base"]), "overlay_color": spec.get("egg_overlay", DEFAULTS["egg_overlay"]) }
             },
             "components": {
                 # Core stats
@@ -593,6 +688,75 @@ def patch_behavior_pack(beh_root: Path, spec: dict):
         "version": [1,0,0]
     }]
     man.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    return manifest
+
+
+def _manifest_version(manifest: dict) -> list:
+    return manifest.get("header", {}).get("version") or [1, 0, 0]
+
+
+def create_mcworld(out_dir: Path,
+                   res_root: Path,
+                   res_manifest: dict,
+                   beh_root: Path,
+                   beh_manifest: dict,
+                   spec: dict) -> Path:
+    world_root = out_dir / f"{spec['short_name']}_world"
+    copy_world_template(world_root)
+    
+    # Remove any existing pack folders and link files from the template
+    # to ensure a clean link to our new packs.
+    for folder in ["behavior_packs", "resource_packs"]:
+        p = world_root / folder
+        if p.exists():
+            shutil.rmtree(p, ignore_errors=True)
+        p.mkdir(parents=True, exist_ok=True)
+
+    # Remove existing icons to avoid confusion
+    for icon in ["world_icon.png", "world_icon.jpeg", "world_icon.jpg"]:
+        (world_root / icon).unlink(missing_ok=True)
+
+    shutil.copytree(beh_root, world_root / "behavior_packs" / spec["short_name"], dirs_exist_ok=True)
+    shutil.copytree(res_root, world_root / "resource_packs" / spec["short_name"], dirs_exist_ok=True)
+
+    (world_root / "levelname.txt").write_text(spec["display_name"], encoding="utf-8")
+    
+    # Write link files. Note: Minecraft often prefers these to be flat (no indent) 
+    # and in some cases, picky about the exact format.
+    beh_links = [{
+        "pack_id": beh_manifest["header"]["uuid"],
+        "version": _manifest_version(beh_manifest)
+    }]
+    res_links = [{
+        "pack_id": res_manifest["header"]["uuid"],
+        "version": _manifest_version(res_manifest)
+    }]
+    
+    (world_root / "world_behavior_packs.json").write_text(json.dumps(beh_links), encoding="utf-8")
+    (world_root / "world_resource_packs.json").write_text(json.dumps(res_links), encoding="utf-8")
+
+    icon_src = res_root / "pack_icon.png"
+    if icon_src.exists():
+        # Standard world icon name
+        shutil.copyfile(icon_src, world_root / "world_icon.png")
+
+    mcworld = out_dir / f"{spec['short_name']}.mcworld"
+    with zipfile.ZipFile(mcworld, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        # Sort files to ensure level.dat is early in the archive (some parsers like this)
+        all_files = []
+        for p in world_root.rglob("*"):
+            if p.is_file():
+                all_files.append(p)
+        
+        # Put level.dat and levelname.txt first
+        all_files.sort(key=lambda x: (x.name != "level.dat", x.name != "levelname.txt", x.name))
+        
+        for p in all_files:
+            arc = p.relative_to(world_root).as_posix()
+            zf.write(p, arcname=arc)
+            
+    shutil.rmtree(world_root, ignore_errors=True)
+    return mcworld
 
 
 def build_addon(spec: dict, out_dir: Path, res_src: Optional[Path], beh_src: Optional[Path]):
@@ -612,8 +776,8 @@ def build_addon(spec: dict, out_dir: Path, res_src: Optional[Path], beh_src: Opt
         else:
             beh_root.mkdir(parents=True, exist_ok=True)
 
-        patch_resource_pack(res_root, spec)
-        patch_behavior_pack(beh_root, spec)
+        res_manifest = patch_resource_pack(res_root, spec)
+        beh_manifest = patch_behavior_pack(beh_root, spec)
 
         out_dir.mkdir(parents=True, exist_ok=True)
         res_mcpack = out_dir/f"{spec['short_name']}_resources.mcpack"
@@ -631,16 +795,26 @@ def build_addon(spec: dict, out_dir: Path, res_src: Optional[Path], beh_src: Opt
         logs.write(f"Wrote {mcaddon}\n")
 
         bundle_zip = out_dir/f"{spec['short_name']}_output_bundle.zip"
+        mcworld = create_mcworld(out_dir, res_root, res_manifest, beh_root, beh_manifest, spec)
+
+        # Also save the spec.json used for this build into the bundle for debugging/reference
+        spec_json_path = out_dir / "spec.json"
+        spec_json_path.write_text(json.dumps(spec, indent=2), encoding="utf-8")
+        print(f"[DEBUG] Wrote build spec to {spec_json_path}")
+
         with zipfile.ZipFile(bundle_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             zf.write(res_mcpack, arcname=res_mcpack.name)
             zf.write(beh_mcpack, arcname=beh_mcpack.name)
             zf.write(mcaddon, arcname=mcaddon.name)
+            zf.write(spec_json_path, arcname="spec.json")
             zf.writestr("BUILD_LOG.txt", logs.getvalue())
+        print(f"[DEBUG] Created bundle_zip at {bundle_zip}")
 
         return {
             "res_mcpack": str(res_mcpack),
             "beh_mcpack": str(beh_mcpack),
             "mcaddon": str(mcaddon),
+            "mcworld": str(mcworld),
             "bundle_zip": str(bundle_zip),
             "log": logs.getvalue()
         }
@@ -827,6 +1001,9 @@ INDEX_HTML = """
     white-space:pre-wrap;
   }
   .hint { color: var(--hint); font-size:.95rem; margin-bottom:1rem; }
+  .build-options { margin-top:1.25rem; display:flex; align-items:center; gap:1rem; flex-wrap:wrap; }
+  .build-options label { margin:0; font-size:.95rem; }
+  .build-options select { width:auto; min-width:220px; }
   details { margin-top:1rem; }
   code { font-family: ui-monospace, SFMono-Regular, Consolas, Menlo, monospace; }
   .toolbar { display:flex; justify-content:flex-end; margin-bottom:1rem; }
@@ -874,6 +1051,13 @@ INDEX_HTML = """
     </div>
   </div>
   <pre id="status">Loading spec...</pre>
+  <div class="build-options">
+    <label for="build-mode">Download Type</label>
+    <select id="build-mode">
+      <option value="bundle">Bundle (.zip with mcaddon)</option>
+      <option value="mcworld">World (.mcworld)</option>
+    </select>
+  </div>
   <label style="margin-top:1rem;">Mob Spec JSON</label>
   <textarea id="spec-editor" spellcheck="false" autocomplete="off"></textarea>
   <div class="actions">
@@ -890,6 +1074,7 @@ INDEX_HTML = """
 const THEME_KEY = "builder_theme_preference";
 const LLM_PROVIDER_KEY = "builder_llm_provider";
 const LLM_API_KEY_STORAGE = "builder_llm_api_key";
+const BUILD_MODE_KEY = "builder_build_mode";
 const editor = document.getElementById("spec-editor");
 const statusEl = document.getElementById("status");
 const schemaView = document.getElementById("schema-view");
@@ -900,6 +1085,7 @@ const llmButton = document.getElementById("llm-run");
 const llmProvider = document.getElementById("llm-provider");
 const llmKey = document.getElementById("llm-key");
 const themeToggle = document.getElementById("theme-toggle");
+const buildModeSelect = document.getElementById("build-mode");
 
 function applyTheme(theme) {
   document.body.classList.toggle("theme-dark", theme === "dark");
@@ -922,6 +1108,13 @@ function loadLlmPrefs() {
   }
   if (storedKey && llmKey) {
     llmKey.value = storedKey;
+  }
+}
+
+function loadBuildMode() {
+  const storedMode = localStorage.getItem(BUILD_MODE_KEY);
+  if (storedMode && buildModeSelect) {
+    buildModeSelect.value = storedMode;
   }
 }
 
@@ -967,11 +1160,13 @@ async function saveSpec() {
   return payload.spec;
 }
 
-async function buildBundle() {
-  setStatus("Building bundle...");
+async function buildArtifact() {
+  const choice = buildModeSelect ? buildModeSelect.value : "bundle";
+  setStatus(`Building ${choice}...`);
   const formData = new FormData();
   if (resourceInput.files[0]) formData.append("resource", resourceInput.files[0]);
   if (behaviorInput.files[0]) formData.append("behavior", behaviorInput.files[0]);
+  formData.append("build_mode", choice);
   const res = await fetch("/api/build", { method: "POST", body: formData });
   const payload = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -980,11 +1175,11 @@ async function buildBundle() {
     return;
   }
   const link = document.createElement("a");
-  link.href = payload.bundle_zip;
-  link.textContent = "Download bundle";
+  link.href = payload.artifact || payload.bundle_zip;
+  link.textContent = payload.kind === "mcworld" ? "Download .mcworld" : "Download bundle";
   link.target = "_blank";
   link.rel = "noopener";
-  statusEl.innerHTML = "Build complete. ";
+  statusEl.innerHTML = `${payload.kind === "mcworld" ? "World" : "Bundle"} ready. `;
   statusEl.appendChild(link);
 }
 
@@ -1037,7 +1232,7 @@ document.getElementById("build").addEventListener("click", async (e) => {
   e.preventDefault();
   const saved = await saveSpec();
   if (saved) {
-    await buildBundle();
+    await buildArtifact();
   }
 });
 llmButton?.addEventListener("click", async (e) => {
@@ -1055,9 +1250,13 @@ llmProvider?.addEventListener("change", () => {
 llmKey?.addEventListener("input", () => {
   localStorage.setItem(LLM_API_KEY_STORAGE, llmKey.value.trim());
 });
+buildModeSelect?.addEventListener("change", () => {
+  localStorage.setItem(BUILD_MODE_KEY, buildModeSelect.value);
+});
 
 initTheme();
 loadLlmPrefs();
+loadBuildMode();
 loadSpec();
 </script>
 """
@@ -1079,35 +1278,66 @@ def _save_upload(tmpdir: Path, uf: Optional[UploadFile]) -> Optional[Path]:
         shutil.copyfileobj(uf.file, f)
     return dest
 
-def _build_and_bundle(res_path: Optional[Path], beh_path: Optional[Path], spec_override: Optional[dict] = None) -> Path:
+def _select_artifact(artifacts: dict, build_mode: str) -> tuple[str, Path]:
+    mode = (build_mode or "bundle").lower()
+    if mode == "mcworld":
+        return "mcworld", Path(artifacts["mcworld"])
+    elif mode == "mcaddon":
+        return "mcaddon", Path(artifacts["mcaddon"])
+    elif mode == "resources":
+        return "resources", Path(artifacts["res_mcpack"])
+    elif mode == "behavior":
+        return "behavior", Path(artifacts["beh_mcpack"])
+    return "bundle", Path(artifacts["bundle_zip"])
+
+
+def _build_and_bundle(res_path: Optional[Path],
+                      beh_path: Optional[Path],
+                      spec_override: Optional[dict] = None,
+                      build_mode: str = "bundle") -> tuple[str, Path, dict]:
     spec = validate_spec(spec_override or read_current_spec())
     out_dir = Path(tempfile.mkdtemp(prefix="out_"))
     artifacts = build_addon(spec, out_dir, res_path, beh_path)
-    return Path(artifacts["bundle_zip"])
+    kind, artifact_path = _select_artifact(artifacts, build_mode)
+    return kind, artifact_path, artifacts
 
 @app.post("/build")
 def build_form(resource: Optional[UploadFile] = File(None),
-               behavior: Optional[UploadFile] = File(None)):
+               behavior: Optional[UploadFile] = File(None),
+               build_mode: str = Form("bundle")):
     tmp = Path(tempfile.mkdtemp(prefix="http_"))
     try:
         res_path = _save_upload(tmp, resource)
         beh_path = _save_upload(tmp, behavior)
-        bundle = _build_and_bundle(res_path, beh_path)
-        return FileResponse(bundle, filename=bundle.name, media_type="application/zip")
+        kind, artifact, _ = _build_and_bundle(res_path, beh_path, build_mode=build_mode)
+        media_type = "application/zip" if kind != "mcworld" else "application/octet-stream"
+        return FileResponse(artifact, filename=artifact.name, media_type=media_type)
     finally:
         pass
 
 @app.post("/api/build")
 async def api_build(resource: Optional[UploadFile] = File(None),
-                    behavior: Optional[UploadFile] = File(None)):
+                    behavior: Optional[UploadFile] = File(None),
+                    build_mode: str = Form("bundle")):
     tmp = Path(tempfile.mkdtemp(prefix="http_"))
     try:
+        # Load the current spec from disk to ensure we use the latest saved version
+        current_spec = read_current_spec()
         res_path = _save_upload(tmp, resource)
         beh_path = _save_upload(tmp, behavior)
-        bundle = _build_and_bundle(res_path, beh_path)
+        kind, artifact, artifacts = _build_and_bundle(res_path, beh_path, spec_override=current_spec, build_mode=build_mode)
+        downloads = {
+            "bundle": f"/download/{Path(artifacts['bundle_zip']).name}",
+            "mcworld": f"/download/{Path(artifacts['mcworld']).name}",
+            "mcaddon": f"/download/{Path(artifacts['mcaddon']).name}",
+            "res_mcpack": f"/download/{Path(artifacts['res_mcpack']).name}",
+            "beh_mcpack": f"/download/{Path(artifacts['beh_mcpack']).name}",
+        }
         return JSONResponse({
-            "bundle_zip": f"/download/{bundle.name}",
-            "note": "GET the bundle at /download/<name>; or use the /build form to receive the file directly."
+            "artifact": f"/download/{artifact.name}",
+            "kind": kind,
+            "downloads": downloads,
+            "note": "Fetch artifacts at /download/<name>; choose mcworld to import directly into Minecraft."
         })
     finally:
         pass
@@ -1115,10 +1345,20 @@ async def api_build(resource: Optional[UploadFile] = File(None),
 @app.get("/download/{name}")
 def download(name: str):
     root = Path(tempfile.gettempdir())
+    print(f"[DEBUG] Searching for {name} in {root}")
+    # Sort by mtime to find the newest one if multiple exist
+    candidates = []
     for p in root.rglob(name):
         if p.is_file():
-            return FileResponse(p, filename=p.name, media_type="application/zip")
+            candidates.append(p)
+    
+    if candidates:
+        newest = max(candidates, key=lambda x: x.stat().st_mtime)
+        print(f"[DEBUG] Found newest: {newest}")
+        return FileResponse(newest, filename=newest.name, media_type="application/zip")
+    
+    print(f"[DEBUG] {name} not found")
     return PlainTextResponse("Not found", status_code=404)
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run("app:app", host="127.0.0.1", port=8000, reload=True)
