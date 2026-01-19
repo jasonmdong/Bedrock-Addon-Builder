@@ -14,7 +14,7 @@
     "width": 0.9,
     "height": 1.4
   },
-  "geometry": "geometry.cow",
+  "geometry": "geometry.sheep",
   "render_controller": "controller.render.default",
   "texture_hint": "solid blue 128x128",
   "egg_base": "#0000FF",

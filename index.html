@@ -1,0 +1,382 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Bedrock Add-on Builder</title>
+<style>
+  :root {
+    box-sizing: border-box;
+  }
+  *, *::before, *::after {
+    box-sizing: inherit;
+  }
+  :root {
+    font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+    --bg: #f8fafc;
+    --text: #0f172a;
+    --card-bg: #ffffff;
+    --border: #e2e8f0;
+    --muted: #94a3b8;
+    --hint: #475569;
+    --editor-bg: #0f172a;
+    --editor-text: #e2e8f0;
+    --status-bg: #0f172a;
+    --status-text: #94a3b8;
+    --primary: #2563eb;
+    --secondary-bg: #e2e8f0;
+    --secondary-text: #0f172a;
+    --danger: #dc2626;
+    --ghost-bg: rgba(148,163,184,0.18);
+    --ghost-text: #0f172a;
+  }
+  body.theme-dark {
+    --bg: #05060b;
+    --text: #f8fafc;
+    --card-bg: #0f172a;
+    --border: #1f2937;
+    --muted: #cbd5f5;
+    --hint: #cbd5f5;
+    --editor-bg: #020617;
+    --editor-text: #e2e8f0;
+    --status-bg: #020617;
+    --status-text: #cbd5f5;
+    --primary: #38bdf8;
+    --secondary-bg: #1e293b;
+    --secondary-text: #f8fafc;
+    --danger: #f87171;
+    --ghost-bg: rgba(148,163,184,0.35);
+    --ghost-text: #f8fafc;
+  }
+  body {
+    margin: 2rem;
+    color: var(--text);
+    background: var(--bg);
+    transition: background .3s ease, color .3s ease;
+  }
+  main {
+    max-width: 960px;
+    margin: 0 auto;
+    background: var(--card-bg);
+    border-radius: 16px;
+    padding: 2rem;
+    box-shadow: 0 18px 35px rgba(15,23,42,.08);
+  }
+  h1 { margin-top: 0; }
+  textarea {
+    width:100%;
+    min-height: 380px;
+    font: 14px/1.4 ui-monospace, SFMono-Regular, Consolas, Menlo, monospace;
+    padding: 1rem;
+    border-radius: 12px;
+    border:1px solid var(--border);
+    background: var(--editor-bg);
+    color: var(--editor-text);
+  }
+  textarea:focus { outline: 2px solid var(--primary); }
+  .actions { display:flex; gap: 1rem; margin-top: 1rem; flex-wrap: wrap; }
+  button { padding: .75rem 1.4rem; border-radius: 999px; border: none; font-weight: 600; cursor: pointer; transition: transform .2s ease; }
+  button:active { transform: scale(0.97); }
+  button.primary { background: var(--primary); color:#fff; }
+  button.secondary { background: var(--secondary-bg); color: var(--secondary-text); }
+  button.danger { background: var(--danger); color:#fff; }
+  button.ghost { background: var(--ghost-bg); color: var(--ghost-text); }
+  label { font-weight: 600; display:block; margin-bottom: .35rem; }
+  input[type=file] { width:100%; padding:.35rem 0; color: var(--text); }
+  input[type=password], select {
+    width: 100%;
+    padding: .6rem .75rem;
+    border-radius: 10px;
+    border:1px solid var(--border);
+    background: var(--card-bg);
+    color: var(--text);
+    font: inherit;
+  }
+  .row { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin-top: 1rem; }
+  .llm-card { margin-top: 1.5rem; padding: 1.2rem 1.4rem; border-radius: 16px; border:1px solid var(--border); background: rgba(148,163,184,0.12); display:flex; flex-direction:column; gap:1rem; }
+  .llm-controls { display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:1rem; align-items:end; }
+  .llm-controls .field { min-width:0; }
+  .llm-controls .field label { font-size:.9rem; color: var(--hint); margin-bottom:.35rem; }
+  .llm-card select,
+  .llm-card input[type=password] {
+    height: 46px;
+    border-radius: 12px;
+    border:1px solid var(--border);
+    background: var(--card-bg);
+    color: var(--text);
+    padding: 0 .9rem;
+    font: inherit;
+  }
+  #llm-prompt {
+    min-height: 140px;
+    background: var(--card-bg);
+    color: var(--text);
+    border-radius: 12px;
+    border:1px solid var(--border);
+    resize: vertical;
+  }
+  .llm-footnote { color: var(--hint); font-size:.85rem; }
+  #status {
+    background: var(--status-bg);
+    color: var(--status-text);
+    padding: 1rem;
+    border-radius: 12px;
+    margin-top:1rem;
+    min-height:3rem;
+    white-space:pre-wrap;
+  }
+  .hint { color: var(--hint); font-size:.95rem; margin-bottom:1rem; }
+  .build-options { margin-top:1.25rem; display:flex; align-items:center; gap:1rem; flex-wrap:wrap; }
+  .build-options label { margin:0; font-size:.95rem; }
+  .build-options select { width:auto; min-width:220px; }
+  details { margin-top:1rem; }
+  code { font-family: ui-monospace, SFMono-Regular, Consolas, Menlo, monospace; }
+  .toolbar { display:flex; justify-content:flex-end; margin-bottom:1rem; }
+</style>
+<main>
+  <div class="toolbar">
+    <button type="button" class="ghost" id="theme-toggle">🌙 Dark Mode</button>
+  </div>
+  <h1>Bedrock Add-on Builder</h1>
+  <p class="hint">
+    Edit the JSON spec, save it, then build packs. Optional resource/behavior packs are merged in before bundling.
+  </p>
+  <div class="row">
+    <div>
+      <label>Resource Pack (.zip/.mcpack)</label>
+      <input type="file" id="resource">
+    </div>
+    <div>
+      <label>Behavior Pack (.zip/.mcpack)</label>
+      <input type="file" id="behavior">
+    </div>
+  </div>
+  <div class="llm-card">
+    <div>
+      <label style="font-size:1rem;">LLM Assistant Prompt</label>
+      <p class="hint" style="margin:.2rem 0 0;">Describe the change you want and let an LLM update the spec.</p>
+    </div>
+    <div class="llm-controls">
+      <div class="field">
+        <label>Provider</label>
+        <select id="llm-provider">
+          <option value="openai">OpenAI</option>
+          <option value="deepseek">DeepSeek</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>API Key</label>
+        <input type="password" id="llm-key" placeholder="sk-..." autocomplete="off">
+      </div>
+    </div>
+    <textarea id="llm-prompt" placeholder="Describe how the mob should change (damage, hp, colors, geometry...)."></textarea>
+    <div class="actions">
+      <button type="button" class="primary" id="llm-run">Ask LLM</button>
+    </div>
+  </div>
+  <pre id="status">Loading spec...</pre>
+  <div class="build-options">
+    <label for="build-mode">Download Type</label>
+    <select id="build-mode">
+      <option value="bundle">Bundle (.zip with mcaddon)</option>
+      <option value="mcworld">World (.mcworld)</option>
+    </select>
+  </div>
+  <label style="margin-top:1rem;">Mob Spec JSON</label>
+  <textarea id="spec-editor" spellcheck="false" autocomplete="off"></textarea>
+  <div class="actions">
+    <button type="button" class="secondary" id="reset">Reset</button>
+    <button type="button" class="danger" id="save">Save Spec</button>
+    <button type="button" class="primary" id="build">Build Bundle</button>
+  </div>
+  <details>
+    <summary>View schema (for LLM prompts)</summary>
+    <pre id="schema-view" style="background:var(--status-bg);color:var(--status-text);padding:1rem;border-radius:12px;overflow:auto;max-height:240px;"></pre>
+  </details>
+</main>
+<script>
+const THEME_KEY = "builder_theme_preference";
+const LLM_PROVIDER_KEY = "builder_llm_provider";
+const LLM_API_KEY_STORAGE = "builder_llm_api_key";
+const BUILD_MODE_KEY = "builder_build_mode";
+const editor = document.getElementById("spec-editor");
+const statusEl = document.getElementById("status");
+const schemaView = document.getElementById("schema-view");
+const resourceInput = document.getElementById("resource");
+const behaviorInput = document.getElementById("behavior");
+const llmPrompt = document.getElementById("llm-prompt");
+const llmButton = document.getElementById("llm-run");
+const llmProvider = document.getElementById("llm-provider");
+const llmKey = document.getElementById("llm-key");
+const themeToggle = document.getElementById("theme-toggle");
+const buildModeSelect = document.getElementById("build-mode");
+
+function applyTheme(theme) {
+  document.body.classList.toggle("theme-dark", theme === "dark");
+  if (themeToggle) {
+    themeToggle.textContent = theme === "dark" ? "☀ Light Mode" : "🌙 Dark Mode";
+  }
+}
+
+function initTheme() {
+  const stored = localStorage.getItem(THEME_KEY);
+  const theme = stored === "dark" ? "dark" : "light";
+  applyTheme(theme);
+}
+
+function loadLlmPrefs() {
+  const storedProvider = localStorage.getItem(LLM_PROVIDER_KEY);
+  const storedKey = localStorage.getItem(LLM_API_KEY_STORAGE);
+  if (storedProvider && llmProvider) {
+    llmProvider.value = storedProvider;
+  }
+  if (storedKey && llmKey) {
+    llmKey.value = storedKey;
+  }
+}
+
+function loadBuildMode() {
+  const storedMode = localStorage.getItem(BUILD_MODE_KEY);
+  if (storedMode && buildModeSelect) {
+    buildModeSelect.value = storedMode;
+  }
+}
+
+function setStatus(message, isError=false) {
+  statusEl.textContent = message;
+  statusEl.style.color = isError ? "#fecdd3" : "#94a3b8";
+}
+
+async function loadSpec() {
+  setStatus("Fetching spec...");
+  const res = await fetch("/api/spec");
+  if (!res.ok) {
+    setStatus("Failed to load spec: " + res.statusText, true);
+    return;
+  }
+  const data = await res.json();
+  editor.value = JSON.stringify(data.spec, null, 2);
+  schemaView.textContent = JSON.stringify(data.schema || {}, null, 2);
+  setStatus("Loaded spec at " + new Date().toLocaleTimeString());
+}
+
+async function saveSpec() {
+  let body;
+  try {
+    body = JSON.stringify(JSON.parse(editor.value), null, 2);
+  } catch (err) {
+    setStatus("JSON parse error: " + err.message, true);
+    return null;
+  }
+  const res = await fetch("/api/spec", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const detail = payload.detail || JSON.stringify(payload);
+    setStatus("Save failed: " + detail, true);
+    return null;
+  }
+  editor.value = JSON.stringify(payload.spec, null, 2);
+  setStatus("Saved spec.");
+  return payload.spec;
+}
+
+async function buildArtifact() {
+  const choice = buildModeSelect ? buildModeSelect.value : "bundle";
+  setStatus(`Building ${choice}...`);
+  const formData = new FormData();
+  if (resourceInput.files[0]) formData.append("resource", resourceInput.files[0]);
+  if (behaviorInput.files[0]) formData.append("behavior", behaviorInput.files[0]);
+  formData.append("build_mode", choice);
+  const res = await fetch("/api/build", { method: "POST", body: formData });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const detail = payload.detail || payload.error || res.statusText;
+    setStatus("Build failed: " + detail, true);
+    return;
+  }
+  const link = document.createElement("a");
+  link.href = payload.artifact || payload.bundle_zip;
+  link.textContent = payload.kind === "mcworld" ? "Download .mcworld" : "Download bundle";
+  link.target = "_blank";
+  link.rel = "noopener";
+  statusEl.innerHTML = `${payload.kind === "mcworld" ? "World" : "Bundle"} ready. `;
+  statusEl.appendChild(link);
+}
+
+async function requestLlm() {
+  if (!llmPrompt) return;
+  const instruction = llmPrompt.value.trim();
+  if (!instruction) {
+    setStatus("Enter instructions for the LLM assistant.", true);
+    return;
+  }
+  const provider = llmProvider ? llmProvider.value : "openai";
+  setStatus(`Contacting ${provider}...`);
+  const apiKey = llmKey ? llmKey.value.trim() : "";
+  const requestBody = { prompt: instruction, provider };
+  if (apiKey) {
+    requestBody.api_key = apiKey;
+  }
+  let res;
+  try {
+    res = await fetch("/api/spec/llm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(requestBody)
+    });
+  } catch (err) {
+    console.error("LLM fetch failed", err);
+    setStatus("LLM request failed (network): " + err.message, true);
+    return;
+  }
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const detail = payload.detail || payload.error || res.statusText;
+    setStatus("LLM request failed: " + detail, true);
+    return;
+  }
+  console.log("LLM response", payload);
+  editor.value = JSON.stringify(payload.spec, null, 2);
+  setStatus(`${provider} updated and saved the spec at ${new Date().toLocaleTimeString()}.`);
+}
+
+document.getElementById("reset").addEventListener("click", (e) => {
+  e.preventDefault();
+  loadSpec();
+});
+document.getElementById("save").addEventListener("click", (e) => {
+  e.preventDefault();
+  saveSpec();
+});
+document.getElementById("build").addEventListener("click", async (e) => {
+  e.preventDefault();
+  const saved = await saveSpec();
+  if (saved) {
+    await buildArtifact();
+  }
+});
+llmButton?.addEventListener("click", async (e) => {
+  e.preventDefault();
+  await requestLlm();
+});
+themeToggle?.addEventListener("click", () => {
+  const next = document.body.classList.contains("theme-dark") ? "light" : "dark";
+  applyTheme(next);
+  localStorage.setItem(THEME_KEY, next);
+});
+llmProvider?.addEventListener("change", () => {
+  localStorage.setItem(LLM_PROVIDER_KEY, llmProvider.value);
+});
+llmKey?.addEventListener("input", () => {
+  localStorage.setItem(LLM_API_KEY_STORAGE, llmKey.value.trim());
+});
+buildModeSelect?.addEventListener("change", () => {
+  localStorage.setItem(BUILD_MODE_KEY, buildModeSelect.value);
+});
+
+initTheme();
+loadLlmPrefs();
+loadBuildMode();
+loadSpec();
+</script>
