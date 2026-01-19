@@ -1,0 +1,12 @@
+venv/
+__pycache__/
+*.pyc
+.git/
+.env
+specs/current.json
+schemas/mob_spec.schema.json
+*.mcworld
+*.mcpack
+*.mcaddon
+*.zip
+logs/
