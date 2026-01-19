@@ -1,23 +1,23 @@
-# Use an official Python runtime as a parent image
 FROM python:3.12-slim
 
-# Set the working directory in the container
+# Create a non-root user for Hugging Face (UID 1000)
+RUN useradd -m -u 1000 user
+USER user
+ENV PATH="/home/user/.local/bin:$PATH"
+
 WORKDIR /app
 
-# Copy the requirements file into the container
-COPY requirements.txt .
+# Copy requirements and install
+COPY --chown=user requirements.txt .
+RUN pip install --no-cache-dir --upgrade -r requirements.txt
 
-# Install any needed packages specified in requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy the rest of the app
+COPY --chown=user . .
 
-# Copy the rest of the application code into the container
-COPY . .
+# Hugging Face Spaces use port 7860
+EXPOSE 7860
 
-# Expose the port the app runs on
-EXPOSE 8000
-
-# Define environment variables
 ENV PYTHONUNBUFFERED=1
 
-# Run the application using shell form to allow environment variable expansion
-CMD gunicorn -w 4 -k uvicorn.workers.UvicornWorker app:app --bind 0.0.0.0:${PORT:-8000}
+# Start the server
+CMD gunicorn -w 4 -k uvicorn.workers.UvicornWorker app:app --bind 0.0.0.0:7860
