@@ -46,18 +46,106 @@
     --ghost-text: #f8fafc;
   }
   body {
-    margin: 2rem;
+    margin: 0;
     color: var(--text);
     background: var(--bg);
     transition: background .3s ease, color .3s ease;
+    display: flex;
+    min-height: 100vh;
+  }
+  aside {
+    width: 260px;
+    background: var(--card-bg);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    padding: 1.5rem;
+    flex-shrink: 0;
   }
   main {
+    flex-grow: 1;
     max-width: 960px;
-    margin: 0 auto;
+    margin: 2rem auto;
     background: var(--card-bg);
     border-radius: 16px;
     padding: 2rem;
     box-shadow: 0 18px 35px rgba(15,23,42,.08);
+    height: fit-content;
+  }
+  .mob-list {
+    list-style: none;
+    padding: 0;
+    margin: 1.5rem 0;
+    flex-grow: 1;
+    overflow-y: auto;
+  }
+  .mob-item {
+    padding: 0.75rem 1rem;
+    border-radius: 8px;
+    cursor: pointer;
+    margin-bottom: 0.5rem;
+    display: flex;
+    align-items: center;
+    background: var(--bg);
+    border: 1px solid transparent;
+    transition: all 0.2s;
+    gap: 0.75rem;
+  }
+  .mob-item:hover {
+    border-color: var(--primary);
+  }
+  .mob-item.active {
+    background: var(--ghost-bg);
+    border-color: var(--primary);
+  }
+  .mob-item .mob-name {
+    flex-grow: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .mob-item input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    cursor: pointer;
+  }
+  .mob-item .delete-btn {
+    opacity: 0;
+    background: none;
+    color: var(--danger);
+    padding: 0.25rem;
+    font-size: 0.8rem;
+    border-radius: 4px;
+  }
+  .mob-item:hover .delete-btn {
+    opacity: 0.7;
+  }
+  .mob-item .delete-btn:hover {
+    opacity: 1;
+    background: rgba(220, 38, 38, 0.1);
+  }
+  .sidebar-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+  }
+  .sidebar-header h2 {
+    margin: 0;
+    font-size: 1.25rem;
+  }
+  .sidebar-footer {
+    border-top: 1px solid var(--border);
+    padding-top: 1.5rem;
+    margin-top: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+  .sidebar-footer label {
+    font-size: 0.85rem;
+    color: var(--muted);
+    margin-bottom: 0.25rem;
   }
   h1 { margin-top: 0; }
   textarea {
@@ -104,6 +192,55 @@
     padding: 0 .9rem;
     font: inherit;
   }
+  /* Texture Painter Styles */
+  .painter-container {
+    margin-top: 2rem;
+    padding: 1.5rem;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+  }
+  .painter-layout {
+    display: flex;
+    gap: 2rem;
+    flex-wrap: wrap;
+  }
+  .painter-canvas-wrapper {
+    background: #ccc;
+    background-image: linear-gradient(45deg, #eee 25%, transparent 25%, transparent 75%, #eee 75%, #eee), linear-gradient(45deg, #eee 25%, #fff 25%, #fff 75%, #eee 75%, #eee);
+    background-size: 20px 20px;
+    background-position: 0 0, 10px 10px;
+    border: 2px solid var(--border);
+    line-height: 0;
+    cursor: crosshair;
+    image-rendering: pixelated;
+  }
+  canvas#pixel-canvas {
+    image-rendering: pixelated;
+    display: block;
+  }
+  .painter-tools {
+    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    min-width: 200px;
+  }
+  .color-swatch {
+    width: 32px;
+    height: 32px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    cursor: pointer;
+  }
+  .color-swatch.active {
+    outline: 2px solid var(--primary);
+  }
+  .tool-row {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
   #llm-prompt {
     min-height: 140px;
     background: var(--card-bg);
@@ -130,13 +267,31 @@
   code { font-family: ui-monospace, SFMono-Regular, Consolas, Menlo, monospace; }
   .toolbar { display:flex; justify-content:flex-end; margin-bottom:1rem; }
 </style>
-<main>
-  <div class="toolbar">
-    <button type="button" class="ghost" id="theme-toggle">🌙 Dark Mode</button>
+<aside>
+  <div class="sidebar-header">
+    <h2>Mobs</h2>
+    <button type="button" class="primary" id="add-mob" style="padding: 0.5rem 0.75rem; font-size: 0.9rem;">+ New</button>
   </div>
+  <ul class="mob-list" id="mob-list">
+    <!-- Mobs will be listed here -->
+  </ul>
+  <div class="sidebar-footer">
+    <div>
+      <label for="build-mode">Download Type</label>
+      <select id="build-mode" style="width: 100%;">
+        <option value="bundle">Bundle (.zip with mcaddon)</option>
+        <option value="mcworld">World (.mcworld)</option>
+      </select>
+    </div>
+    <button type="button" class="primary" id="build-bundle" style="width: 100%;">Build Bundle</button>
+    <div id="sidebar-status" style="font-size: 0.85rem; padding: 0.5rem; border-radius: 8px; background: var(--bg); display: none; margin-top: 0.5rem; word-break: break-all;"></div>
+    <button type="button" class="ghost" id="theme-toggle" style="width: 100%;">🌙 Dark Mode</button>
+  </div>
+</aside>
+<main>
   <h1>Bedrock Add-on Builder</h1>
   <p class="hint">
-    Edit the JSON spec, save it, then build packs. Optional resource/behavior packs are merged in before bundling.
+    Edit JSON specs individually. Select mobs in the sidebar to include them in the final bundle.
   </p>
   <div class="row">
     <div>
@@ -172,20 +327,41 @@
     </div>
   </div>
   <pre id="status">Loading spec...</pre>
-  <div class="build-options">
-    <label for="build-mode">Download Type</label>
-    <select id="build-mode">
-      <option value="bundle">Bundle (.zip with mcaddon)</option>
-      <option value="mcworld">World (.mcworld)</option>
-    </select>
-  </div>
   <label style="margin-top:1rem;">Mob Spec JSON</label>
   <textarea id="spec-editor" spellcheck="false" autocomplete="off"></textarea>
   <div class="actions">
     <button type="button" class="secondary" id="reset">Reset</button>
     <button type="button" class="danger" id="save">Save Spec</button>
-    <button type="button" class="primary" id="build">Build Bundle</button>
   </div>
+  <div class="painter-container">
+    <h2 style="margin-top: 0;">Texture Painter</h2>
+    <p class="hint">Paint the 64x64 skin for the selected mob.</p>
+    <div class="painter-layout">
+      <div class="painter-canvas-wrapper">
+        <canvas id="pixel-canvas" width="384" height="384"></canvas>
+      </div>
+      <div class="painter-tools">
+        <div class="field">
+          <label>Color</label>
+          <input type="color" id="painter-color" value="#ff0000" style="width: 100%; height: 46px; padding: 0; border: none; border-radius: 8px;">
+        </div>
+        <div class="tool-row">
+          <button type="button" class="secondary" id="painter-pencil">✏️ Pencil</button>
+          <button type="button" class="secondary" id="painter-eraser">🧽 Eraser</button>
+          <button type="button" class="secondary" id="painter-clear">🗑 Clear</button>
+        </div>
+        <div class="tool-row">
+          <button type="button" class="secondary" id="painter-load">📥 Load Current</button>
+          <button type="button" class="primary" id="painter-save">💾 Save Texture</button>
+        </div>
+        <div class="field">
+          <label>Import Image</label>
+          <input type="file" id="painter-import" accept="image/png">
+        </div>
+      </div>
+    </div>
+  </div>
+
   <details>
     <summary>View schema (for LLM prompts)</summary>
     <pre id="schema-view" style="background:var(--status-bg);color:var(--status-text);padding:1rem;border-radius:12px;overflow:auto;max-height:240px;"></pre>
@@ -207,6 +383,27 @@ const llmProvider = document.getElementById("llm-provider");
 const llmKey = document.getElementById("llm-key");
 const themeToggle = document.getElementById("theme-toggle");
 const buildModeSelect = document.getElementById("build-mode");
+const buildBundleBtn = document.getElementById("build-bundle");
+const sidebarStatusEl = document.getElementById("sidebar-status");
+const mobListEl = document.getElementById("mob-list");
+const addMobBtn = document.getElementById("add-mob");
+
+// Painter Elements
+const canvas = document.getElementById("pixel-canvas");
+const ctx = canvas.getContext("2d", { willReadFrequently: true });
+const painterColor = document.getElementById("painter-color");
+const painterPencil = document.getElementById("painter-pencil");
+const painterEraser = document.getElementById("painter-eraser");
+const painterClear = document.getElementById("painter-clear");
+const painterLoad = document.getElementById("painter-load");
+const painterSave = document.getElementById("painter-save");
+const painterImport = document.getElementById("painter-import");
+
+let currentMobName = "current";
+let isDrawing = false;
+let currentTool = "pencil";
+const GRID_SIZE = 64;
+const SCALE = canvas.width / GRID_SIZE;
 
 function applyTheme(theme) {
   document.body.classList.toggle("theme-dark", theme === "dark");
@@ -244,55 +441,313 @@ function setStatus(message, isError=false) {
   statusEl.style.color = isError ? "#fecdd3" : "#94a3b8";
 }
 
-async function loadSpec() {
-  setStatus("Fetching spec...");
-  const res = await fetch("/api/spec");
+async function loadMobList() {
+  try {
+    const res = await fetch("/api/mobs");
+    const data = await res.json();
+    mobListEl.innerHTML = "";
+    data.mobs.forEach(name => {
+      const li = document.createElement("li");
+      li.className = "mob-item" + (name === currentMobName ? " active" : "");
+      
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = true; // Default to selected
+      cb.onclick = (e) => e.stopPropagation();
+      li.appendChild(cb);
+      
+      const span = document.createElement("span");
+      span.className = "mob-name";
+      span.textContent = name;
+      li.appendChild(span);
+      
+      const del = document.createElement("button");
+      del.className = "delete-btn";
+      del.textContent = "🗑";
+      del.onclick = (e) => deleteMob(e, name);
+      li.appendChild(del);
+      
+      li.onclick = () => selectMob(name);
+      mobListEl.appendChild(li);
+    });
+    // If current mob is gone, pick another
+    if (data.mobs.length > 0 && !data.mobs.includes(currentMobName)) {
+      selectMob(data.mobs[0]);
+    }
+  } catch (err) {
+    console.error("Failed to load mob list", err);
+  }
+}
+
+async function selectMob(name) {
+  currentMobName = name;
+  setStatus(`Loading ${name}...`);
+  const res = await fetch(`/api/mobs/${name}`);
   if (!res.ok) {
-    setStatus("Failed to load spec: " + res.statusText, true);
+    setStatus(`Failed to load ${name}`, true);
     return;
   }
   const data = await res.json();
   editor.value = JSON.stringify(data.spec, null, 2);
   schemaView.textContent = JSON.stringify(data.schema || {}, null, 2);
-  setStatus("Loaded spec at " + new Date().toLocaleTimeString());
+  setStatus(`Loaded ${name} at ` + new Date().toLocaleTimeString());
+  
+  // Update UI active state
+  document.querySelectorAll(".mob-item").forEach(el => {
+    el.classList.toggle("active", el.querySelector(".mob-name").textContent === name);
+  });
+
+  // Load texture into painter automatically
+  loadTextureIntoPainter(name);
+}
+
+// Painter Logic
+function initPainter() {
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const draw = (e) => {
+    if (!isDrawing) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = Math.floor((e.clientX - rect.left) / (rect.width / GRID_SIZE));
+    const y = Math.floor((e.clientY - rect.top) / (rect.height / GRID_SIZE));
+
+    if (currentTool === "pencil") {
+      ctx.fillStyle = painterColor.value;
+      ctx.fillRect(x * SCALE, y * SCALE, SCALE, SCALE);
+    } else {
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(x * SCALE, y * SCALE, SCALE, SCALE);
+    }
+  };
+
+  canvas.addEventListener("mousedown", (e) => { isDrawing = true; draw(e); });
+  canvas.addEventListener("mousemove", draw);
+  window.addEventListener("mouseup", () => { isDrawing = false; });
+
+  painterPencil.onclick = () => { currentTool = "pencil"; updateToolUI(); };
+  painterEraser.onclick = () => { currentTool = "eraser"; updateToolUI(); };
+  painterClear.onclick = () => {
+    if (confirm("Clear canvas?")) {
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+  };
+
+  painterLoad.onclick = () => loadTextureIntoPainter(currentMobName);
+  
+  painterSave.onclick = async () => {
+    if (!currentMobName) return;
+    setStatus(`Saving texture for ${currentMobName}...`);
+    
+    // Create a temporary 64x64 canvas to export the actual image
+    const tempCanvas = document.createElement("canvas");
+    tempCanvas.width = GRID_SIZE;
+    tempCanvas.height = GRID_SIZE;
+    const tempCtx = tempCanvas.getContext("2d");
+    tempCtx.imageSmoothingEnabled = false;
+    tempCtx.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, GRID_SIZE, GRID_SIZE);
+    
+    const blob = await new Promise(resolve => tempCanvas.toBlob(resolve, "image/png"));
+    const formData = new FormData();
+    formData.append("file", blob, `${currentMobName}.png`);
+    
+    const res = await fetch(`/api/mobs/${currentMobName}/texture`, {
+      method: "POST",
+      body: formData
+    });
+    
+    if (res.ok) {
+      setStatus(`Texture saved for ${currentMobName}.`);
+    } else {
+      setStatus(`Failed to save texture.`, true);
+    }
+  };
+
+  painterImport.onchange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onload = () => {
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      };
+      img.src = event.target.result;
+    };
+    reader.readAsDataURL(file);
+  };
+
+  updateToolUI();
+}
+
+function updateToolUI() {
+  painterPencil.classList.toggle("primary", currentTool === "pencil");
+  painterPencil.classList.toggle("secondary", currentTool !== "pencil");
+  painterEraser.classList.toggle("primary", currentTool === "eraser");
+  painterEraser.classList.toggle("secondary", currentTool !== "eraser");
+}
+
+async function loadTextureIntoPainter(name) {
+  if (!name) return;
+  const img = new Image();
+  img.crossOrigin = "anonymous";
+  img.onload = () => {
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  };
+  // Add cache buster
+  img.src = `/api/mobs/${name}/texture?t=` + new Date().getTime();
+}
+
+initPainter();
+
+async function loadSpec() {
+  await loadMobList();
+  
+  const mobs = Array.from(mobListEl.querySelectorAll(".mob-item .mob-name")).map(s => s.textContent);
+  
+  if (mobs.length === 0) {
+    // If no mobs exist, trigger creation of 'current' by fetching default
+    currentMobName = "current";
+    setStatus("Initializing default mob...");
+    const res = await fetch("/api/spec");
+    const data = await res.json();
+    editor.value = JSON.stringify(data.spec, null, 2);
+    schemaView.textContent = JSON.stringify(data.schema || {}, null, 2);
+    await loadMobList(); // Refresh list to show 'current'
+  } else {
+    // Select existing currentMobName or first in list
+    if (mobs.includes(currentMobName)) {
+      await selectMob(currentMobName);
+    } else {
+      await selectMob(mobs[0]);
+    }
+  }
 }
 
 async function saveSpec() {
-  let body;
+  let spec;
   try {
-    body = JSON.stringify(JSON.parse(editor.value), null, 2);
+    spec = JSON.parse(editor.value);
   } catch (err) {
     setStatus("JSON parse error: " + err.message, true);
     return null;
   }
-  const res = await fetch("/api/spec", {
-    method: "PUT",
+  
+  // If short_name changed, we treat it as a rename/move
+  const targetName = spec.short_name || currentMobName;
+  
+  const res = await fetch(`/api/mobs/${targetName}`, {
+    method: "POST",
     headers: { "Content-Type": "application/json" },
-    body
+    body: JSON.stringify(spec)
   });
+  
   const payload = await res.json().catch(() => ({}));
   if (!res.ok) {
     const detail = payload.detail || JSON.stringify(payload);
     setStatus("Save failed: " + detail, true);
     return null;
   }
+  
+  currentMobName = targetName;
   editor.value = JSON.stringify(payload.spec, null, 2);
-  setStatus("Saved spec.");
+  setStatus(`Saved ${currentMobName}.`);
+  await loadMobList();
   return payload.spec;
 }
 
+async function deleteMob(event, name) {
+  event.stopPropagation();
+  if (!confirm(`Delete mob '${name}'?`)) return;
+  
+  const res = await fetch(`/api/mobs/${name}`, { method: "DELETE" });
+  if (res.ok) {
+    setStatus(`Deleted ${name}`);
+    // If we deleted the active mob, reset currentMobName
+    if (currentMobName === name) {
+      currentMobName = ""; 
+    }
+    await loadMobList();
+    if (!currentMobName) {
+      const first = mobListEl.querySelector(".mob-item .mob-name");
+      if (first) selectMob(first.textContent);
+      else loadSpec();
+    }
+  } else {
+    setStatus(`Failed to delete ${name}`, true);
+  }
+}
+
+addMobBtn.addEventListener("click", async () => {
+  const name = prompt("Enter a short name for the new mob (e.g. fire_cow):");
+  if (!name) return;
+  const safeName = name.toLowerCase().replace(/[^a-z0-9_]/g, "_");
+  
+  // Start with default spec
+  const res = await fetch("/api/spec");
+  const data = await res.json();
+  const spec = data.spec;
+  spec.short_name = safeName;
+  spec.display_name = name.charAt(0).toUpperCase() + name.slice(1).replace(/_/g, " ");
+  spec.identifier = `custom:${safeName}`;
+  
+  const saveRes = await fetch(`/api/mobs/${safeName}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(spec)
+  });
+  
+  if (saveRes.ok) {
+    currentMobName = safeName;
+    await loadMobList();
+    await selectMob(safeName);
+  } else {
+    const err = await saveRes.json();
+    alert("Error creating mob: " + (err.detail || "Unknown error"));
+  }
+});
+
 async function buildArtifact() {
+  const selectedMobs = Array.from(mobListEl.querySelectorAll(".mob-item"))
+    .filter(item => item.querySelector("input[type='checkbox']").checked)
+    .map(item => item.querySelector(".mob-name").textContent);
+
+  if (selectedMobs.length === 0) {
+    setStatus("No mobs selected for bundle.", true);
+    return;
+  }
+
   const choice = buildModeSelect ? buildModeSelect.value : "bundle";
-  setStatus(`Building ${choice}...`);
+  const msg = `Building bundle with ${selectedMobs.length} mobs (${choice})...`;
+  setStatus(msg);
+  if (sidebarStatusEl) {
+    sidebarStatusEl.textContent = msg;
+    sidebarStatusEl.style.display = "block";
+    sidebarStatusEl.style.color = "var(--muted)";
+  }
+  
   const formData = new FormData();
   if (resourceInput.files[0]) formData.append("resource", resourceInput.files[0]);
   if (behaviorInput.files[0]) formData.append("behavior", behaviorInput.files[0]);
   formData.append("build_mode", choice);
+  formData.append("target_mobs", selectedMobs.join(","));
+
   const res = await fetch("/api/build", { method: "POST", body: formData });
   const payload = await res.json().catch(() => ({}));
   if (!res.ok) {
     const detail = payload.detail || payload.error || res.statusText;
     setStatus("Build failed: " + detail, true);
+    if (sidebarStatusEl) {
+      sidebarStatusEl.textContent = "Build failed: " + detail;
+      sidebarStatusEl.style.color = "var(--danger)";
+    }
     return;
   }
   const link = document.createElement("a");
@@ -300,8 +755,18 @@ async function buildArtifact() {
   link.textContent = payload.kind === "mcworld" ? "Download .mcworld" : "Download bundle";
   link.target = "_blank";
   link.rel = "noopener";
-  statusEl.innerHTML = `${payload.kind === "mcworld" ? "World" : "Bundle"} ready. `;
+  link.style.color = "var(--primary)";
+  link.style.fontWeight = "bold";
+
+  const successMsg = `${payload.kind === "mcworld" ? "World" : "Bundle"} ready. `;
+  statusEl.innerHTML = successMsg;
   statusEl.appendChild(link);
+
+  if (sidebarStatusEl) {
+    sidebarStatusEl.innerHTML = successMsg;
+    sidebarStatusEl.appendChild(link.cloneNode(true));
+    sidebarStatusEl.style.color = "var(--text)";
+  }
 }
 
 async function requestLlm() {
@@ -349,12 +814,14 @@ document.getElementById("save").addEventListener("click", (e) => {
   e.preventDefault();
   saveSpec();
 });
-document.getElementById("build").addEventListener("click", async (e) => {
+buildBundleBtn.addEventListener("click", async (e) => {
   e.preventDefault();
-  const saved = await saveSpec();
-  if (saved) {
-    await buildArtifact();
+  // Ensure current spec is saved before building
+  if (currentMobName) {
+    const saved = await saveSpec();
+    if (saved === null) return; // Stop if current spec has errors
   }
+  await buildArtifact();
 });
 llmButton?.addEventListener("click", async (e) => {
   e.preventDefault();

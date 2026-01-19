@@ -1,0 +1,28 @@
+{
+  "identifier": "custom:yellow_sheep",
+  "display_name": "Yellow sheep",
+  "short_name": "yellow_sheep",
+  "engine_min": [
+    1,
+    21,
+    110
+  ],
+  "hp": 5,
+  "damage": 3.0,
+  "speed": 0.3,
+  "collision_box": {
+    "width": 0.9,
+    "height": 1.4
+  },
+  "geometry": "geometry.sheep",
+  "render_controller": "controller.render.default",
+  "texture_hint": "solid blue 128x128",
+  "egg_base": "#0000FF",
+  "egg_overlay": "#000055",
+  "scale": 1.0,
+  "color_rgb": [
+    40,
+    120,
+    255
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "identifier": "custom:orange_chicken",
+  "display_name": "Orange chicken",
+  "short_name": "orange_chicken",
+  "engine_min": [
+    1,
+    21,
+    110
+  ],
+  "hp": 5,
+  "damage": 3.0,
+  "speed": 0.3,
+  "collision_box": {
+    "width": 0.9,
+    "height": 1.4
+  },
+  "geometry": "geometry.chicken",
+  "render_controller": "controller.render.default",
+  "texture_hint": "solid yellow 128x128",
+  "egg_base": "#FFFF00",
+  "egg_overlay": "#CCCC00",
+  "scale": 1.0,
+  "color_rgb": [
+    240,
+    200,
+    0
+  ]
+}

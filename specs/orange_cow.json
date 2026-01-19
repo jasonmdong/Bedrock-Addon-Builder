@@ -1,0 +1,28 @@
+{
+  "identifier": "custom:orange_cow",
+  "display_name": "Orange Cow",
+  "short_name": "orange_cow",
+  "engine_min": [
+    1,
+    21,
+    110
+  ],
+  "hp": 20,
+  "damage": 4.0,
+  "speed": 0.3,
+  "collision_box": {
+    "width": 0.9,
+    "height": 1.4
+  },
+  "geometry": "geometry.cow",
+  "render_controller": "controller.render.default",
+  "texture_hint": "solid orange 128x128",
+  "egg_base": "#FFA500",
+  "egg_overlay": "#CC8400",
+  "scale": 1.0,
+  "color_rgb": [
+    255,
+    140,
+    0
+  ]
+}

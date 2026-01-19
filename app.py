@@ -59,7 +59,7 @@ COLOR_WORDS = {
 
 BASE_DIR = Path(__file__).resolve().parent
 SCHEMA_PATH = BASE_DIR / "schemas" / "mob_spec.schema.json"
-SPEC_PATH = BASE_DIR / "specs" / "current.json"
+SPECS_DIR = BASE_DIR / "specs"
 IDENTIFIER_RE = re.compile(r"^[a-z0-9_]+:[a-z0-9_]+$")
 SHORT_NAME_RE = re.compile(r"^[a-z0-9_]+$")
 HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
@@ -250,24 +250,53 @@ def validate_spec(raw: dict) -> dict:
 
 
 def _ensure_spec_storage():
-    SPEC_PATH.parent.mkdir(parents=True, exist_ok=True)
+    SPECS_DIR.mkdir(parents=True, exist_ok=True)
 
-
-def read_current_spec() -> dict:
+def list_mob_names() -> list[str]:
     _ensure_spec_storage()
-    if not SPEC_PATH.exists():
-        spec = validate_spec(default_spec())
-        SPEC_PATH.write_text(json.dumps(spec, indent=2))
-        return spec
-    data = json.loads(SPEC_PATH.read_text())
-    return validate_spec(data)
+    return sorted([p.stem for p in SPECS_DIR.glob("*.json")])
 
+def read_mob_spec(name: str) -> dict:
+    _ensure_spec_storage()
+    path = SPECS_DIR / f"{name}.json"
+    if not path.exists():
+        if name == "current":
+            spec = validate_spec(default_spec())
+            write_mob_spec("current", spec)
+            return spec
+        raise HTTPException(status_code=404, detail=f"Mob '{name}' not found")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return validate_spec(data)
+    except Exception as exc:
+        raise SpecValidationError(f"Failed to read mob spec '{name}': {exc}")
 
-def write_current_spec(data: dict) -> dict:
+def write_mob_spec(name: str, data: dict) -> dict:
     _ensure_spec_storage()
     spec = validate_spec(data)
-    SPEC_PATH.write_text(json.dumps(spec, indent=2))
+    # Ensure filename is safe (alphanumeric/underscore)
+    safe_name = re.sub(r"[^a-zA-Z0-9_]", "_", name)
+    path = SPECS_DIR / f"{safe_name}.json"
+    path.write_text(json.dumps(spec, indent=2), encoding="utf-8")
     return spec
+
+def delete_mob_spec(name: str):
+    path = SPECS_DIR / f"{name}.json"
+    if path.exists():
+        path.unlink()
+
+def read_current_spec() -> dict:
+    # Legacy support / convenience for single-mob operations
+    mobs = list_mob_names()
+    if not mobs:
+        return read_mob_spec("current")
+    return read_mob_spec(mobs[0])
+
+def write_current_spec(data: dict) -> dict:
+    # Legacy support
+    spec = validate_spec(data)
+    name = spec.get("short_name", "current")
+    return write_mob_spec(name, spec)
 
 
 def _decode_pointer(token: str) -> str:
@@ -520,61 +549,108 @@ def _flatten_world_root(world_root: Path):
             shutil.move(str(child), world_root)
         shutil.rmtree(nested, ignore_errors=True)
 
-def patch_resource_pack(res_root: Path, spec: dict):
+def patch_resource_pack(res_root: Path, specs: list[dict]):
     ent_dir = res_root/"entity"
     ent_dir.mkdir(parents=True, exist_ok=True)
-    client_file = ent_dir/f"{spec['short_name']}.client.entity.json"
-    textures_dir = res_root/"textures"/"entity"/spec["short_name"]
-    textures_dir.mkdir(parents=True, exist_ok=True)
+    
+    texts_dir = res_root/"texts"
+    texts_dir.mkdir(parents=True, exist_ok=True)
+    lang_file = texts_dir/"en_US.lang"
+    lang_lines = []
 
-    png_path = textures_dir/f"{spec['short_name']}.png"
-    mers_tga = textures_dir/f"{spec['short_name']}_mers.tga"
-    texset = textures_dir/f"{spec['short_name']}.texture_set.json"
+    # Explicitly register spawn egg icons for better compatibility
+    tex_dir = res_root/"textures"
+    tex_dir.mkdir(parents=True, exist_ok=True)
+    item_tex_file = tex_dir/"item_texture.json"
+    item_texture = {
+        "resource_pack_name": "custom_addon",
+        "texture_name": "atlas.items",
+        "texture_data": {}
+    }
 
-    if not png_path.exists():
-        col = spec.get("color_rgb", COLOR_WORDS.get("red"))
-        png = make_png_rgba(128,128,*col,255)
-        png_path.write_bytes(png)
-    if not mers_tga.exists():
-        col = spec.get("color_rgb", COLOR_WORDS.get("red"))
-        write_tga(mers_tga, 128,128,*col,255)
-    if not texset.exists():
-        texset.write_text(json.dumps({
-            "format_version":"1.21.30",
-            "minecraft:texture_set":{
-                "color": spec["short_name"],
-                "metalness_emissive_roughness_subsurface": f"{spec['short_name']}_mers"
-            }
-        }, indent=2), encoding="utf-8")
+    first_png = None
+    
+    for spec in specs:
+        client_file = ent_dir/f"{spec['short_name']}.client.entity.json"
+        textures_dir = res_root/"textures"/"entity"/spec["short_name"]
+        textures_dir.mkdir(parents=True, exist_ok=True)
 
-    scale = float(spec.get("scale", 1.0))
-    client = {
-        "format_version":"1.21.0",
-        "minecraft:client_entity":{
-            "description":{
-                "identifier": spec["identifier"],
-                "min_engine_version":"1.8.0",
-                "materials":{"default":"entity_alphatest"},
-                "textures":{"default": f"textures/entity/{spec['short_name']}/{spec['short_name']}"},
-                "geometry":{"default": spec.get("geometry", DEFAULTS["geometry"])},
-                "render_controllers":[ spec.get("render_controller", DEFAULTS["render_controller"]) ]
+        png_path = textures_dir/f"{spec['short_name']}.png"
+        mers_tga = textures_dir/f"{spec['short_name']}_mers.tga"
+        texset = textures_dir/f"{spec['short_name']}.texture_set.json"
+
+        # Try to copy persistent texture if it exists
+        persistent_png = Path("specs") / f"{spec['short_name']}.png"
+        if persistent_png.exists():
+            shutil.copyfile(persistent_png, png_path)
+        
+        if not png_path.exists():
+            col = spec.get("color_rgb", COLOR_WORDS.get("red"))
+            png = make_png_rgba(64,64,*col,255)
+            png_path.write_bytes(png)
+        
+        if not first_png:
+            first_png = png_path
+
+        if not mers_tga.exists():
+            col = spec.get("color_rgb", COLOR_WORDS.get("red"))
+            write_tga(mers_tga, 128,128,*col,255)
+        if not texset.exists():
+            texset.write_text(json.dumps({
+                "format_version":"1.21.30",
+                "minecraft:texture_set":{
+                    "color": spec["short_name"],
+                    "metalness_emissive_roughness_subsurface": f"{spec['short_name']}_mers"
+                }
+            }, indent=2), encoding="utf-8")
+
+        scale = float(spec.get("scale", 1.0))
+        client = {
+            "format_version":"1.21.0",
+            "minecraft:client_entity":{
+                "description":{
+                    "identifier": spec["identifier"],
+                    "min_engine_version":"1.8.0",
+                    "materials":{"default":"entity_alphatest"},
+                    "textures":{"default": f"textures/entity/{spec['short_name']}/{spec['short_name']}"},
+                    "geometry":{"default": spec.get("geometry", DEFAULTS["geometry"])},
+                    "render_controllers":[ spec.get("render_controller", DEFAULTS["render_controller"]) ]
+                }
             }
         }
-    }
-    if abs(scale - 1.0) > 1e-6:
-        client["minecraft:client_entity"]["description"]["scale"] = scale
-    client_file.write_text(json.dumps(client, indent=2), encoding="utf-8")
+        if abs(scale - 1.0) > 1e-6:
+            client["minecraft:client_entity"]["description"]["scale"] = scale
+        client_file.write_text(json.dumps(client, indent=2), encoding="utf-8")
+        
+        # Add names to lang file
+        display_name = spec.get("display_name", spec["short_name"].capitalize())
+        lang_lines.append(f"entity.{spec['identifier']}.name={display_name}")
+        lang_lines.append(f"item.spawn_egg.entity.{spec['identifier']}.name=Spawn {display_name}")
 
+        # Map the spawn egg texture to the entity icon (optional but good)
+        item_texture["texture_data"][f"spawn_egg_{spec['short_name']}"] = {
+            "textures": f"textures/entity/{spec['short_name']}/{spec['short_name']}"
+        }
+
+    if lang_lines:
+        lang_file.write_text("\n".join(lang_lines), encoding="utf-8")
+    
+    if item_texture["texture_data"]:
+        item_tex_file.write_text(json.dumps(item_texture, indent=2), encoding="utf-8")
+
+    # Use the first spec for the main manifest info
+    main_spec = specs[0] if specs else validate_spec(default_spec())
+    
     man = res_root/"manifest.json"
     if man.exists():
         manifest = safe_json_load(man) or {}
     else:
         manifest = {"format_version":2,"header":{},"modules":[]}
-    manifest["header"]["description"] = f"{spec['display_name']} Resources"
-    manifest["header"]["name"] = f"{spec['display_name']} Resources"
+    manifest["header"]["description"] = f"{main_spec['display_name']} Resources"
+    manifest["header"]["name"] = f"{main_spec['display_name']} Resources"
     manifest["header"]["uuid"] = make_uuid()
     manifest["header"]["version"] = [1,0,0]
-    ensure_min_engine(manifest, spec["engine_min"])
+    ensure_min_engine(manifest, main_spec["engine_min"])
     manifest["modules"] = [{
         "description":"resources",
         "type":"resources",
@@ -582,105 +658,102 @@ def patch_resource_pack(res_root: Path, spec: dict):
         "version":[1,0,0]
     }]
     try:
-        (res_root/"pack_icon.png").write_bytes(png_path.read_bytes())
+        if first_png:
+            (res_root/"pack_icon.png").write_bytes(first_png.read_bytes())
     except Exception:
         pass
     man.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return manifest
 
-def patch_behavior_pack(beh_root: Path, spec: dict):
+def patch_behavior_pack(beh_root: Path, specs: list[dict]):
     ent_dir = beh_root/"entities"
     ent_dir.mkdir(parents=True, exist_ok=True)
-    ent_file = ent_dir/f"{spec['short_name']}.entity.json"
+    
+    texts_dir = beh_root/"texts"
+    texts_dir.mkdir(parents=True, exist_ok=True)
+    lang_file = texts_dir/"en_US.lang"
+    lang_lines = []
 
-    # --- Hostile, pursuit-oriented cow ---
-    entity = {
-        "format_version": "1.21.10",
-        "minecraft:entity": {
-            "description": {
-                "identifier": spec["identifier"],
-                "is_spawnable": True,
-                "is_summonable": True,
-                "is_experimental": False,
-                "spawn_egg": { "base_color": spec.get("egg_base", DEFAULTS["egg_base"]), "overlay_color": spec.get("egg_overlay", DEFAULTS["egg_overlay"]) }
-            },
-            "components": {
-                # Core stats
-                "minecraft:type_family": { "family": [spec["short_name"], "monster"] },
-                "minecraft:health": { "value": int(spec["hp"]), "max": int(spec["hp"]) },
-                # Use 'movement.basic' (more consistent pathing)
-                "minecraft:movement.basic": {},
-                # Keep a speed scalar via 'minecraft:movement' for engines that honor it
-                "minecraft:movement": { "value": float(spec.get("speed", 0.30)) },
-                "minecraft:attack": { "damage": float(spec["damage"]) },
+    for spec in specs:
+        ent_file = ent_dir/f"{spec['short_name']}.entity.json"
+        
+        # Add names to lang file for behavior pack too (helps with some registries)
+        display_name = spec.get("display_name", spec["short_name"].capitalize())
+        lang_lines.append(f"entity.{spec['identifier']}.name={display_name}")
 
-                # Physics + pathing
-                "minecraft:physics": { "has_gravity": True, "has_collision": True },
-                "minecraft:collision_box": spec["collision_box"],
-                "minecraft:navigation.walk": { "can_pass_doors": True, "avoid_water": True },
-                "minecraft:follow_range": { "value": 40.0 },  # farther acquisition
-                "minecraft:knockback_resistance": { "value": 0.5 },
-                "minecraft:pushable": { "is_pushable": True },
-                "minecraft:despawn": { "despawn_time": 6000 },
-
-                # ---------- AI stack (lower = higher priority) ----------
-                # 0) Retaliate if hurt
-                "minecraft:behavior.hurt_by_target": { "priority": 0 },
-
-                # 1) Actively target & pursue nearby players (works well across versions)
-                "minecraft:behavior.target_nearby_player": {
-                    "priority": 1,
-                    "within_radius": 32,
-                    "must_see": False,
-                    "sprint_speed_multiplier": 1.2
+        # --- Hostile, pursuit-oriented mob ---
+        entity = {
+            "format_version": "1.21.10",
+            "minecraft:entity": {
+                "description": {
+                    "identifier": spec["identifier"],
+                    "is_spawnable": True,
+                    "is_summonable": True,
+                    "is_experimental": False,
+                    "spawn_egg": { "base_color": spec.get("egg_base", DEFAULTS["egg_base"]), "overlay_color": spec.get("egg_overlay", DEFAULTS["egg_overlay"]) }
                 },
-
-                # 2) Backup selector for engines that prefer explicit entity_types targeting
-                "minecraft:behavior.nearest_attackable_target": {
-                    "priority": 2,
-                    "reselect_targets": True,
-                    "entity_types": [
-                        {
-                            "filters": { "test": "is_family", "subject": "other", "value": "player" },
-                            "max_dist": 40,
-                            "must_see": False
-                        }
-                    ]
-                },
-
-                # 3) Close distance to target (keeps moving between swings)
-                "minecraft:behavior.move_towards_target": {
-                    "priority": 3,
-                    "speed_multiplier": 1.15,
-                    "within_radius": 1.8
-                },
-
-                # 4) Melee attack when close; keep tracking
-                "minecraft:behavior.melee_attack": {
-                    "priority": 4,
-                    "speed_multiplier": 1.0,
-                    "track_target": True
-                },
-
-                # 5/6) Idle behaviors (low prio so they don't override pursuit)
-                "minecraft:behavior.look_at_player": { "priority": 5, "look_distance": 8.0 },
-                "minecraft:behavior.random_stroll": { "priority": 6, "speed_multiplier": 1.0 }
+                "components": {
+                    "minecraft:type_family": { "family": [spec["short_name"], "monster"] },
+                    "minecraft:health": { "value": int(spec["hp"]), "max": int(spec["hp"]) },
+                    "minecraft:movement.basic": {},
+                    "minecraft:movement": { "value": float(spec.get("speed", 0.30)) },
+                    "minecraft:attack": { "damage": float(spec["damage"]) },
+                    "minecraft:physics": { "has_gravity": True, "has_collision": True },
+                    "minecraft:collision_box": spec["collision_box"],
+                    "minecraft:navigation.walk": { "can_pass_doors": True, "avoid_water": True },
+                    "minecraft:follow_range": { "value": 40.0 },
+                    "minecraft:knockback_resistance": { "value": 0.5 },
+                    "minecraft:pushable": { "is_pushable": True },
+                    "minecraft:despawn": { "despawn_time": 6000 },
+                    "minecraft:behavior.hurt_by_target": { "priority": 0 },
+                    "minecraft:behavior.target_nearby_player": {
+                        "priority": 1,
+                        "within_radius": 32,
+                        "must_see": False,
+                        "sprint_speed_multiplier": 1.2
+                    },
+                    "minecraft:behavior.nearest_attackable_target": {
+                        "priority": 2,
+                        "reselect_targets": True,
+                        "entity_types": [
+                            {
+                                "filters": { "test": "is_family", "subject": "other", "value": "player" },
+                                "max_dist": 40,
+                                "must_see": False
+                            }
+                        ]
+                    },
+                    "minecraft:behavior.move_towards_target": {
+                        "priority": 3,
+                        "speed_multiplier": 1.15,
+                        "within_radius": 1.8
+                    },
+                    "minecraft:behavior.melee_attack": {
+                        "priority": 4,
+                        "speed_multiplier": 1.0,
+                        "track_target": True
+                    },
+                    "minecraft:behavior.look_at_player": { "priority": 5, "look_distance": 8.0 },
+                    "minecraft:behavior.random_stroll": { "priority": 6, "speed_multiplier": 1.0 }
+                }
             }
         }
-    }
-    ent_file.write_text(json.dumps(entity, indent=2), encoding="utf-8")
+        ent_file.write_text(json.dumps(entity, indent=2), encoding="utf-8")
 
-    # manifest (unchanged)
+    if lang_lines:
+        lang_file.write_text("\n".join(lang_lines), encoding="utf-8")
+
+    main_spec = specs[0] if specs else validate_spec(default_spec())
     man = beh_root/"manifest.json"
     if man.exists():
         manifest = safe_json_load(man) or {}
     else:
         manifest = {"format_version":2,"header":{},"modules":[]}
-    manifest["header"]["description"] = f"{spec['display_name']} Behavior"
-    manifest["header"]["name"] = f"{spec['display_name']} Behavior"
+    manifest["header"]["description"] = f"{main_spec['display_name']} Behavior"
+    manifest["header"]["name"] = f"{main_spec['display_name']} Behavior"
     manifest["header"]["uuid"] = make_uuid()
     manifest["header"]["version"] = [1,0,0]
-    ensure_min_engine(manifest, spec["engine_min"])
+    ensure_min_engine(manifest, main_spec["engine_min"])
     manifest["modules"] = [{
         "description": "behavior",
         "type": "data",
@@ -700,8 +773,9 @@ def create_mcworld(out_dir: Path,
                    res_manifest: dict,
                    beh_root: Path,
                    beh_manifest: dict,
-                   spec: dict) -> Path:
-    world_root = out_dir / f"{spec['short_name']}_world"
+                   specs: list[dict]) -> Path:
+    main_spec = specs[0] if specs else validate_spec(default_spec())
+    world_root = out_dir / f"{main_spec['short_name']}_world"
     copy_world_template(world_root)
     
     # Remove any existing pack folders and link files from the template
@@ -716,13 +790,13 @@ def create_mcworld(out_dir: Path,
     for icon in ["world_icon.png", "world_icon.jpeg", "world_icon.jpg"]:
         (world_root / icon).unlink(missing_ok=True)
 
-    shutil.copytree(beh_root, world_root / "behavior_packs" / spec["short_name"], dirs_exist_ok=True)
-    shutil.copytree(res_root, world_root / "resource_packs" / spec["short_name"], dirs_exist_ok=True)
+    # Copy our combined packs into the world
+    shutil.copytree(beh_root, world_root / "behavior_packs" / "custom_addon_beh", dirs_exist_ok=True)
+    shutil.copytree(res_root, world_root / "resource_packs" / "custom_addon_res", dirs_exist_ok=True)
 
-    (world_root / "levelname.txt").write_text(spec["display_name"], encoding="utf-8")
+    (world_root / "levelname.txt").write_text(f"Add-on: {main_spec['display_name']}", encoding="utf-8")
     
-    # Write link files. Note: Minecraft often prefers these to be flat (no indent) 
-    # and in some cases, picky about the exact format.
+    # Write link files.
     beh_links = [{
         "pack_id": beh_manifest["header"]["uuid"],
         "version": _manifest_version(beh_manifest)
@@ -737,20 +811,16 @@ def create_mcworld(out_dir: Path,
 
     icon_src = res_root / "pack_icon.png"
     if icon_src.exists():
-        # Standard world icon name
         shutil.copyfile(icon_src, world_root / "world_icon.png")
 
-    mcworld = out_dir / f"{spec['short_name']}.mcworld"
+    mcworld = out_dir / f"{main_spec['short_name']}.mcworld"
     with zipfile.ZipFile(mcworld, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        # Sort files to ensure level.dat is early in the archive (some parsers like this)
         all_files = []
         for p in world_root.rglob("*"):
             if p.is_file():
                 all_files.append(p)
         
-        # Put level.dat and levelname.txt first
         all_files.sort(key=lambda x: (x.name != "level.dat", x.name != "levelname.txt", x.name))
-        
         for p in all_files:
             arc = p.relative_to(world_root).as_posix()
             zf.write(p, arcname=arc)
@@ -758,11 +828,11 @@ def create_mcworld(out_dir: Path,
     shutil.rmtree(world_root, ignore_errors=True)
     return mcworld
 
-
-def build_addon(spec: dict, out_dir: Path, res_src: Optional[Path], beh_src: Optional[Path]):
+def build_addon(specs: list[dict], out_dir: Path, res_src: Optional[Path], beh_src: Optional[Path]):
     work = Path(tempfile.mkdtemp(prefix="addon_"))
     logs = io.StringIO()
     try:
+        logs.write(f"Building bundle with {len(specs)} mobs: {[s.get('short_name') for s in specs]}\n")
         res_root = work/"res"
         beh_root = work/"beh"
         if res_src and res_src.exists():
@@ -776,16 +846,18 @@ def build_addon(spec: dict, out_dir: Path, res_src: Optional[Path], beh_src: Opt
         else:
             beh_root.mkdir(parents=True, exist_ok=True)
 
-        res_manifest = patch_resource_pack(res_root, spec)
-        beh_manifest = patch_behavior_pack(beh_root, spec)
+        res_manifest = patch_resource_pack(res_root, specs)
+        beh_manifest = patch_behavior_pack(beh_root, specs)
 
         out_dir.mkdir(parents=True, exist_ok=True)
-        res_mcpack = out_dir/f"{spec['short_name']}_resources.mcpack"
-        beh_mcpack = out_dir/f"{spec['short_name']}_behavior.mcpack"
+        
+        main_spec = specs[0] if specs else validate_spec(default_spec())
+        res_mcpack = out_dir/f"{main_spec['short_name']}_resources.mcpack"
+        beh_mcpack = out_dir/f"{main_spec['short_name']}_behavior.mcpack"
         zip_dir(res_root, res_mcpack); logs.write(f"Wrote {res_mcpack}\n")
         zip_dir(beh_root, beh_mcpack); logs.write(f"Wrote {beh_mcpack}\n")
 
-        mcaddon = out_dir/f"{spec['short_name']}.mcaddon"
+        mcaddon = out_dir/f"{main_spec['short_name']}.mcaddon"
         with zipfile.ZipFile(mcaddon, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             for root_path, name in [(res_root, "resource_pack"), (beh_root, "behavior_pack")]:
                 for p in root_path.rglob("*"):
@@ -794,21 +866,18 @@ def build_addon(spec: dict, out_dir: Path, res_src: Optional[Path], beh_src: Opt
                         zf.write(p, arcname=str(arc))
         logs.write(f"Wrote {mcaddon}\n")
 
-        bundle_zip = out_dir/f"{spec['short_name']}_output_bundle.zip"
-        mcworld = create_mcworld(out_dir, res_root, res_manifest, beh_root, beh_manifest, spec)
+        bundle_zip = out_dir/f"{main_spec['short_name']}_output_bundle.zip"
+        mcworld = create_mcworld(out_dir, res_root, res_manifest, beh_root, beh_manifest, specs)
 
-        # Also save the spec.json used for this build into the bundle for debugging/reference
-        spec_json_path = out_dir / "spec.json"
-        spec_json_path.write_text(json.dumps(spec, indent=2), encoding="utf-8")
-        print(f"[DEBUG] Wrote build spec to {spec_json_path}")
+        spec_json_path = out_dir / "specs.json"
+        spec_json_path.write_text(json.dumps(specs, indent=2), encoding="utf-8")
 
         with zipfile.ZipFile(bundle_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             zf.write(res_mcpack, arcname=res_mcpack.name)
             zf.write(beh_mcpack, arcname=beh_mcpack.name)
             zf.write(mcaddon, arcname=mcaddon.name)
-            zf.write(spec_json_path, arcname="spec.json")
+            zf.write(spec_json_path, arcname="specs.json")
             zf.writestr("BUILD_LOG.txt", logs.getvalue())
-        print(f"[DEBUG] Created bundle_zip at {bundle_zip}")
 
         return {
             "res_mcpack": str(res_mcpack),
@@ -831,6 +900,64 @@ app.add_middleware(
     allow_origins=["*"], allow_credentials=True,
     allow_methods=["*"], allow_headers=["*"],
 )
+
+@app.get("/api/mobs", response_class=JSONResponse)
+def get_mobs():
+    return {"mobs": list_mob_names()}
+
+@app.get("/api/mobs/{name}", response_class=JSONResponse)
+def get_mob(name: str):
+    try:
+        spec = read_mob_spec(name)
+        return {"spec": spec, "schema": SPEC_SCHEMA}
+    except SpecValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+@app.get("/api/mobs/{name}/texture")
+def get_mob_texture(name: str):
+    path = Path("specs") / f"{name}.png"
+    if path.exists():
+        return FileResponse(path, media_type="image/png")
+    # Fallback to a generated one based on the spec
+    spec = read_mob_spec(name)
+    col = spec.get("color_rgb", COLOR_WORDS.get("red"))
+    png = make_png_rgba(64, 64, *col, 255)
+    return Response(content=png, media_type="image/png")
+
+@app.post("/api/mobs/{name}/texture")
+async def save_mob_texture(name: str, file: UploadFile = File(...)):
+    path = Path("specs") / f"{name}.png"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("wb") as f:
+        shutil.copyfileobj(file.file, f)
+    return {"status": "ok"}
+
+@app.post("/api/mobs/{name}", response_class=JSONResponse)
+async def save_mob(name: str, payload: dict = Body(...)):
+    try:
+        spec = write_mob_spec(name, payload)
+        return {"spec": spec}
+    except SpecValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+@app.delete("/api/mobs/{name}", response_class=JSONResponse)
+def delete_mob(name: str):
+    delete_mob_spec(name)
+    return {"status": "ok"}
+
+@app.post("/api/mobs/{name}/duplicate", response_class=JSONResponse)
+def duplicate_mob(name: str):
+    spec = read_mob_spec(name)
+    new_name = f"{name}_copy"
+    # Ensure uniqueness
+    existing = list_mob_names()
+    while new_name in existing:
+        new_name = f"{new_name}_copy"
+    spec["short_name"] = new_name
+    spec["display_name"] = f"{spec['display_name']} Copy"
+    spec["identifier"] = f"{spec['identifier']}_copy"
+    new_spec = write_mob_spec(new_name, spec)
+    return {"name": new_name, "spec": new_spec}
 
 @app.get("/api/spec", response_class=JSONResponse)
 def get_spec():
@@ -913,11 +1040,21 @@ def _select_artifact(artifacts: dict, build_mode: str) -> tuple[str, Path]:
 
 def _build_and_bundle(res_path: Optional[Path],
                       beh_path: Optional[Path],
-                      spec_override: Optional[dict] = None,
+                      specs_override: Optional[list[dict]] = None,
                       build_mode: str = "bundle") -> tuple[str, Path, dict]:
-    spec = validate_spec(spec_override or read_current_spec())
+    if specs_override:
+        specs = [validate_spec(s) for s in specs_override]
+        print(f"[BUILD] Overriding specs with: {[s.get('short_name') for s in specs]}")
+    else:
+        names = list_mob_names()
+        if not names:
+            specs = [read_mob_spec("current")]
+        else:
+            specs = [read_mob_spec(n) for n in names]
+        print(f"[BUILD] Using all discovered mobs: {[s.get('short_name') for s in specs]}")
+
     out_dir = Path(tempfile.mkdtemp(prefix="out_"))
-    artifacts = build_addon(spec, out_dir, res_path, beh_path)
+    artifacts = build_addon(specs, out_dir, res_path, beh_path)
     kind, artifact_path = _select_artifact(artifacts, build_mode)
     return kind, artifact_path, artifacts
 
@@ -938,14 +1075,21 @@ def build_form(resource: Optional[UploadFile] = File(None),
 @app.post("/api/build")
 async def api_build(resource: Optional[UploadFile] = File(None),
                     behavior: Optional[UploadFile] = File(None),
-                    build_mode: str = Form("bundle")):
+                    build_mode: str = Form("bundle"),
+                    target_mobs: Optional[str] = Form(None)):
     tmp = Path(tempfile.mkdtemp(prefix="http_"))
     try:
-        # Load the current spec from disk to ensure we use the latest saved version
-        current_spec = read_current_spec()
+        specs_override = None
+        if target_mobs:
+            # target_mobs is a comma-separated list of mob names
+            names = [n.strip() for n in target_mobs.split(",") if n.strip()]
+            if names:
+                specs_override = [read_mob_spec(n) for n in names]
+        
         res_path = _save_upload(tmp, resource)
         beh_path = _save_upload(tmp, behavior)
-        kind, artifact, artifacts = _build_and_bundle(res_path, beh_path, spec_override=current_spec, build_mode=build_mode)
+        kind, artifact, artifacts = _build_and_bundle(res_path, beh_path, specs_override=specs_override, build_mode=build_mode)
+        
         downloads = {
             "bundle": f"/download/{Path(artifacts['bundle_zip']).name}",
             "mcworld": f"/download/{Path(artifacts['mcworld']).name}",
