@@ -391,45 +391,34 @@ def _call_deepseek(prompt: str, current: dict, api_key: Optional[str]) -> dict:
     key = api_key or os.environ.get("DEEPSEEK_API_KEY")
     if not key:
         raise RuntimeError("Provide DEEPSEEK_API_KEY (either in the form field or as an environment variable).")
-    print("[LLM] calling DeepSeek model", DEEPSEEK_MODEL_NAME)
-    schema_text = json.dumps(SPEC_SCHEMA or {}, indent=2)
-    messages = [
-        {
-            "role": "system",
-            "content": f"{LLM_SYSTEM_PROMPT}\nSchema:\n{schema_text}"
-        },
-        {
-            "role": "user",
-            "content": f"Current spec:\n{json.dumps(current, indent=2)}\n\nInstruction:\n{prompt.strip()}"
-        }
-    ]
-    payload = json.dumps({
-        "model": DEEPSEEK_MODEL_NAME,
-        "messages": messages,
-        "stream": False,
-        "response_format": {"type": "json_object"}
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        "https://api.deepseek.com/chat/completions",
-        data=payload,
-        method="POST",
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {key}"
-        }
-    )
+    
+    print("[LLM] calling DeepSeek via OpenAI client")
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            data = resp.read().decode("utf-8")
-            parsed = json.loads(data)
-            content = parsed["choices"][0]["message"]["content"]
-    except Exception as exc:
-        raise RuntimeError(f"DeepSeek request failed: {exc}") from exc
-    try:
+        # DeepSeek is OpenAI-compatible
+        client = OpenAI(api_key=key, base_url="https://api.deepseek.com")
+        schema_text = json.dumps(SPEC_SCHEMA or {}, indent=2)
+        
+        response = client.chat.completions.create(
+            model=DEEPSEEK_MODEL_NAME,
+            messages=[
+                {
+                    "role": "system",
+                    "content": f"{LLM_SYSTEM_PROMPT}\nSchema:\n{schema_text}"
+                },
+                {
+                    "role": "user",
+                    "content": f"Current spec:\n{json.dumps(current, indent=2)}\n\nInstruction:\n{prompt.strip()}"
+                }
+            ],
+            stream=False,
+            response_format={"type": "json_object"}
+        )
+        content = response.choices[0].message.content
         candidate = json.loads(content)
+        return validate_spec(candidate)
     except Exception as exc:
-        raise RuntimeError(f"LLM returned invalid JSON: {exc}") from exc
-    return validate_spec(candidate)
+        print(f"[LLM] DeepSeek request failed: {exc}")
+        raise RuntimeError(f"DeepSeek request failed: {exc}") from exc
 
 
 def llm_rewrite_spec(prompt: str, current: dict, provider: str, api_key: Optional[str]) -> dict:
@@ -795,7 +784,13 @@ def build_addon(spec: dict, out_dir: Path, res_src: Optional[Path], beh_src: Opt
         logs.write(f"Wrote {mcaddon}\n")
 
         bundle_zip = out_dir/f"{spec['short_name']}_output_bundle.zip"
-        mcworld = create_mcworld(out_dir, res_root, res_manifest, beh_root, beh_manifest, spec)
+        
+        mcworld = None
+        try:
+            mcworld = create_mcworld(out_dir, res_root, res_manifest, beh_root, beh_manifest, spec)
+        except Exception as exc:
+            print(f"[WARN] Failed to create .mcworld: {exc}")
+            logs.write(f"Warning: .mcworld could not be created because no base world template was found.\n")
 
         # Also save the spec.json used for this build into the bundle for debugging/reference
         spec_json_path = out_dir / "spec.json"
@@ -806,6 +801,8 @@ def build_addon(spec: dict, out_dir: Path, res_src: Optional[Path], beh_src: Opt
             zf.write(res_mcpack, arcname=res_mcpack.name)
             zf.write(beh_mcpack, arcname=beh_mcpack.name)
             zf.write(mcaddon, arcname=mcaddon.name)
+            if mcworld:
+                zf.write(mcworld, arcname=mcworld.name)
             zf.write(spec_json_path, arcname="spec.json")
             zf.writestr("BUILD_LOG.txt", logs.getvalue())
         print(f"[DEBUG] Created bundle_zip at {bundle_zip}")
@@ -814,7 +811,7 @@ def build_addon(spec: dict, out_dir: Path, res_src: Optional[Path], beh_src: Opt
             "res_mcpack": str(res_mcpack),
             "beh_mcpack": str(beh_mcpack),
             "mcaddon": str(mcaddon),
-            "mcworld": str(mcworld),
+            "mcworld": str(mcworld) if mcworld else "",
             "bundle_zip": str(bundle_zip),
             "log": logs.getvalue()
         }
@@ -901,7 +898,10 @@ def _save_upload(tmpdir: Path, uf: Optional[UploadFile]) -> Optional[Path]:
 def _select_artifact(artifacts: dict, build_mode: str) -> tuple[str, Path]:
     mode = (build_mode or "bundle").lower()
     if mode == "mcworld":
-        return "mcworld", Path(artifacts["mcworld"])
+        path_str = artifacts.get("mcworld")
+        if not path_str:
+            raise HTTPException(status_code=400, detail="Could not create .mcworld: No base world template found on server.")
+        return "mcworld", Path(path_str)
     elif mode == "mcaddon":
         return "mcaddon", Path(artifacts["mcaddon"])
     elif mode == "resources":
