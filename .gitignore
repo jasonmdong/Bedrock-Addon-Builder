@@ -3,8 +3,8 @@ __pycache__/
 *.pyc
 
 # Local build artifacts
-*.zip
-*.mcworld
+# We keep .mcworld out of ignore if we want to use it as a template
+# *.mcworld
 *.mcpack
 *.mcaddon
 

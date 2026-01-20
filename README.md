@@ -8,6 +8,8 @@ app_port: 7860
 pinned: false
 ---
 
+A preview is available here: https://jasonmdong-baobuilder.hf.space/
+
 # Bedrock Add-on Builder
 A powerful, web-based tool for creating Minecraft Bedrock Edition Add-ons (Behavior and Resource packs) with ease.
 

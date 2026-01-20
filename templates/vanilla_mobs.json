@@ -1,0 +1,66 @@
+{
+  "cow": {
+    "display_name": "Vanilla Cow",
+    "geometry": "geometry.cow",
+    "collision_box": { "width": 0.9, "height": 1.4 },
+    "hp": 10,
+    "damage": 0,
+    "render_controller": "controller.render.cow"
+  },
+  "zombie": {
+    "display_name": "Vanilla Zombie",
+    "geometry": "geometry.zombie",
+    "collision_box": { "width": 0.6, "height": 1.9 },
+    "hp": 20,
+    "damage": 3,
+    "render_controller": "controller.render.zombie"
+  },
+  "creeper": {
+    "display_name": "Vanilla Creeper",
+    "geometry": "geometry.creeper",
+    "collision_box": { "width": 0.6, "height": 1.7 },
+    "hp": 20,
+    "damage": 3,
+    "render_controller": "controller.render.creeper"
+  },
+  "pig": {
+    "display_name": "Vanilla Pig",
+    "geometry": "geometry.pig",
+    "collision_box": { "width": 0.9, "height": 0.9 },
+    "hp": 10,
+    "damage": 0,
+    "render_controller": "controller.render.pig"
+  },
+  "sheep": {
+    "display_name": "Vanilla Sheep",
+    "geometry": "geometry.sheep.sheared",
+    "collision_box": { "width": 0.9, "height": 1.3 },
+    "hp": 8,
+    "damage": 0,
+    "render_controller": "controller.render.sheep"
+  },
+  "spider": {
+    "display_name": "Vanilla Spider",
+    "geometry": "geometry.spider",
+    "collision_box": { "width": 1.4, "height": 0.9 },
+    "hp": 16,
+    "damage": 2,
+    "render_controller": "controller.render.spider"
+  },
+  "iron_golem": {
+    "display_name": "Vanilla Iron Golem",
+    "geometry": "geometry.iron_golem",
+    "collision_box": { "width": 1.4, "height": 2.9 },
+    "hp": 100,
+    "damage": 15,
+    "render_controller": "controller.render.iron_golem"
+  },
+  "dragon": {
+    "display_name": "Vanilla Dragon",
+    "geometry": "geometry.dragon",
+    "collision_box": { "width": 16.0, "height": 8.0 },
+    "hp": 200,
+    "damage": 10,
+    "render_controller": "controller.render.dragon"
+  }
+}
