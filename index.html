@@ -75,6 +75,16 @@
       <div class="painter-canvas-wrapper">
         <canvas id="pixel-canvas" width="384" height="384"></canvas>
       </div>
+      <div class="mob-preview-card">
+        <div class="mob-preview-head">
+          <h3>Mob Preview</h3>
+          <span id="mob-preview-label" class="badge">current</span>
+        </div>
+        <div class="mob-preview-stage">
+          <canvas id="mob-preview-canvas" width="256" height="256"></canvas>
+        </div>
+        <p class="hint" style="margin:0">Shows the selected mob texture on a pixel grid.</p>
+      </div>
       <div class="painter-tools">
         <div class="field">
           <label>Color</label>
@@ -102,7 +112,8 @@
     <pre id="schema-view" style="background:var(--status-bg);color:var(--status-text);padding:1rem;border-radius:12px;overflow:auto;max-height:240px;"></pre>
   </details>
 </main>
-<script>
+<script type="module">
+import * as THREE from "https://unpkg.com/three@0.163.0/build/three.module.js";
 const THEME_KEY = "builder_theme_preference";
 const LLM_PROVIDER_KEY = "builder_llm_provider";
 const LLM_API_KEY_STORAGE = "builder_llm_api_key";
@@ -133,12 +144,18 @@ const painterClear = document.getElementById("painter-clear");
 const painterLoad = document.getElementById("painter-load");
 const painterSave = document.getElementById("painter-save");
 const painterImport = document.getElementById("painter-import");
+const mobPreviewCanvas = document.getElementById("mob-preview-canvas");
+const mobPreviewLabel = document.getElementById("mob-preview-label");
 
 let currentMobName = "current";
 let isDrawing = false;
 let currentTool = "pencil";
 const GRID_SIZE = 64;
 const SCALE = canvas.width / GRID_SIZE;
+let currentSpecData = null;
+
+let mobViewer = null;
+let mobMeshGroup = null;
 
 function applyTheme(theme) {
   document.body.classList.toggle("theme-dark", theme === "dark");
@@ -224,8 +241,12 @@ async function selectMob(name) {
   }
   const data = await res.json();
   editor.value = JSON.stringify(data.spec, null, 2);
+  currentSpecData = data.spec;
   schemaView.textContent = JSON.stringify(data.schema || {}, null, 2);
   setStatus(`Loaded ${name} at ` + new Date().toLocaleTimeString());
+  if (mobPreviewLabel) {
+    mobPreviewLabel.textContent = name;
+  }
   
   // Update UI active state
   document.querySelectorAll(".mob-item").forEach(el => {
@@ -266,6 +287,7 @@ function initPainter() {
     if (confirm("Clear canvas?")) {
       ctx.fillStyle = "#ffffff";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
+      updateMobPreview();
     }
   };
 
@@ -310,11 +332,17 @@ function initPainter() {
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         ctx.imageSmoothingEnabled = false;
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        updateMobPreview();
       };
       img.src = event.target.result;
     };
     reader.readAsDataURL(file);
   };
+
+  window.addEventListener("mouseup", () => {
+    isDrawing = false;
+    updateMobPreview();
+  });
 
   updateToolUI();
 }
@@ -326,6 +354,153 @@ function updateToolUI() {
   painterEraser.classList.toggle("secondary", currentTool !== "eraser");
 }
 
+function initMobViewer() {
+  if (!mobPreviewCanvas) return;
+  const renderer = new THREE.WebGLRenderer({ canvas: mobPreviewCanvas, antialias: true, alpha: true });
+  renderer.setPixelRatio(window.devicePixelRatio || 1);
+  renderer.setSize(mobPreviewCanvas.clientWidth || mobPreviewCanvas.width, mobPreviewCanvas.clientHeight || mobPreviewCanvas.height, false);
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(35, (mobPreviewCanvas.clientWidth || mobPreviewCanvas.width) / (mobPreviewCanvas.clientHeight || mobPreviewCanvas.height), 0.1, 1000);
+  camera.position.set(38, 22, 32);
+  camera.lookAt(0, 10, 0);
+
+  const hemi = new THREE.HemisphereLight(0xffffff, 0x334466, 1.1);
+  scene.add(hemi);
+  scene.add(new THREE.AmbientLight(0xffffff, 0.35));
+
+  const floor = new THREE.Mesh(new THREE.CircleGeometry(22, 48), new THREE.MeshBasicMaterial({ color: 0x0f172a, opacity: 0.04, transparent: true }));
+  floor.rotation.x = -Math.PI / 2;
+  floor.position.y = 0;
+  scene.add(floor);
+
+  mobViewer = { renderer, scene, camera };
+
+  const render = () => {
+    requestAnimationFrame(render);
+    if (mobMeshGroup) {
+      mobMeshGroup.rotation.y += 0.0035;
+    }
+    renderer.render(scene, camera);
+  };
+  render();
+}
+
+function getRigForGeometry(geometryName) {
+  const rigs = {
+    "geometry.chicken": [
+      { size: [8, 8, 6], pos: [0, 8, 0] },
+      { size: [6, 6, 6], pos: [0, 14, 2] },
+      { size: [4, 3, 2], pos: [0, 12, 6] },
+      { size: [2, 2, 1], pos: [0, 10, 6.5] },
+      { size: [2, 6, 6], pos: [6, 8, 0], rot: [0, 0, -0.2] },
+      { size: [2, 6, 6], pos: [-6, 8, 0], rot: [0, 0, 0.2] },
+      { size: [2, 6, 2], pos: [2, 3, -1] },
+      { size: [2, 6, 2], pos: [-2, 3, -1] }
+    ],
+    "geometry.cow": [
+      { size: [12, 12, 18], pos: [0, 10, 0] },
+      { size: [8, 8, 8], pos: [0, 18, 8] },
+      { size: [3, 10, 3], pos: [4, 5, 5] },
+      { size: [3, 10, 3], pos: [-4, 5, 5] },
+      { size: [3, 10, 3], pos: [4, 5, -5] },
+      { size: [3, 10, 3], pos: [-4, 5, -5] }
+    ],
+    "geometry.sheep": [
+      { size: [12, 12, 18], pos: [0, 10, 0] },
+      { size: [8, 8, 8], pos: [0, 18, 8] },
+      { size: [3, 10, 3], pos: [4, 5, 5] },
+      { size: [3, 10, 3], pos: [-4, 5, 5] },
+      { size: [3, 10, 3], pos: [4, 5, -5] },
+      { size: [3, 10, 3], pos: [-4, 5, -5] }
+    ],
+    "geometry.pig": [
+      { size: [12, 10, 16], pos: [0, 9, 0] },
+      { size: [8, 8, 8], pos: [0, 15, 7] },
+      { size: [3, 9, 3], pos: [4, 4, 5] },
+      { size: [3, 9, 3], pos: [-4, 4, 5] },
+      { size: [3, 9, 3], pos: [4, 4, -5] },
+      { size: [3, 9, 3], pos: [-4, 4, -5] }
+    ],
+    "geometry.zombie": [
+      { size: [8, 12, 4], pos: [0, 12, 0] },
+      { size: [8, 8, 8], pos: [0, 20, 0] },
+      { size: [4, 12, 4], pos: [6, 12, 0] },
+      { size: [4, 12, 4], pos: [-6, 12, 0] },
+      { size: [4, 12, 4], pos: [2, 6, 0] },
+      { size: [4, 12, 4], pos: [-2, 6, 0] }
+    ],
+    "geometry.creeper": [
+      { size: [6, 12, 6], pos: [0, 12, 0] },
+      { size: [8, 8, 8], pos: [0, 22, 0] },
+      { size: [4, 6, 4], pos: [3, 3, 3] },
+      { size: [4, 6, 4], pos: [-3, 3, 3] },
+      { size: [4, 6, 4], pos: [3, 3, -3] },
+      { size: [4, 6, 4], pos: [-3, 3, -3] }
+    ],
+    "geometry.spider": [
+      { size: [14, 6, 18], pos: [0, 6, 0] },
+      { size: [6, 6, 6], pos: [0, 10, 6] }
+    ],
+    "geometry.iron_golem": [
+      { size: [14, 14, 8], pos: [0, 16, 0] },
+      { size: [10, 10, 10], pos: [0, 28, 0] },
+      { size: [4, 18, 4], pos: [9, 16, 0] },
+      { size: [4, 18, 4], pos: [-9, 16, 0] },
+      { size: [5, 18, 5], pos: [3, 8, 0] },
+      { size: [5, 18, 5], pos: [-3, 8, 0] }
+    ],
+    default: [ { size: [12, 12, 12], pos: [0, 10, 0] } ]
+  };
+  return rigs[geometryName] || rigs.default;
+}
+
+function textureFromPainterCanvas() {
+  const temp = document.createElement("canvas");
+  temp.width = GRID_SIZE;
+  temp.height = GRID_SIZE;
+  const tctx = temp.getContext("2d");
+  tctx.imageSmoothingEnabled = false;
+  tctx.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, GRID_SIZE, GRID_SIZE);
+  return temp;
+}
+
+function buildMobMesh(textureCanvas, geometryName) {
+  if (!mobViewer) return null;
+  const map = new THREE.CanvasTexture(textureCanvas);
+  map.magFilter = THREE.NearestFilter;
+  map.minFilter = THREE.NearestFilter;
+  map.generateMipmaps = false;
+
+  const parts = getRigForGeometry(geometryName);
+  const group = new THREE.Group();
+  parts.forEach(part => {
+    const geo = new THREE.BoxGeometry(part.size[0], part.size[1], part.size[2]);
+    const mat = new THREE.MeshLambertMaterial({ map, transparent: true });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(part.pos[0], part.pos[1], part.pos[2]);
+    if (part.rot) {
+      mesh.rotation.set(part.rot[0] || 0, part.rot[1] || 0, part.rot[2] || 0);
+    }
+    group.add(mesh);
+  });
+  group.position.y = 2;
+  group.rotation.y = Math.PI / 6;
+  return group;
+}
+
+function updateMobPreview() {
+  if (!mobViewer || !mobPreviewCanvas) return;
+  const tex = textureFromPainterCanvas();
+  const geometryName = currentSpecData?.geometry || "default";
+  const group = buildMobMesh(tex, geometryName);
+  if (!group) return;
+  if (mobMeshGroup) {
+    mobViewer.scene.remove(mobMeshGroup);
+  }
+  mobMeshGroup = group;
+  mobViewer.scene.add(group);
+}
+
 async function loadTextureIntoPainter(name) {
   if (!name) return;
   const img = new Image();
@@ -335,12 +510,15 @@ async function loadTextureIntoPainter(name) {
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    updateMobPreview();
   };
   // Add cache buster
   img.src = `/api/mobs/${name}/texture?t=` + new Date().getTime();
 }
 
 initPainter();
+initMobViewer();
+updateMobPreview();
 
 async function loadSpec() {
   await loadMobList();
@@ -354,8 +532,10 @@ async function loadSpec() {
     const res = await fetch("/api/spec");
     const data = await res.json();
     editor.value = JSON.stringify(data.spec, null, 2);
+    currentSpecData = data.spec;
     schemaView.textContent = JSON.stringify(data.schema || {}, null, 2);
     await loadMobList(); // Refresh list to show 'current'
+    updateMobPreview();
   } else {
     // Select existing currentMobName or first in list
     if (mobs.includes(currentMobName)) {
