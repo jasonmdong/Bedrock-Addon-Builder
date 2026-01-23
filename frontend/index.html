@@ -601,6 +601,38 @@ function getUserMob(mobName) {
   return mobs[mobName] || null;
 }
 
+// Save a mob's texture as base64 to localStorage
+function saveUserMobTexture(mobName, base64Data) {
+  const user = getCurrentUser();
+  if (!user) return false;
+  const data = getUserData(user);
+  data.textures = data.textures || {};
+  data.textures[mobName] = base64Data;
+  saveUserData(user, data);
+  return true;
+}
+
+// Get a mob's texture from localStorage
+function getUserMobTexture(mobName) {
+  const user = getCurrentUser();
+  if (!user) return null;
+  const data = getUserData(user);
+  return (data.textures && data.textures[mobName]) || null;
+}
+
+// Delete a mob's texture from localStorage
+function deleteUserMobTexture(mobName) {
+  const user = getCurrentUser();
+  if (!user) return false;
+  const data = getUserData(user);
+  if (data.textures && data.textures[mobName]) {
+    delete data.textures[mobName];
+    saveUserData(user, data);
+    return true;
+  }
+  return false;
+}
+
 // Create a new user
 function createUser(username) {
   const users = getAppUsers();
@@ -1013,16 +1045,9 @@ function initPainter() {
     tempCtx.imageSmoothingEnabled = false;
     tempCtx.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, GRID_SIZE, GRID_SIZE);
     
-    const blob = await new Promise(resolve => tempCanvas.toBlob(resolve, "image/png"));
-    const formData = new FormData();
-    formData.append("file", blob, `${currentMobName}.png`);
-    
-    const res = await fetch(`/api/mobs/${currentMobName}/texture`, {
-      method: "POST",
-      body: formData
-    });
-    
-    if (res.ok) {
+    // Save to localStorage as base64
+    const base64Data = tempCanvas.toDataURL("image/png");
+    if (saveUserMobTexture(currentMobName, base64Data)) {
       setStatus(`Texture saved for ${currentMobName}.`);
     } else {
       setStatus(`Failed to save texture.`, true);
@@ -1059,25 +1084,26 @@ function updateToolUI() {
 async function loadTextureIntoPainter(name) {
   if (!name) return;
   
-  // Since mobs are now stored in localStorage, textures may not exist on server
-  // Just clear the canvas to white - user can paint fresh or import an image
+  // Clear canvas to white first
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   
-  // Try to load from server (for backwards compatibility), but don't block on failure
-  const img = new Image();
-  img.crossOrigin = "anonymous";
-  img.onload = () => {
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-  };
-  img.onerror = () => {
-    // Texture doesn't exist on server, that's fine - canvas is already white
-    console.log(`No server texture for ${name}, using blank canvas`);
-  };
-  img.src = `/api/mobs/${name}/texture?t=` + new Date().getTime();
+  // Try to load from localStorage first
+  const localTexture = getUserMobTexture(name);
+  if (localTexture) {
+    const img = new Image();
+    img.onload = () => {
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    };
+    img.src = localTexture;
+    return;
+  }
+  
+  // No local texture - canvas stays white
+  console.log(`No texture for ${name}, using blank canvas`);
 }
 
 initPainter();
@@ -1158,6 +1184,7 @@ async function deleteMob(event, name) {
   if (!confirm(`Delete mob '${name}'?`)) return;
   
   if (deleteUserMob(name)) {
+    deleteUserMobTexture(name); // Also delete texture from localStorage
     setStatus(`Deleted ${name}`);
     // If we deleted the active mob, reset currentMobName
     if (currentMobName === name) {
@@ -1227,6 +1254,13 @@ async function buildArtifact() {
     return;
   }
 
+  // Get textures from localStorage
+  const textures = {};
+  selectedMobNames.forEach(name => {
+    const tex = getUserMobTexture(name);
+    if (tex) textures[name] = tex;
+  });
+
   const choice = buildModeSelect ? buildModeSelect.value : "bundle";
   const msg = `Building bundle with ${selectedSpecs.length} mobs (${choice})...`;
   setStatus(msg);
@@ -1242,6 +1276,8 @@ async function buildArtifact() {
   formData.append("build_mode", choice);
   // Send the actual specs as JSON so server can build them
   formData.append("specs_json", JSON.stringify(selectedSpecs));
+  // Send textures as JSON (base64 encoded)
+  formData.append("textures_json", JSON.stringify(textures));
 
   const res = await fetch("/api/build", { method: "POST", body: formData });
   const payload = await res.json().catch(() => ({}));

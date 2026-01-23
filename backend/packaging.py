@@ -153,7 +153,7 @@ def create_mcworld(out_dir: Path,
     return mcworld
 
 
-def build_addon(specs: list[dict], out_dir: Path, res_src: Optional[Path], beh_src: Optional[Path]):
+def build_addon(specs: list[dict], out_dir: Path, res_src: Optional[Path], beh_src: Optional[Path], textures_dir: Optional[Path] = None):
     """Build a complete addon bundle with resource and behavior packs."""
     from builders import patch_resource_pack, patch_behavior_pack
 
@@ -174,7 +174,7 @@ def build_addon(specs: list[dict], out_dir: Path, res_src: Optional[Path], beh_s
         else:
             beh_root.mkdir(parents=True, exist_ok=True)
 
-        res_manifest = patch_resource_pack(res_root, specs)
+        res_manifest = patch_resource_pack(res_root, specs, textures_dir=textures_dir)
         beh_manifest = patch_behavior_pack(beh_root, specs)
 
         out_dir.mkdir(parents=True, exist_ok=True)

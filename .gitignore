@@ -13,3 +13,4 @@ __pycache__/
 
 # Local documentation (not for git)
 USER_MANAGEMENT_DOCS.md
+CODEBASE_ARCHITECTURE.md
