@@ -232,13 +232,23 @@ def build_form(resource: Optional[UploadFile] = File(None),
 async def api_build(resource: Optional[UploadFile] = File(None),
                     behavior: Optional[UploadFile] = File(None),
                     build_mode: str = Form("bundle"),
-                    target_mobs: Optional[str] = Form(None)):
+                    target_mobs: Optional[str] = Form(None),
+                    specs_json: Optional[str] = Form(None)):
     """Build endpoint for JSON API."""
+    import json
+    from spec_utils import validate_spec
     tmp = Path(tempfile.mkdtemp(prefix="http_"))
     try:
         specs_override = None
-        if target_mobs:
-            # target_mobs is a comma-separated list of mob names
+        # Prefer specs_json from client (localStorage) over server-side target_mobs
+        if specs_json:
+            try:
+                raw_specs = json.loads(specs_json)
+                specs_override = [validate_spec(s) for s in raw_specs]
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Invalid specs_json: {e}")
+        elif target_mobs:
+            # Fallback: target_mobs is a comma-separated list of mob names from server
             names = [n.strip() for n in target_mobs.split(",") if n.strip()]
             if names:
                 specs_override = [read_mob_spec(n) for n in names]
