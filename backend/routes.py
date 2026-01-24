@@ -55,7 +55,8 @@ def _select_artifact(artifacts: dict, build_mode: str) -> tuple[str, Path]:
 def _build_and_bundle(res_path: Optional[Path],
                       beh_path: Optional[Path],
                       specs_override: Optional[list[dict]] = None,
-                      build_mode: str = "bundle") -> tuple[str, Path, dict]:
+                      build_mode: str = "bundle",
+                      textures_dir: Optional[Path] = None) -> tuple[str, Path, dict]:
     """Build and bundle addon, selecting appropriate specs."""
     if specs_override:
         from spec_utils import validate_spec
@@ -70,7 +71,7 @@ def _build_and_bundle(res_path: Optional[Path],
         print(f"[BUILD] Using all discovered mobs: {[s.get('short_name') for s in specs]}")
 
     out_dir = Path(tempfile.mkdtemp(prefix="out_"))
-    artifacts = build_addon(specs, out_dir, res_path, beh_path)
+    artifacts = build_addon(specs, out_dir, res_path, beh_path, textures_dir=textures_dir)
     kind, artifact_path = _select_artifact(artifacts, build_mode)
     return kind, artifact_path, artifacts
 
@@ -95,8 +96,8 @@ def get_mob(name: str):
 def get_mob_texture(name: str):
     """Get a mob's texture image."""
     from builders import make_png_rgba
-    from core import COLOR_WORDS
-    path = Path("specs") / f"{name}.png"
+    from core import COLOR_WORDS, SPECS_DIR
+    path = SPECS_DIR / f"{name}.png"
     if path.exists():
         return FileResponse(path, media_type="image/png")
     # Fallback to a generated one based on the spec
@@ -108,7 +109,8 @@ def get_mob_texture(name: str):
 
 async def save_mob_texture(name: str, file: UploadFile = File(...)):
     """Save a custom texture for a mob."""
-    path = Path("specs") / f"{name}.png"
+    from core import SPECS_DIR
+    path = SPECS_DIR / f"{name}.png"
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("wb") as f:
         shutil.copyfileobj(file.file, f)
@@ -198,11 +200,13 @@ def llm_spec_editor(payload: dict = Body(...)):
 
 def index():
     """Serve the main HTML page."""
-    return HTMLResponse(Path("index.html").read_text(encoding="utf-8"))
+    from core import FRONTEND_DIR
+    return HTMLResponse((FRONTEND_DIR / "index.html").read_text(encoding="utf-8"))
 
 def styles_css():
     """Serve the main stylesheet."""
-    path = Path("styles.css")
+    from core import FRONTEND_DIR
+    path = FRONTEND_DIR / "styles.css"
     if not path.exists():
         # Fallback: minimal inline CSS if file missing
         return PlainTextResponse("/* styles.css not found */", media_type="text/css")
@@ -232,20 +236,49 @@ def build_form(resource: Optional[UploadFile] = File(None),
 async def api_build(resource: Optional[UploadFile] = File(None),
                     behavior: Optional[UploadFile] = File(None),
                     build_mode: str = Form("bundle"),
-                    target_mobs: Optional[str] = Form(None)):
+                    target_mobs: Optional[str] = Form(None),
+                    specs_json: Optional[str] = Form(None),
+                    textures_json: Optional[str] = Form(None)):
     """Build endpoint for JSON API."""
+    import json
+    import base64
+    from spec_utils import validate_spec
+    from core import SPECS_DIR
     tmp = Path(tempfile.mkdtemp(prefix="http_"))
     try:
         specs_override = None
-        if target_mobs:
-            # target_mobs is a comma-separated list of mob names
+        # Prefer specs_json from client (localStorage) over server-side target_mobs
+        if specs_json:
+            try:
+                raw_specs = json.loads(specs_json)
+                specs_override = [validate_spec(s) for s in raw_specs]
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Invalid specs_json: {e}")
+        elif target_mobs:
+            # Fallback: target_mobs is a comma-separated list of mob names from server
             names = [n.strip() for n in target_mobs.split(",") if n.strip()]
             if names:
                 specs_override = [read_mob_spec(n) for n in names]
 
+        # Save textures from localStorage to temp directory for build process
+        textures_dir = tmp / "textures"
+        textures_dir.mkdir(parents=True, exist_ok=True)
+        if textures_json:
+            try:
+                textures = json.loads(textures_json)
+                for mob_name, base64_data in textures.items():
+                    # base64_data is like "data:image/png;base64,iVBORw0..."
+                    if "," in base64_data:
+                        base64_data = base64_data.split(",", 1)[1]
+                    png_bytes = base64.b64decode(base64_data)
+                    tex_path = textures_dir / f"{mob_name}.png"
+                    tex_path.write_bytes(png_bytes)
+            except Exception as e:
+                print(f"[BUILD] Warning: Failed to process textures: {e}")
+
         res_path = _save_upload(tmp, resource)
         beh_path = _save_upload(tmp, behavior)
-        kind, artifact, artifacts = _build_and_bundle(res_path, beh_path, specs_override=specs_override, build_mode=build_mode)
+        kind, artifact, artifacts = _build_and_bundle(res_path, beh_path, specs_override=specs_override, build_mode=build_mode, textures_dir=textures_dir)
 
         downloads = {
             "bundle": f"/download/{Path(artifacts['bundle_zip']).name}",
