@@ -35,10 +35,12 @@ COLOR_WORDS = {
     "cyan": (0, 200, 200),
 }
 
-# Paths
-BASE_DIR = Path(__file__).resolve().parent
-SCHEMA_PATH = BASE_DIR / "schemas" / "mob_spec.schema.json"
-SPECS_DIR = BASE_DIR / "specs"
+# Paths - BASE_DIR is project root (parent of backend/)
+BASE_DIR = Path(__file__).resolve().parent.parent
+BACKEND_DIR = Path(__file__).resolve().parent
+SCHEMA_PATH = BACKEND_DIR / "schemas" / "mob_spec.schema.json"
+SPECS_DIR = BASE_DIR / "data" / "specs"
+FRONTEND_DIR = BASE_DIR / "frontend"
 
 # Regex validators
 IDENTIFIER_RE = re.compile(r"^[a-z0-9_]+:[a-z0-9_]+$")
@@ -52,14 +54,15 @@ GEMINI_MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-1.5-pro")
 CLAUDE_MODEL_NAME = os.environ.get("CLAUDE_MODEL", "claude-3-5-sonnet-20240620")
 DEFAULT_LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "openai")
 
-# World template candidates
+# World template candidates (now in data/templates/)
+DATA_DIR = BASE_DIR / "data"
 WORLD_TEMPLATE_BASES = [
-    BASE_DIR / "templates" / "base_world",
-    BASE_DIR / "templates" / "base_world.mcworld",
-    BASE_DIR / "templates" / "base_world.zip",
-    BASE_DIR / "base_world",
-    BASE_DIR / "base_world.mcworld",
-    BASE_DIR / "base_world.zip",
+    DATA_DIR / "templates" / "base_world",
+    DATA_DIR / "templates" / "base_world.mcworld",
+    DATA_DIR / "templates" / "base_world.zip",
+    DATA_DIR / "base_world",
+    DATA_DIR / "base_world.mcworld",
+    DATA_DIR / "base_world.zip",
 ]
 
 # LLM system prompt

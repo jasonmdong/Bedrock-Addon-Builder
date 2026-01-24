@@ -59,8 +59,9 @@ def _manifest_version(manifest: dict) -> list:
     return manifest.get("header", {}).get("version") or [1, 0, 0]
 
 
-def patch_resource_pack(res_root: Path, specs: list[dict]):
+def patch_resource_pack(res_root: Path, specs: list[dict], textures_dir: Path = None):
     """Patch a resource pack with custom mob textures, entities, and manifests."""
+    import shutil
     ent_dir = res_root / "entity"
     ent_dir.mkdir(parents=True, exist_ok=True)
 
@@ -83,18 +84,25 @@ def patch_resource_pack(res_root: Path, specs: list[dict]):
 
     for spec in specs:
         client_file = ent_dir / f"{spec['short_name']}.client.entity.json"
-        textures_dir = res_root / "textures" / "entity" / spec["short_name"]
-        textures_dir.mkdir(parents=True, exist_ok=True)
+        mob_textures_dir = res_root / "textures" / "entity" / spec["short_name"]
+        mob_textures_dir.mkdir(parents=True, exist_ok=True)
 
-        png_path = textures_dir / f"{spec['short_name']}.png"
-        mers_tga = textures_dir / f"{spec['short_name']}_mers.tga"
-        texset = textures_dir / f"{spec['short_name']}.texture_set.json"
+        png_path = mob_textures_dir / f"{spec['short_name']}.png"
+        mers_tga = mob_textures_dir / f"{spec['short_name']}_mers.tga"
+        texset = mob_textures_dir / f"{spec['short_name']}.texture_set.json"
 
-        # Try to copy persistent texture if it exists
-        persistent_png = Path("specs") / f"{spec['short_name']}.png"
-        if persistent_png.exists():
-            import shutil
-            shutil.copyfile(persistent_png, png_path)
+        # Try to copy texture from client-provided textures_dir first
+        if textures_dir:
+            client_texture = textures_dir / f"{spec['short_name']}.png"
+            if client_texture.exists():
+                shutil.copyfile(client_texture, png_path)
+        
+        # Fallback: try server-side SPECS_DIR
+        if not png_path.exists():
+            from core import SPECS_DIR
+            persistent_png = SPECS_DIR / f"{spec['short_name']}.png"
+            if persistent_png.exists():
+                shutil.copyfile(persistent_png, png_path)
 
         if not png_path.exists():
             col = spec.get("color_rgb", COLOR_WORDS.get("red"))
