@@ -48,8 +48,10 @@ SHORT_NAME_RE = re.compile(r"^[a-z0-9_]+$")
 HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 # LLM configuration
-LLM_MODEL_NAME = os.environ.get("LLM_MODEL", "gpt-5")
+LLM_MODEL_NAME = os.environ.get("LLM_MODEL", "gpt-4o")
 DEEPSEEK_MODEL_NAME = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
+GEMINI_MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-1.5-pro")
+CLAUDE_MODEL_NAME = os.environ.get("CLAUDE_MODEL", "claude-3-5-sonnet-20240620")
 DEFAULT_LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "openai")
 
 # World template candidates (now in data/templates/)
