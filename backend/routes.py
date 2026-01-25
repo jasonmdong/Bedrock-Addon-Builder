@@ -83,6 +83,19 @@ def get_mobs():
     return {"mobs": list_mob_names()}
 
 
+def get_templates():
+    """Get vanilla mob templates."""
+    from core import BACKEND_DIR
+    import json
+    path = BACKEND_DIR / "data" / "vanilla_mobs.json"
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception as e:
+            print(f"Failed to load templates: {e}")
+    return {"mobs": {}}
+
+
 def get_mob(name: str):
     """Retrieve a specific mob spec."""
     from schemas_loader import SPEC_SCHEMA
@@ -185,10 +198,18 @@ def llm_spec_editor(payload: dict = Body(...)):
     provider = data.get("provider")
     api_key = data.get("api_key")
     print(f"[LLM] provider={provider} prompt_len={len(prompt.strip())}")
-    current = read_current_spec()
+    
+    # Use client-provided spec if available, otherwise fallback to server's 'current'
+    current = data.get("current_spec")
+    if not current:
+        current = read_current_spec()
+        
     try:
         updated = llm_rewrite_spec(prompt, current, provider, api_key)
-        spec = write_current_spec(updated)
+        # We don't necessarily want to write to the server's disk here if using client-side storage,
+        # but returning it is enough. We'll return it as a validated spec.
+        from spec_utils import validate_spec
+        spec = validate_spec(updated)
         print("[LLM] update complete; short_name=", spec.get("short_name"))
     except SpecValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc))

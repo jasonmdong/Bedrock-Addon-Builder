@@ -19,7 +19,8 @@
     "texture_hint",
     "egg_base",
     "egg_overlay",
-    "scale"
+    "scale",
+    "components"
   ],
   "properties": {
     "identifier": {
@@ -115,6 +116,12 @@
       "minimum": 0.2,
       "maximum": 5,
       "default": 1
+    },
+    "components": {
+      "type": "object",
+      "description": "Optional custom Minecraft components for the mob behavior.",
+      "additionalProperties": true,
+      "default": {}
     }
   }
 }

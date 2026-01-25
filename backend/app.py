@@ -27,6 +27,7 @@ from routes import (
     build_form,
     api_build,
     download,
+    get_templates,
 )
 
 
@@ -65,6 +66,7 @@ app.post("/api/spec/llm")(llm_spec_editor)
 app.post("/build")(build_form)
 app.post("/api/build")(api_build)
 app.get("/download/{name}")(download)
+app.get("/api/templates")(get_templates)
 
 # Static routes
 app.get("/")(index)

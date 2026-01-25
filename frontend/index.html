@@ -52,15 +52,36 @@
     transition: background .3s ease, color .3s ease;
     display: flex;
     min-height: 100vh;
+    overflow: hidden;
   }
   aside {
-    width: 260px;
+    width: 350px;
+    min-width: 350px;
+    max-width: 600px;
     background: var(--card-bg);
     border-right: 1px solid var(--border);
     display: flex;
     flex-direction: column;
-    padding: 1.5rem;
+    padding: 0;
     flex-shrink: 0;
+    height: 100vh;
+    overflow: hidden;
+    position: relative;
+  }
+  .resizer {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 6px;
+    height: 100%;
+    cursor: col-resize;
+    background: transparent;
+    z-index: 100;
+    transition: background 0.2s;
+  }
+  .resizer:hover, body.resizing .resizer {
+    background: var(--primary);
+    opacity: 0.5;
   }
   main {
     flex-grow: 1;
@@ -71,11 +92,13 @@
     padding: 2rem;
     box-shadow: 0 18px 35px rgba(15,23,42,.08);
     height: fit-content;
+    overflow-y: auto;
+    max-height: 100vh;
   }
   .mob-list {
     list-style: none;
-    padding: 0;
-    margin: 1.5rem 0;
+    padding: 0 1.5rem;
+    margin: 0;
     flex-grow: 1;
     overflow-y: auto;
   }
@@ -129,18 +152,47 @@
     justify-content: space-between;
     align-items: center;
     margin-bottom: 1rem;
+    padding: 0 1.5rem;
+    flex-shrink: 0;
   }
   .sidebar-header h2 {
     margin: 0;
     font-size: 1.25rem;
   }
+  .user-section {
+    padding: 1rem 1.5rem;
+    background: var(--bg);
+    margin-bottom: 1rem;
+    text-align: center;
+    flex-shrink: 0;
+  }
+  .user-section .current-user {
+    font-weight: 700;
+    font-size: 1.1rem;
+    margin-bottom: 0.5rem;
+  }
+  .user-section .switch-user-btn {
+    font-size: 0.85rem;
+    padding: 0.4rem 0.8rem;
+  }
+  .data-buttons {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+  }
+  .data-buttons button {
+    flex: 1;
+    font-size: 0.8rem;
+    padding: 0.5rem;
+  }
   .sidebar-footer {
     border-top: 1px solid var(--border);
-    padding-top: 1.5rem;
-    margin-top: auto;
+    padding: 1.5rem;
     display: flex;
     flex-direction: column;
     gap: 1rem;
+    flex-shrink: 0;
+    background: var(--card-bg);
   }
   .sidebar-footer label {
     font-size: 0.85rem;
@@ -394,7 +446,7 @@
 <!-- Hidden file input for restore -->
 <input type="file" id="restore-file-input" accept=".json" style="display: none;">
 
-<aside>
+<aside id="sidebar">
   <!-- User Section -->
   <div class="user-section" id="user-section">
     <div class="current-user" id="current-user-display">Guest</div>
@@ -407,7 +459,12 @@
   
   <div class="sidebar-header">
     <h2>Mobs</h2>
-    <button type="button" class="primary" id="add-mob" style="padding: 0.5rem 0.75rem; font-size: 0.9rem;">+ New</button>
+    <div style="display: flex; gap: 0.5rem;">
+      <select id="template-select" style="width: auto; height: 36px; padding: 0 0.5rem; font-size: 0.85rem; border-radius: 8px;">
+        <option value="">-- Load Template --</option>
+      </select>
+      <button type="button" class="primary" id="add-mob" style="padding: 0.5rem 0.75rem; font-size: 0.9rem;">+ New</button>
+    </div>
   </div>
   <ul class="mob-list" id="mob-list">
     <!-- Mobs will be listed here -->
@@ -424,6 +481,7 @@
     <div id="sidebar-status" style="font-size: 0.85rem; padding: 0.5rem; border-radius: 8px; background: var(--bg); display: none; margin-top: 0.5rem; word-break: break-all;"></div>
     <button type="button" class="ghost" id="theme-toggle" style="width: 100%;">🌙 Dark Mode</button>
   </div>
+  <div id="resizer" class="resizer"></div>
 </aside>
 <main>
   <h1>Bedrock Add-on Builder</h1>
@@ -451,6 +509,8 @@
         <select id="llm-provider">
           <option value="openai">OpenAI</option>
           <option value="deepseek">DeepSeek</option>
+          <option value="gemini">Gemini</option>
+          <option value="claude">Claude</option>
         </select>
       </div>
       <div class="field">
@@ -849,6 +909,43 @@ function initUserSystem() {
 }
 
 // =====================
+// SIDEBAR RESIZER
+// =====================
+function initResizer() {
+  const sidebar = document.getElementById("sidebar");
+  const resizer = document.getElementById("resizer");
+  let isResizing = false;
+
+  resizer.addEventListener("mousedown", (e) => {
+    isResizing = true;
+    document.body.classList.add("resizing");
+  });
+
+  window.addEventListener("mousemove", (e) => {
+    if (!isResizing) return;
+    const newWidth = e.clientX;
+    if (newWidth >= 350 && newWidth <= 600) {
+      sidebar.style.width = newWidth + "px";
+    }
+  });
+
+  window.addEventListener("mouseup", () => {
+    if (isResizing) {
+      isResizing = false;
+      document.body.classList.remove("resizing");
+      // Save preference
+      localStorage.setItem("sidebar_width", sidebar.style.width);
+    }
+  });
+  
+  // Restore preference
+  const savedWidth = localStorage.getItem("sidebar_width");
+  if (savedWidth) {
+    sidebar.style.width = savedWidth;
+  }
+}
+
+// =====================
 // EXISTING APP CODE
 // =====================
 const THEME_KEY = "builder_theme_preference";
@@ -870,6 +967,74 @@ const buildBundleBtn = document.getElementById("build-bundle");
 const sidebarStatusEl = document.getElementById("sidebar-status");
 const mobListEl = document.getElementById("mob-list");
 const addMobBtn = document.getElementById("add-mob");
+const templateSelect = document.getElementById("template-select");
+
+// Templates storage
+let vanillaTemplates = {};
+
+// Load templates from server
+async function loadTemplates() {
+  try {
+    const res = await fetch("/api/templates");
+    const data = await res.json();
+    vanillaTemplates = data.mobs || {};
+    
+    // Fill the dropdown
+    templateSelect.innerHTML = '<option value="">-- Load Template --</option>';
+    Object.keys(vanillaTemplates).sort().forEach(id => {
+      const opt = document.createElement("option");
+      opt.value = id;
+      opt.textContent = vanillaTemplates[id].display_name || id;
+      templateSelect.appendChild(opt);
+    });
+  } catch (err) {
+    console.error("Failed to load templates", err);
+  }
+}
+
+templateSelect?.addEventListener("change", async () => {
+  const templateId = templateSelect.value;
+  if (!templateId) return;
+  
+  const template = vanillaTemplates[templateId];
+  if (!template) return;
+  
+  const user = getCurrentUser();
+  if (!user) {
+    alert("Please select or create a user first.");
+    templateSelect.value = "";
+    return;
+  }
+  
+  const name = prompt(`Enter a name for your new ${template.display_name}:`, template.short_name);
+  if (!name) {
+    templateSelect.value = "";
+    return;
+  }
+  
+  const safeName = name.toLowerCase().replace(/[^a-z0-9_]/g, "_");
+  if (getUserMob(safeName)) {
+    alert(`A mob named '${safeName}' already exists.`);
+    templateSelect.value = "";
+    return;
+  }
+  
+  const spec = JSON.parse(JSON.stringify(template));
+  spec.short_name = safeName;
+  // Use a custom namespace if it doesn't have one or use the original if preferred
+  // For now, let's keep it simple and just update names
+  spec.display_name = name.charAt(0).toUpperCase() + name.slice(1).replace(/_/g, " ");
+  if (spec.identifier.startsWith("minecraft:")) {
+    spec.identifier = `custom:${safeName}`;
+  }
+
+  saveUserMob(safeName, spec);
+  currentMobName = safeName;
+  await loadMobList();
+  await selectMob(safeName);
+  
+  templateSelect.value = "";
+});
 
 // Painter Elements
 const canvas = document.getElementById("pixel-canvas");
@@ -1319,7 +1484,21 @@ async function requestLlm() {
   const provider = llmProvider ? llmProvider.value : "openai";
   setStatus(`Contacting ${provider}...`);
   const apiKey = llmKey ? llmKey.value.trim() : "";
-  const requestBody = { prompt: instruction, provider };
+  
+  // Get current spec from editor
+  let currentSpec;
+  try {
+    currentSpec = JSON.parse(editor.value);
+  } catch (err) {
+    setStatus("Invalid JSON in editor. Fix it before using the LLM.", true);
+    return;
+  }
+  
+  const requestBody = { 
+    prompt: instruction, 
+    provider: provider,
+    current_spec: currentSpec 
+  };
   if (apiKey) {
     requestBody.api_key = apiKey;
   }
@@ -1343,7 +1522,13 @@ async function requestLlm() {
   }
   console.log("LLM response", payload);
   editor.value = JSON.stringify(payload.spec, null, 2);
-  setStatus(`${provider} updated and saved the spec at ${new Date().toLocaleTimeString()}.`);
+  
+  // Save to localStorage
+  if (currentMobName) {
+    saveUserMob(currentMobName, payload.spec);
+  }
+  
+  setStatus(`${provider} updated the spec at ${new Date().toLocaleTimeString()}.`);
 }
 
 document.getElementById("reset").addEventListener("click", (e) => {
@@ -1386,5 +1571,7 @@ initTheme();
 loadLlmPrefs();
 loadBuildMode();
 initUserSystem();
+initResizer();
+loadTemplates();
 loadSpec();
 </script>

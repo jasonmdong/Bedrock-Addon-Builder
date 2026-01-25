@@ -3,9 +3,27 @@ import json
 import os
 from typing import Optional
 
-from core import LLM_MODEL_NAME, DEEPSEEK_MODEL_NAME, GEMINI_MODEL_NAME, CLAUDE_MODEL_NAME, DEFAULT_LLM_PROVIDER, LLM_SYSTEM_PROMPT
+from core import LLM_MODEL_NAME, DEEPSEEK_MODEL_NAME, GEMINI_MODEL_NAME, CLAUDE_MODEL_NAME, DEFAULT_LLM_PROVIDER, LLM_SYSTEM_PROMPT, BACKEND_DIR
 from schemas_loader import SPEC_SCHEMA
 from spec_utils import validate_spec, SpecValidationError
+
+# Load vanilla reference if available
+VANILLA_REF = {}
+ref_path = BACKEND_DIR / "data" / "vanilla_reference.json"
+if ref_path.exists():
+    try:
+        VANILLA_REF = json.loads(ref_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"Failed to load vanilla reference: {e}")
+
+def _get_full_system_prompt() -> str:
+    """Get the full system prompt including vanilla reference context."""
+    schema_text = json.dumps(SPEC_SCHEMA or {}, indent=2)
+    prompt = f"{LLM_SYSTEM_PROMPT}\n\nSchema:\n{schema_text}"
+    if VANILLA_REF:
+        ref_text = json.dumps(VANILLA_REF, indent=2)
+        prompt += f"\n\nVanilla Reference (from bedrock-samples):\n{ref_text}"
+    return prompt
 
 try:
     from openai import OpenAI
@@ -37,11 +55,10 @@ def _call_openai(prompt: str, current: dict, api_key: Optional[str]) -> dict:
     """Call OpenAI to rewrite a spec based on a user prompt."""
     print("[LLM] calling OpenAI model", LLM_MODEL_NAME)
     client = _get_openai_client(api_key)
-    schema_text = json.dumps(SPEC_SCHEMA or {}, indent=2)
     messages = [
         {
             "role": "system",
-            "content": f"{LLM_SYSTEM_PROMPT}\nSchema:\n{schema_text}"
+            "content": _get_full_system_prompt()
         },
         {
             "role": "user",
@@ -74,14 +91,13 @@ def _call_deepseek(prompt: str, current: dict, api_key: Optional[str]) -> dict:
     try:
         # DeepSeek is OpenAI-compatible
         client = OpenAI(api_key=key, base_url="https://api.deepseek.com")
-        schema_text = json.dumps(SPEC_SCHEMA or {}, indent=2)
 
         response = client.chat.completions.create(
             model=DEEPSEEK_MODEL_NAME,
             messages=[
                 {
                     "role": "system",
-                    "content": f"{LLM_SYSTEM_PROMPT}\nSchema:\n{schema_text}"
+                    "content": _get_full_system_prompt()
                 },
                 {
                     "role": "user",
@@ -112,7 +128,7 @@ def _call_gemini(prompt: str, current: dict, api_key: Optional[str]) -> dict:
         genai.configure(api_key=key)
         model = genai.GenerativeModel(
             model_name=GEMINI_MODEL_NAME,
-            system_instruction=f"{LLM_SYSTEM_PROMPT}\nSchema:\n{json.dumps(SPEC_SCHEMA, indent=2)}"
+            system_instruction=_get_full_system_prompt()
         )
         response = model.generate_content(
             f"Current spec:\n{json.dumps(current, indent=2)}\n\nInstruction:\n{prompt.strip()}",
@@ -137,12 +153,11 @@ def _call_claude(prompt: str, current: dict, api_key: Optional[str]) -> dict:
     print("[LLM] calling Claude model", CLAUDE_MODEL_NAME)
     try:
         client = anthropic.Anthropic(api_key=key)
-        schema_text = json.dumps(SPEC_SCHEMA or {}, indent=2)
         
         response = client.messages.create(
             model=CLAUDE_MODEL_NAME,
             max_tokens=2048,
-            system=f"{LLM_SYSTEM_PROMPT}\nSchema:\n{schema_text}",
+            system=_get_full_system_prompt(),
             messages=[
                 {
                     "role": "user",
