@@ -443,6 +443,28 @@
   </div>
 </div>
 
+<!-- Add Mob Modal -->
+<div id="add-mob-modal-overlay" class="user-modal-overlay hidden">
+  <div class="user-modal">
+    <h2>Create New Mob</h2>
+    <div class="new-user-form">
+      <input type="text" id="new-mob-input" placeholder="Enter mob name...">
+      <button type="button" class="primary" id="create-mob-btn">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- Load Template Modal -->
+<div id="load-template-modal-overlay" class="user-modal-overlay hidden">
+  <div class="user-modal">
+    <h2 id="template-modal-title">Load Template</h2>
+    <div class="new-user-form">
+      <input type="text" id="template-mob-input" placeholder="Enter name for this mob...">
+      <button type="button" class="primary" id="template-create-btn">Create</button>
+    </div>
+  </div>
+</div>
+
 <!-- Hidden file input for restore -->
 <input type="file" id="restore-file-input" accept=".json" style="display: none;">
 
@@ -946,6 +968,141 @@ function initResizer() {
 }
 
 // =====================
+// ADD MOB MODAL
+// =====================
+function initAddMobModal() {
+  const addMobModalOverlay = document.getElementById("add-mob-modal-overlay");
+  const newMobInput = document.getElementById("new-mob-input");
+  const createMobBtn = document.getElementById("create-mob-btn");
+  
+  // Close modal when clicking outside
+  addMobModalOverlay?.addEventListener("click", (e) => {
+    if (e.target === addMobModalOverlay) {
+      addMobModalOverlay.classList.add("hidden");
+      newMobInput.value = "";
+    }
+  });
+  
+  // Create mob handler
+  async function createNewMob() {
+    const name = newMobInput.value.trim();
+    if (!name) {
+      alert("Please enter a mob name.");
+      return;
+    }
+    
+    const safeName = name.toLowerCase().replace(/[^a-z0-9_]/g, "_");
+    
+    // Check if mob already exists
+    if (getUserMob(safeName)) {
+      alert(`A mob named '${safeName}' already exists.`);
+      return;
+    }
+    
+    // Start with default spec from server
+    try {
+      const res = await fetch("/api/spec");
+      const data = await res.json();
+      const spec = data.spec;
+      spec.short_name = safeName;
+      spec.display_name = name.charAt(0).toUpperCase() + name.slice(1).replace(/_/g, " ");
+      spec.identifier = `custom:${safeName}`;
+      
+      saveUserMob(safeName, spec);
+      currentMobName = safeName;
+      await loadMobList();
+      await selectMob(safeName);
+      
+      // Close modal
+      addMobModalOverlay.classList.add("hidden");
+      newMobInput.value = "";
+    } catch (err) {
+      alert("Error creating mob: " + err.message);
+    }
+  }
+  
+  createMobBtn?.addEventListener("click", createNewMob);
+  
+  newMobInput?.addEventListener("keypress", (e) => {
+    if (e.key === "Enter") {
+      createNewMob();
+    }
+  });
+}
+
+// =====================
+// LOAD TEMPLATE MODAL
+// =====================
+function initLoadTemplateModal() {
+  const loadTemplateModalOverlay = document.getElementById("load-template-modal-overlay");
+  const templateMobInput = document.getElementById("template-mob-input");
+  const templateCreateBtn = document.getElementById("template-create-btn");
+  
+  // Close modal when clicking outside
+  loadTemplateModalOverlay?.addEventListener("click", (e) => {
+    if (e.target === loadTemplateModalOverlay) {
+      loadTemplateModalOverlay.classList.add("hidden");
+      templateMobInput.value = "";
+      selectedTemplateId = null;
+    }
+  });
+  
+  // Create mob from template handler
+  async function createMobFromTemplate() {
+    const name = templateMobInput.value.trim();
+    if (!name) {
+      alert("Please enter a mob name.");
+      return;
+    }
+    
+    if (!selectedTemplateId) {
+      alert("No template selected.");
+      return;
+    }
+    
+    const template = vanillaTemplates[selectedTemplateId];
+    if (!template) {
+      alert("Template not found.");
+      return;
+    }
+    
+    const safeName = name.toLowerCase().replace(/[^a-z0-9_]/g, "_");
+    
+    // Check if mob already exists
+    if (getUserMob(safeName)) {
+      alert(`A mob named '${safeName}' already exists.`);
+      return;
+    }
+    
+    // Clone the template and customize
+    const spec = JSON.parse(JSON.stringify(template));
+    spec.short_name = safeName;
+    spec.display_name = name.charAt(0).toUpperCase() + name.slice(1).replace(/_/g, " ");
+    if (spec.identifier.startsWith("minecraft:")) {
+      spec.identifier = `custom:${safeName}`;
+    }
+    
+    saveUserMob(safeName, spec);
+    currentMobName = safeName;
+    await loadMobList();
+    await selectMob(safeName);
+    
+    // Close modal
+    loadTemplateModalOverlay.classList.add("hidden");
+    templateMobInput.value = "";
+    selectedTemplateId = null;
+  }
+  
+  templateCreateBtn?.addEventListener("click", createMobFromTemplate);
+  
+  templateMobInput?.addEventListener("keypress", (e) => {
+    if (e.key === "Enter") {
+      createMobFromTemplate();
+    }
+  });
+}
+
+// =====================
 // EXISTING APP CODE
 // =====================
 const THEME_KEY = "builder_theme_preference";
@@ -992,6 +1149,8 @@ async function loadTemplates() {
   }
 }
 
+let selectedTemplateId = null;
+
 templateSelect?.addEventListener("change", async () => {
   const templateId = templateSelect.value;
   if (!templateId) return;
@@ -1006,33 +1165,20 @@ templateSelect?.addEventListener("change", async () => {
     return;
   }
   
-  const name = prompt(`Enter a name for your new ${template.display_name}:`, template.short_name);
-  if (!name) {
-    templateSelect.value = "";
-    return;
-  }
+  // Store the selected template and show modal
+  selectedTemplateId = templateId;
+  const loadTemplateModalOverlay = document.getElementById("load-template-modal-overlay");
+  const templateModalTitle = document.getElementById("template-modal-title");
+  const templateMobInput = document.getElementById("template-mob-input");
   
-  const safeName = name.toLowerCase().replace(/[^a-z0-9_]/g, "_");
-  if (getUserMob(safeName)) {
-    alert(`A mob named '${safeName}' already exists.`);
-    templateSelect.value = "";
-    return;
-  }
+  templateModalTitle.textContent = `Load ${template.display_name}`;
+  templateMobInput.value = template.short_name;
+  templateMobInput.placeholder = `Enter name for your ${template.display_name}...`;
+  loadTemplateModalOverlay?.classList.remove("hidden");
+  templateMobInput?.focus();
+  templateMobInput?.select();
   
-  const spec = JSON.parse(JSON.stringify(template));
-  spec.short_name = safeName;
-  // Use a custom namespace if it doesn't have one or use the original if preferred
-  // For now, let's keep it simple and just update names
-  spec.display_name = name.charAt(0).toUpperCase() + name.slice(1).replace(/_/g, " ");
-  if (spec.identifier.startsWith("minecraft:")) {
-    spec.identifier = `custom:${safeName}`;
-  }
-
-  saveUserMob(safeName, spec);
-  currentMobName = safeName;
-  await loadMobList();
-  await selectMob(safeName);
-  
+  // Reset dropdown
   templateSelect.value = "";
 });
 
@@ -1267,8 +1413,18 @@ async function loadTextureIntoPainter(name) {
     return;
   }
   
-  // No local texture - canvas stays white
-  console.log(`No texture for ${name}, using blank canvas`);
+  // Fallback: Check if mob spec has a color_rgb defined
+  const spec = getUserMob(name);
+  if (spec && spec.color_rgb) {
+    const [r, g, b] = spec.color_rgb;
+    ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    console.log(`No texture for ${name}, filled with color_rgb: rgb(${r}, ${g}, ${b})`);
+    return;
+  }
+  
+  // No local texture or color_rgb - canvas stays white
+  console.log(`No texture or color for ${name}, using blank canvas`);
 }
 
 initPainter();
@@ -1341,6 +1497,10 @@ async function saveSpec() {
   currentMobName = targetName;
   setStatus(`Saved ${currentMobName} locally.`);
   await loadMobList();
+  
+  // Refresh painter in case color changed in JSON
+  loadTextureIntoPainter(currentMobName);
+  
   return spec;
 }
 
@@ -1373,32 +1533,11 @@ addMobBtn.addEventListener("click", async () => {
     return;
   }
   
-  const name = prompt("Enter a short name for the new mob (e.g. fire_cow):");
-  if (!name) return;
-  const safeName = name.toLowerCase().replace(/[^a-z0-9_]/g, "_");
-  
-  // Check if mob already exists
-  if (getUserMob(safeName)) {
-    alert(`A mob named '${safeName}' already exists.`);
-    return;
-  }
-  
-  // Start with default spec from server
-  try {
-    const res = await fetch("/api/spec");
-    const data = await res.json();
-    const spec = data.spec;
-    spec.short_name = safeName;
-    spec.display_name = name.charAt(0).toUpperCase() + name.slice(1).replace(/_/g, " ");
-    spec.identifier = `custom:${safeName}`;
-    
-    saveUserMob(safeName, spec);
-    currentMobName = safeName;
-    await loadMobList();
-    await selectMob(safeName);
-  } catch (err) {
-    alert("Error creating mob: " + err.message);
-  }
+  // Show the add mob modal
+  const addMobModalOverlay = document.getElementById("add-mob-modal-overlay");
+  const newMobInput = document.getElementById("new-mob-input");
+  addMobModalOverlay?.classList.remove("hidden");
+  newMobInput?.focus();
 });
 
 async function buildArtifact() {
@@ -1526,6 +1665,8 @@ async function requestLlm() {
   // Save to localStorage
   if (currentMobName) {
     saveUserMob(currentMobName, payload.spec);
+    // Sync texture painter with potentially new color
+    loadTextureIntoPainter(currentMobName);
   }
   
   setStatus(`${provider} updated the spec at ${new Date().toLocaleTimeString()}.`);
@@ -1572,6 +1713,8 @@ loadLlmPrefs();
 loadBuildMode();
 initUserSystem();
 initResizer();
+initAddMobModal();
+initLoadTemplateModal();
 loadTemplates();
 loadSpec();
 </script>
