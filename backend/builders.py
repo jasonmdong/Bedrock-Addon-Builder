@@ -264,6 +264,17 @@ def patch_behavior_pack(beh_root: Path, specs: list[dict]):
                 }
             }
         }
+
+        # Merge custom components from spec
+        custom_components = spec.get("components", {})
+        if custom_components:
+            for k, v in custom_components.items():
+                if v is None:
+                    if k in entity["minecraft:entity"]["components"]:
+                        del entity["minecraft:entity"]["components"][k]
+                else:
+                    entity["minecraft:entity"]["components"][k] = v
+
         ent_file.write_text(json.dumps(entity, indent=2), encoding="utf-8")
 
     if lang_lines:

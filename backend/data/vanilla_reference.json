@@ -1,0 +1,77 @@
+{
+  "components": {
+    "minecraft:behavior.swell": {
+      "description": "Allows the mob to swell and trigger an explosion. MUST be paired with minecraft:explode.",
+      "properties": {
+        "start_distance": "Distance to start swelling",
+        "stop_distance": "Distance to stop swelling"
+      }
+    },
+    "minecraft:explode": {
+      "description": "Defines the actual explosion properties. Required for mobs that swell.",
+      "properties": {
+        "fuse_length": "Time in seconds before exploding",
+        "power": "Explosion radius/strength (e.g., 3)",
+        "causes_fire": "Boolean",
+        "destroy_affected_by_griefing": "Boolean"
+      }
+    },
+    "minecraft:target_nearby_sensor": {
+      "description": "Triggers events based on player proximity. Useful for starting the swell behavior.",
+      "properties": {
+        "inside_range": "Distance to trigger",
+        "outside_range": "Distance to reset"
+      }
+    },
+    "minecraft:behavior.leap_at_target": {
+      "description": "Allows the mob to leap at its target.",
+      "properties": {
+        "yd": "Vertical leap strength",
+        "must_be_on_ground": "Whether it must be on ground to leap"
+      }
+    },
+    "minecraft:behavior.melee_attack": {
+      "description": "Basic melee attack behavior.",
+      "properties": {
+        "speed_multiplier": "Movement speed multiplier when attacking",
+        "track_target": "Whether to track the target's position"
+      }
+    },
+    "minecraft:behavior.avoid_mob_type": {
+      "description": "Allows the mob to run away from specific mob types (e.g., cats, ocelots).",
+      "properties": {
+        "max_dist": "Distance to keep from the avoided mob",
+        "sprint_speed_multiplier": "Speed when running away"
+      }
+    },
+    "minecraft:behavior.panic": {
+      "description": "Allows the mob to run away when hurt.",
+      "properties": {
+        "speed_multiplier": "Panic speed multiplier"
+      }
+    },
+    "minecraft:behavior.mount_pathing": {
+      "description": "Allows the mob to path towards a mount (like a spider jockey)."
+    },
+    "minecraft:behavior.defend_village_target": {
+      "description": "Iron Golem style village defense behavior."
+    },
+    "minecraft:is_charged": {
+      "description": "Marks the entity as charged (like a charged creeper)."
+    },
+    "minecraft:knockback_resistance": {
+      "description": "Reduces knockback taken by the mob.",
+      "properties": {
+        "value": "Resistance value (0.0 to 1.0)"
+      }
+    },
+    "minecraft:teleport": {
+      "description": "Allows the mob to teleport (Enderman style).",
+      "properties": {
+        "random_teleports": "Whether it teleports randomly"
+      }
+    }
+  },
+  "families": ["monster", "mob", "creeper", "zombie", "skeleton", "spider", "irongolem", "player"],
+  "notes": "Reference from Mojang/bedrock-samples. Use these components to customize AI behavior. TIP: To make a mob only explode and NOT melee attack, add 'minecraft:behavior.melee_attack': null to the components."
+}

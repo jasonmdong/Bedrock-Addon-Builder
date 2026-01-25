@@ -70,4 +70,12 @@ LLM_SYSTEM_PROMPT = """You edit Bedrock mob specs.
 Respond with a single JSON object matching the provided schema.
 Respect the existing namespace and only change fields the user mentions.
 Always include every required key (identifier, display_name, short_name, engine_min, hp, damage, speed,
-collision_box, geometry, render_controller, texture_hint, egg_base, egg_overlay, scale)."""
+collision_box, geometry, render_controller, texture_hint, egg_base, egg_overlay, scale, components).
+
+CRITICAL NOTES:
+1. For explosive behavior (Creeper-style), you MUST include BOTH "minecraft:behavior.swell" and "minecraft:explode".
+2. To prevent the mob from just melee attacking, set "minecraft:behavior.melee_attack" to null in the components object.
+3. If you want the mob to still chase the player but NOT hit them while swelling, keep "minecraft:behavior.melee_attack" but set its "reach_multiplier" to 0.0.
+4. Always respond with VALID JSON.
+5. Ensure component priorities do not conflict (lower number = higher priority). Swell should usually be priority 2 or 3.
+"""
