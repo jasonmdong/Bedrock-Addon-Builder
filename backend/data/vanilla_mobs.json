@@ -15,6 +15,9 @@
       "egg_base": "#00A411",
       "egg_overlay": "#385223",
       "scale": 1.0,
+      "color_rgb": [255, 0, 0],
+      "geometry_json": {},
+      "texture_instructions": [],
       "components": {
         "minecraft:burns_in_daylight": {}
       }
@@ -34,6 +37,9 @@
       "egg_base": "#0DA70B",
       "egg_overlay": "#000000",
       "scale": 1.0,
+      "color_rgb": [255, 0, 0],
+      "geometry_json": {},
+      "texture_instructions": [],
       "components": {
         "minecraft:behavior.swell": {
           "start_distance": 2.5,
@@ -64,6 +70,9 @@
       "egg_base": "#C1C1C1",
       "egg_overlay": "#494949",
       "scale": 1.0,
+      "color_rgb": [255, 0, 0],
+      "geometry_json": {},
+      "texture_instructions": [],
       "components": {
         "minecraft:burns_in_daylight": {}
       }
@@ -83,6 +92,9 @@
       "egg_base": "#342D27",
       "egg_overlay": "#A80E0E",
       "scale": 1.0,
+      "color_rgb": [255, 0, 0],
+      "geometry_json": {},
+      "texture_instructions": [],
       "components": {
         "minecraft:can_climb": {}
       }
@@ -102,6 +114,9 @@
       "egg_base": "#443626",
       "egg_overlay": "#A1A1A1",
       "scale": 1.0,
+      "color_rgb": [255, 0, 0],
+      "geometry_json": {},
+      "texture_instructions": [],
       "components": {
         "minecraft:behavior.panic": { "speed_multiplier": 1.25 },
         "minecraft:behavior.tempt": { "speed_multiplier": 1.2, "items": ["wheat"] }
@@ -122,6 +137,9 @@
       "egg_base": "#F0A5A2",
       "egg_overlay": "#DB635F",
       "scale": 1.0,
+      "color_rgb": [255, 0, 0],
+      "geometry_json": {},
+      "texture_instructions": [],
       "components": {
         "minecraft:behavior.panic": { "speed_multiplier": 1.25 },
         "minecraft:behavior.tempt": { "speed_multiplier": 1.2, "items": ["carrot", "potato", "beetroot"] }
@@ -142,6 +160,9 @@
       "egg_base": "#E7E7E7",
       "egg_overlay": "#FFB5B5",
       "scale": 1.0,
+      "color_rgb": [255, 0, 0],
+      "geometry_json": {},
+      "texture_instructions": [],
       "components": {
         "minecraft:behavior.panic": { "speed_multiplier": 1.25 },
         "minecraft:behavior.tempt": { "speed_multiplier": 1.2, "items": ["wheat"] }
@@ -162,6 +183,9 @@
       "egg_base": "#FEFEFE",
       "egg_overlay": "#A00000",
       "scale": 1.0,
+      "color_rgb": [255, 0, 0],
+      "geometry_json": {},
+      "texture_instructions": [],
       "components": {
         "minecraft:behavior.panic": { "speed_multiplier": 1.25 },
         "minecraft:behavior.tempt": { "speed_multiplier": 1.2, "items": ["wheat_seeds", "pumpkin_seeds", "melon_seeds", "beetroot_seeds"] }
@@ -182,6 +206,9 @@
       "egg_base": "#D1D1D1",
       "egg_overlay": "#22A400",
       "scale": 1.0,
+      "color_rgb": [255, 0, 0],
+      "geometry_json": {},
+      "texture_instructions": [],
       "components": {
         "minecraft:knockback_resistance": { "value": 1.0 },
         "minecraft:behavior.nearest_attackable_target": { "entity_types": [{"filters": {"test": "is_family", "value": "monster"}}] }
@@ -202,6 +229,9 @@
       "egg_base": "#161616",
       "egg_overlay": "#000000",
       "scale": 1.0,
+      "color_rgb": [255, 0, 0],
+      "geometry_json": {},
+      "texture_instructions": [],
       "components": {
         "minecraft:teleport": { "random_teleports": true }
       }
@@ -221,6 +251,9 @@
       "egg_base": "#F6B201",
       "egg_overlay": "#FFF87E",
       "scale": 1.0,
+      "color_rgb": [255, 0, 0],
+      "geometry_json": {},
+      "texture_instructions": [],
       "components": {
         "minecraft:behavior.float": { "priority": 0 }
       }
@@ -240,6 +273,9 @@
       "egg_base": "#51A03E",
       "egg_overlay": "#7EBF6E",
       "scale": 1.0,
+      "color_rgb": [255, 0, 0],
+      "geometry_json": {},
+      "texture_instructions": [],
       "components": {}
     }
   }

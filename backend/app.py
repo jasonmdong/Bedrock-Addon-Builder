@@ -21,6 +21,7 @@ from routes import (
     replace_spec,
     patch_spec,
     llm_spec_editor,
+    validate_spec_endpoint,
     index,
     styles_css,
     healthz,
@@ -61,6 +62,7 @@ app.get("/api/spec")(get_spec)
 app.put("/api/spec")(replace_spec)
 app.post("/api/spec/patch")(patch_spec)
 app.post("/api/spec/llm")(llm_spec_editor)
+app.post("/api/spec/validate")(validate_spec_endpoint)
 
 # Build routes
 app.post("/build")(build_form)

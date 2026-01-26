@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, JSO
 from spec_utils import (
     read_mob_spec, write_mob_spec, delete_mob_spec, list_mob_names,
     read_current_spec, write_current_spec, apply_spec_patch,
-    SpecValidationError
+    validate_spec, SpecValidationError
 )
 from llm import llm_rewrite_spec
 from packaging import build_addon
@@ -198,6 +198,25 @@ def llm_spec_editor(payload: dict = Body(...)):
     provider = data.get("provider")
     api_key = data.get("api_key")
     print(f"[LLM] provider={provider} prompt_len={len(prompt.strip())}")
+
+
+def validate_spec_endpoint(payload: dict = Body(...)):
+    """Validate a spec without saving it."""
+    from spec_utils import validate_spec
+    try:
+        validated = validate_spec(payload)
+        return {"valid": True, "spec": validated}
+    except SpecValidationError as exc:
+        # Return structured error with path information
+        error_msg = str(exc)
+        # Try to extract field name from error message
+        field = None
+        for key in ["identifier", "short_name", "display_name", "hp", "damage", "speed", 
+                    "collision_box", "egg_base", "egg_overlay", "scale", "engine_min"]:
+            if key in error_msg.lower():
+                field = key
+                break
+        return {"valid": False, "error": error_msg, "field": field}
     
     # Use client-provided spec if available, otherwise fallback to server's 'current'
     current = data.get("current_spec")

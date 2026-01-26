@@ -52,7 +52,8 @@
     transition: background .3s ease, color .3s ease;
     display: flex;
     min-height: 100vh;
-    overflow: hidden;
+    overflow-y: auto;
+    overflow-x: hidden;
   }
   aside {
     width: 350px;
@@ -66,7 +67,9 @@
     flex-shrink: 0;
     height: 100vh;
     overflow: hidden;
-    position: relative;
+    position: sticky;
+    top: 0;
+    align-self: flex-start;
   }
   .resizer {
     position: absolute;
@@ -85,15 +88,12 @@
   }
   main {
     flex-grow: 1;
-    max-width: 960px;
-    margin: 2rem auto;
+    max-width: 1600px;
+    margin: 1rem auto;
     background: var(--card-bg);
     border-radius: 16px;
     padding: 2rem;
     box-shadow: 0 18px 35px rgba(15,23,42,.08);
-    height: fit-content;
-    overflow-y: auto;
-    max-height: 100vh;
   }
   .mob-list {
     list-style: none;
@@ -510,48 +510,101 @@
   <p class="hint">
     Edit JSON specs individually. Select mobs in the sidebar to include them in the final bundle.
   </p>
-  <div class="row">
-    <div>
-      <label>Resource Pack (.zip/.mcpack)</label>
-      <input type="file" id="resource">
-    </div>
-    <div>
-      <label>Behavior Pack (.zip/.mcpack)</label>
-      <input type="file" id="behavior">
-    </div>
-  </div>
-  <div class="llm-card">
-    <div>
-      <label style="font-size:1rem;">LLM Assistant Prompt</label>
-      <p class="hint" style="margin:.2rem 0 0;">Describe the change you want and let an LLM update the spec.</p>
-    </div>
-    <div class="llm-controls">
-      <div class="field">
-        <label>Provider</label>
-        <select id="llm-provider">
-          <option value="openai">OpenAI</option>
-          <option value="deepseek">DeepSeek</option>
-          <option value="gemini">Gemini</option>
-          <option value="claude">Claude</option>
-        </select>
-      </div>
-      <div class="field">
-        <label>API Key</label>
-        <input type="password" id="llm-key" placeholder="sk-..." autocomplete="off">
-      </div>
-    </div>
-    <textarea id="llm-prompt" placeholder="Describe how the mob should change (damage, hp, colors, geometry...)."></textarea>
-    <div class="actions">
-      <button type="button" class="primary" id="llm-run">Ask LLM</button>
-    </div>
-  </div>
   <pre id="status">Loading spec...</pre>
-  <label style="margin-top:1rem;">Mob Spec JSON</label>
-  <textarea id="spec-editor" spellcheck="false" autocomplete="off"></textarea>
-  <div class="actions">
-    <button type="button" class="secondary" id="reset">Reset</button>
-    <button type="button" class="danger" id="save">Save Spec</button>
+  
+  <!-- Two-Column Widget Layout -->
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 2rem; min-height: calc(100vh - 300px);">
+    
+    <!-- LEFT WIDGET -->
+    <div style="display: flex; flex-direction: column; gap: 1rem; height: 100%;">
+      <!-- Generated Pack Structure -->
+      <div style="padding: 1rem; background: var(--card-bg); border-radius: 8px; border: 1px solid var(--border); flex: 1; display: flex; flex-direction: column; overflow: hidden;">
+        <h3 style="margin: 0 0 0.75rem 0; font-size: 1rem; font-weight: bold;">📁 Generated Pack Structure</h3>
+        <div id="file-tree" style="font-family: monospace; font-size: 0.85rem; line-height: 1.6; overflow-y: auto; flex: 1;"></div>
+      </div>
+      
+      <!-- LLM Assistant -->
+      <div class="llm-card" style="flex: 1; display: flex; flex-direction: column;">
+        <div>
+          <label style="font-size:1rem;">🤖 LLM Assistant Prompt</label>
+          <p class="hint" style="margin:.2rem 0 0;">Describe the change you want and let an LLM update the spec.</p>
+        </div>
+        <div class="llm-controls">
+          <div class="field">
+            <label>Provider</label>
+            <select id="llm-provider">
+              <option value="openai">OpenAI</option>
+              <option value="deepseek">DeepSeek</option>
+              <option value="gemini">Gemini</option>
+              <option value="claude">Claude</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>API Key</label>
+            <input type="password" id="llm-key" placeholder="sk-..." autocomplete="off">
+          </div>
+        </div>
+        <textarea id="llm-prompt" placeholder="Describe how the mob should change (damage, hp, colors, geometry...)." style="flex: 1;"></textarea>
+        <div style="background: #1e293b; color: #f1f5f9; padding: 0.5rem; border-radius: 4px; margin-bottom: 0.5rem; font-size: 0.8rem; display: flex; align-items: center; gap: 0.5rem;">
+          <span>🔒</span>
+          <span><strong>Private:</strong> The API key is stored locally in your browser only. Never sent to our server.</span>
+        </div>
+        <div class="actions">
+          <button type="button" class="primary" id="llm-run">Ask LLM</button>
+        </div>
+      </div>
+    </div>
+    
+    <!-- RIGHT WIDGET -->
+    <div style="display: flex; flex-direction: column; gap: 1rem; height: 100%;">
+      <!-- Mob Spec JSON Editor -->
+      <div style="display: flex; flex-direction: column; flex: 1; overflow: hidden;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+          <label>📝 Mob Spec JSON</label>
+          <span id="validation-badge" style="font-size: 0.85rem; padding: 0.25rem 0.75rem; border-radius: 12px; display: none;"></span>
+        </div>
+        <textarea id="spec-editor" spellcheck="false" autocomplete="off" style="flex: 1; resize: none;"></textarea>
+        <div class="actions" style="margin-top: 0.75rem;">
+          <button type="button" class="secondary" id="reset">Reset</button>
+          <button type="button" class="danger" id="save">Save Spec</button>
+        </div>
+      </div>
+      
+      <!-- LLM Changes Diff (Always Visible) -->
+      <div style="padding: 1rem; background: var(--card-bg); border-radius: 8px; border: 1px solid var(--border); flex: 1; display: flex; flex-direction: column; overflow: hidden;">
+        <h3 style="margin: 0 0 0.75rem 0; font-size: 1rem; font-weight: bold;">🔄 LLM Changes</h3>
+        <div id="llm-diff-content" style="font-family: monospace; font-size: 0.85rem; overflow-x: auto; overflow-y: auto; flex: 1;">
+          <div style="color: var(--muted); font-style: italic; padding: 1rem; text-align: center;">No changes made yet</div>
+        </div>
+      </div>
+    </div>
+    
   </div>
+  
+  <!-- Bottom Section: Resource Packs & Texture Painter -->
+  <div class="row">
+    <div class="field">
+      <label>📦 Resource Pack (.zip/.mcpack)</label>
+      <div style="position: relative;">
+        <input type="file" id="resource" style="display: none;" accept=".zip,.mcpack">
+        <button type="button" class="secondary" onclick="document.getElementById('resource').click()" style="width: 100%; text-align: left; display: flex; align-items: center; gap: 0.5rem;">
+          <span style="font-size: 1.25rem;">📂</span>
+          <span id="resource-file-name" style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Choose file...</span>
+        </button>
+      </div>
+    </div>
+    <div class="field">
+      <label>⚙️ Behavior Pack (.zip/.mcpack)</label>
+      <div style="position: relative;">
+        <input type="file" id="behavior" style="display: none;" accept=".zip,.mcpack">
+        <button type="button" class="secondary" onclick="document.getElementById('behavior').click()" style="width: 100%; text-align: left; display: flex; align-items: center; gap: 0.5rem;">
+          <span style="font-size: 1.25rem;">📂</span>
+          <span id="behavior-file-name" style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Choose file...</span>
+        </button>
+      </div>
+    </div>
+  </div>
+  
   <div class="painter-container">
     <h2 style="margin-top: 0;">Texture Painter</h2>
     <p class="hint">Paint the 64x64 skin for the selected mob.</p>
@@ -1125,6 +1178,9 @@ const sidebarStatusEl = document.getElementById("sidebar-status");
 const mobListEl = document.getElementById("mob-list");
 const addMobBtn = document.getElementById("add-mob");
 const templateSelect = document.getElementById("template-select");
+const validationBadge = document.getElementById("validation-badge");
+const fileTreeEl = document.getElementById("file-tree");
+const diffContent = document.getElementById("llm-diff-content");
 
 // Templates storage
 let vanillaTemplates = {};
@@ -1307,6 +1363,9 @@ async function selectMob(name) {
 
   // Load texture into painter automatically
   loadTextureIntoPainter(name);
+  
+  // Update file tree preview
+  updateFileTree(spec);
 }
 
 // Painter Logic
@@ -1476,6 +1535,7 @@ async function saveSpec() {
     spec = JSON.parse(editor.value);
   } catch (err) {
     setStatus("JSON parse error: " + err.message, true);
+    showValidationBadge(false, "Invalid JSON");
     return null;
   }
   
@@ -1483,6 +1543,35 @@ async function saveSpec() {
   if (!user) {
     setStatus("No user logged in.", true);
     return null;
+  }
+  
+  // Validate spec against schema via server
+  setStatus("Validating spec...");
+  showValidationBadge(null, "Validating...");
+  try {
+    const res = await fetch("/api/spec/validate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(spec)
+    });
+    const result = await res.json();
+    
+    if (!result.valid) {
+      const errorMsg = result.error || "Validation failed";
+      const field = result.field ? ` (field: ${result.field})` : "";
+      setStatus(`❌ Validation error: ${errorMsg}${field}`, true);
+      showValidationBadge(false, `Error in ${result.field || 'spec'}`);
+      return null;
+    }
+    
+    // Use the validated spec from server (fills defaults)
+    spec = result.spec;
+    showValidationBadge(true, "Valid");
+  } catch (err) {
+    console.error("Validation failed", err);
+    setStatus("⚠️ Could not validate spec: " + err.message, true);
+    showValidationBadge(null, "Offline");
+    // Continue anyway for offline mode
   }
   
   // If short_name changed, we treat it as a rename/move
@@ -1495,14 +1584,150 @@ async function saveSpec() {
   
   saveUserMob(targetName, spec);
   currentMobName = targetName;
-  setStatus(`Saved ${currentMobName} locally.`);
+  setStatus(`✅ Saved ${currentMobName} locally.`);
   await loadMobList();
   
   // Refresh painter in case color changed in JSON
   loadTextureIntoPainter(currentMobName);
   
+  // Update file tree preview
+  updateFileTree(spec);
+  
   return spec;
 }
+
+function showValidationBadge(isValid, text) {
+  if (!validationBadge) return;
+  if (isValid === null) {
+    // Neutral/loading state
+    validationBadge.style.display = "inline-block";
+    validationBadge.style.background = "var(--muted)";
+    validationBadge.style.color = "var(--bg)";
+    validationBadge.textContent = text || "⏳ Checking...";
+  } else if (isValid) {
+    // Valid
+    validationBadge.style.display = "inline-block";
+    validationBadge.style.background = "#22c55e";
+    validationBadge.style.color = "white";
+    validationBadge.textContent = "✅ " + (text || "Valid");
+  } else {
+    // Invalid
+    validationBadge.style.display = "inline-block";
+    validationBadge.style.background = "var(--danger)";
+    validationBadge.style.color = "white";
+    validationBadge.textContent = "❌ " + (text || "Invalid");
+  }
+}
+
+function updateFileTree(spec) {
+  if (!fileTreeEl || !spec) return;
+  
+  const shortName = spec.short_name || "mob";
+  const hasCustomGeo = spec.geometry_json && typeof spec.geometry_json === 'object';
+  
+  let tree = `
+<div style="color: var(--muted); margin-bottom: 0.5rem;">┌─ <strong>Resource Pack (RP)</strong></div>
+<div style="padding-left: 1rem;">
+  ├─ 📄 manifest.json<br>
+  ├─ 🖼️ pack_icon.png<br>
+  ├─ 📂 entity/<br>
+  │&nbsp;&nbsp; └─ ${shortName}.client.entity.json<br>
+  ├─ 📂 models/entity/${hasCustomGeo ? '<br>  │&nbsp;&nbsp; └─ ' + shortName + '.geo.json<br>' : '<br>'}
+  ├─ 📂 textures/entity/${shortName}/<br>
+  │&nbsp;&nbsp; ├─ ${shortName}.png<br>
+  │&nbsp;&nbsp; ├─ ${shortName}_mers.tga<br>
+  │&nbsp;&nbsp; └─ ${shortName}.texture_set.json<br>
+  └─ 📂 texts/<br>
+  &nbsp;&nbsp;&nbsp;&nbsp; └─ en_US.lang
+</div>
+<div style="color: var(--muted); margin-top: 1rem; margin-bottom: 0.5rem;">└─ <strong>Behavior Pack (BP)</strong></div>
+<div style="padding-left: 1rem;">
+  ├─ 📄 manifest.json<br>
+  ├─ 📂 entities/<br>
+  │&nbsp;&nbsp; └─ ${shortName}.entity.json<br>
+  └─ 📂 texts/<br>
+  &nbsp;&nbsp;&nbsp;&nbsp; └─ en_US.lang
+</div>
+  `.trim();
+  
+  fileTreeEl.innerHTML = tree;
+}
+
+function showDiff(beforeSpec, afterSpec) {
+  if (!diffContent) return;
+  
+  const changes = [];
+  const allKeys = new Set([...Object.keys(beforeSpec), ...Object.keys(afterSpec)]);
+  
+  allKeys.forEach(key => {
+    const before = JSON.stringify(beforeSpec[key], null, 2);
+    const after = JSON.stringify(afterSpec[key], null, 2);
+    
+    if (before !== after) {
+      changes.push({ key, before: beforeSpec[key], after: afterSpec[key] });
+    }
+  });
+  
+  if (changes.length === 0) {
+    diffContent.innerHTML = '<div style="color: var(--muted); font-style: italic; padding: 1rem; text-align: center;">No changes detected</div>';
+  } else {
+    let html = '<div style="display: flex; flex-direction: column; gap: 1rem;">';
+    
+    changes.forEach(change => {
+      const beforeStr = JSON.stringify(change.before, null, 2);
+      const afterStr = JSON.stringify(change.after, null, 2);
+      
+      html += `
+        <div style="border: 2px solid var(--border); border-radius: 8px; overflow: hidden;">
+          <div style="background: var(--primary); color: white; padding: 0.75rem; font-weight: bold; font-size: 0.9rem;">
+            🔑 ${escapeHtml(change.key)}
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0;">
+            <div style="background: #3d1a1a; border-right: 1px solid var(--border); padding: 1rem;">
+              <div style="color: #ff6b6b; font-weight: bold; margin-bottom: 0.75rem; font-size: 0.85rem;">❌ BEFORE</div>
+              <pre style="margin: 0; white-space: pre-wrap; word-break: break-word; color: #ffcccc; font-size: 0.8rem; line-height: 1.4;">${escapeHtml(beforeStr)}</pre>
+            </div>
+            <div style="background: #1a3d1a; padding: 1rem;">
+              <div style="color: #51cf66; font-weight: bold; margin-bottom: 0.75rem; font-size: 0.85rem;">✅ AFTER</div>
+              <pre style="margin: 0; white-space: pre-wrap; word-break: break-word; color: #ccffcc; font-size: 0.8rem; line-height: 1.4;">${escapeHtml(afterStr)}</pre>
+            </div>
+          </div>
+        </div>
+      `;
+    });
+    
+    html += '</div>';
+    diffContent.innerHTML = html;
+  }
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+// Update file upload button labels when files are selected
+const resourceFileName = document.getElementById('resource-file-name');
+const behaviorFileName = document.getElementById('behavior-file-name');
+
+resourceInput?.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (file && resourceFileName) {
+    resourceFileName.textContent = file.name;
+    resourceFileName.style.color = 'var(--primary)';
+    resourceFileName.style.fontWeight = 'bold';
+  }
+});
+
+behaviorInput?.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (file && behaviorFileName) {
+    behaviorFileName.textContent = file.name;
+    behaviorFileName.style.color = 'var(--primary)';
+    behaviorFileName.style.fontWeight = 'bold';
+  }
+});
 
 async function deleteMob(event, name) {
   event.stopPropagation();
@@ -1624,7 +1849,7 @@ async function requestLlm() {
   setStatus(`Contacting ${provider}...`);
   const apiKey = llmKey ? llmKey.value.trim() : "";
   
-  // Get current spec from editor
+  // Get current spec from editor (this is the BEFORE state)
   let currentSpec;
   try {
     currentSpec = JSON.parse(editor.value);
@@ -1632,6 +1857,9 @@ async function requestLlm() {
     setStatus("Invalid JSON in editor. Fix it before using the LLM.", true);
     return;
   }
+  
+  // Store the before state for diff comparison
+  const beforeSpec = JSON.parse(JSON.stringify(currentSpec));
   
   const requestBody = { 
     prompt: instruction, 
@@ -1660,6 +1888,10 @@ async function requestLlm() {
     return;
   }
   console.log("LLM response", payload);
+  
+  // Show the diff before applying changes
+  showDiff(beforeSpec, payload.spec);
+  
   editor.value = JSON.stringify(payload.spec, null, 2);
   
   // Save to localStorage
@@ -1667,6 +1899,8 @@ async function requestLlm() {
     saveUserMob(currentMobName, payload.spec);
     // Sync texture painter with potentially new color
     loadTextureIntoPainter(currentMobName);
+    // Update file tree
+    updateFileTree(payload.spec);
   }
   
   setStatus(`${provider} updated the spec at ${new Date().toLocaleTimeString()}.`);

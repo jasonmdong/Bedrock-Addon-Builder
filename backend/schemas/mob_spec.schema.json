@@ -20,6 +20,9 @@
     "egg_base",
     "egg_overlay",
     "scale",
+    "color_rgb",
+    "geometry_json",
+    "texture_instructions",
     "components"
   ],
   "properties": {
@@ -116,6 +119,26 @@
       "minimum": 0.2,
       "maximum": 5,
       "default": 1
+    },
+    "color_rgb": {
+      "type": "array",
+      "description": "Primary visual color [R, G, B]",
+      "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+      "minItems": 3,
+      "maxItems": 3,
+      "default": [255, 0, 0]
+    },
+    "geometry_json": {
+      "type": "object",
+      "description": "Optional custom Minecraft geometry JSON object.",
+      "additionalProperties": true,
+      "default": {}
+    },
+    "texture_instructions": {
+      "type": "array",
+      "description": "Drawing instructions for the visual layer",
+      "items": { "type": "string" },
+      "default": []
     },
     "components": {
       "type": "object",

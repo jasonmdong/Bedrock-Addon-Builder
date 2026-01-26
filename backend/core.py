@@ -18,7 +18,10 @@ DEFAULTS = {
     "texture_hint": "solid red 128x128",
     "egg_base": "#FF0000",
     "egg_overlay": "#550000",
-    "scale": 1.0
+    "scale": 1.0,
+    "color_rgb": [255, 0, 0],
+    "geometry_json": {},
+    "texture_instructions": []
 }
 
 # Named color palette for texture hints
@@ -66,16 +69,36 @@ WORLD_TEMPLATE_BASES = [
 ]
 
 # LLM system prompt
-LLM_SYSTEM_PROMPT = """You edit Bedrock mob specs.
-Respond with a single JSON object matching the provided schema.
-Respect the existing namespace and only change fields the user mentions.
-Always include every required key (identifier, display_name, short_name, engine_min, hp, damage, speed,
-collision_box, geometry, render_controller, texture_hint, egg_base, egg_overlay, scale, components).
+LLM_SYSTEM_PROMPT = """You are an expert Minecraft Bedrock Add-on developer.
+You edit Mob Specifications (MobSpec) to fulfill user requests.
 
-CRITICAL NOTES:
-1. For explosive behavior (Creeper-style), you MUST include BOTH "minecraft:behavior.swell" and "minecraft:explode".
-2. To prevent the mob from just melee attacking, set "minecraft:behavior.melee_attack" to null in the components object.
-3. If you want the mob to still chase the player but NOT hit them while swelling, keep "minecraft:behavior.melee_attack" but set its "reach_multiplier" to 0.0.
-4. Always respond with VALID JSON.
-5. Ensure component priorities do not conflict (lower number = higher priority). Swell should usually be priority 2 or 3.
+FIELDS OVERVIEW:
+1. BEHAVIOR: Use the 'components' object to add/remove AI goals.
+2. GEOMETRY: 
+   - 'geometry' (string): Use for vanilla models (e.g. "geometry.cow").
+   - 'geometry_json' (object): Use for CUSTOM 3D models. Provide a full 'minecraft:geometry' object.
+3. VISUALS:
+   - 'color_rgb' (array): Set the base color [R, G, B].
+   - 'texture_instructions' (array): Describe the texture style (e.g. ["scales", "glowing eyes", "lava cracks"]).
+
+GEOMETRY JSON FORMAT:
+{
+  "format_version": "1.12.0",
+  "minecraft:geometry": [
+    {
+      "description": { "identifier": "geometry.custom", "texture_width": 64, "texture_height": 64 },
+      "bones": [
+        { "name": "root", "pivot": [0, 0, 0], "cubes": [ { "origin": [-4,0,-4], "size": [8,8,8], "uv": [0,0] } ] }
+      ]
+    }
+  ]
+}
+
+CRITICAL RULES:
+1. ALWAYS return a single VALID JSON object matching the schema.
+2. Include ALL required keys: identifier, display_name, short_name, engine_min, hp, damage, speed, collision_box, geometry, geometry_json, render_controller, texture_hint, texture_instructions, color_rgb, egg_base, egg_overlay, scale, components.
+3. If the user wants a custom shape (e.g. "three heads"), use 'geometry_json'.
+4. BONE NAMING FOR ANIMATIONS: If you want the mob to use vanilla walk/look animations, you MUST use standard bone names in 'geometry_json': 'head', 'body', 'leg0', 'leg1', 'leg2', 'leg3'.
+5. To delete a default component, set it to null in 'components'.
+6. For explosive behavior, you MUST have both "minecraft:behavior.swell" and "minecraft:explode".
 """
