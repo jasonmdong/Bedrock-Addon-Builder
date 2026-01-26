@@ -267,6 +267,9 @@
     cursor: crosshair;
     image-rendering: pixelated;
   }
+  .painter-canvas-wrapper.texture-loaded {
+    background: #000;
+  }
   canvas#pixel-canvas {
     image-rendering: pixelated;
     display: block;
@@ -1134,6 +1137,13 @@ function initLoadTemplateModal() {
     if (spec.identifier.startsWith("minecraft:")) {
       spec.identifier = `custom:${safeName}`;
     }
+
+    // Try to pull the default texture for this template from the Mojang samples repo.
+    const templateId = template.short_name || selectedTemplateId;
+    const remoteTexture = await fetchTemplateTexture(templateId);
+    if (remoteTexture) {
+      saveUserMobTexture(safeName, remoteTexture);
+    }
     
     saveUserMob(safeName, spec);
     currentMobName = safeName;
@@ -1207,6 +1217,30 @@ async function loadTemplates() {
 
 let selectedTemplateId = null;
 
+// Fetch default texture for a vanilla template from Mojang's bedrock-samples repo.
+async function fetchTemplateTexture(templateId) {
+  if (!templateId) return null;
+  const base = "https://raw.githubusercontent.com/Mojang/bedrock-samples/main/resource_pack/textures/entity";
+  const url = `${base}/${encodeURIComponent(templateId)}/${encodeURIComponent(templateId)}.png`;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) {
+      console.warn(`[TEMPLATE] No texture found for ${templateId} (status ${res.status}) at ${url}`);
+      return null;
+    }
+    const blob = await res.blob();
+    return await new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result);
+      reader.onerror = () => resolve(null);
+      reader.readAsDataURL(blob);
+    });
+  } catch (err) {
+    console.warn(`[TEMPLATE] Failed to fetch texture for ${templateId}:`, err);
+    return null;
+  }
+}
+
 templateSelect?.addEventListener("change", async () => {
   const templateId = templateSelect.value;
   if (!templateId) return;
@@ -1248,6 +1282,7 @@ const painterClear = document.getElementById("painter-clear");
 const painterLoad = document.getElementById("painter-load");
 const painterSave = document.getElementById("painter-save");
 const painterImport = document.getElementById("painter-import");
+const painterWrapper = document.querySelector(".painter-canvas-wrapper");
 
 let currentMobName = "current";
 let isDrawing = false;
@@ -1372,6 +1407,7 @@ async function selectMob(name) {
 function initPainter() {
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
+  painterWrapper?.classList.remove("texture-loaded");
 
   const draw = (e) => {
     if (!isDrawing) return;
@@ -1398,6 +1434,7 @@ function initPainter() {
     if (confirm("Clear canvas?")) {
       ctx.fillStyle = "#ffffff";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
+      painterWrapper?.classList.remove("texture-loaded");
     }
   };
 
@@ -1434,7 +1471,14 @@ function initPainter() {
         ctx.fillStyle = "#ffffff";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         ctx.imageSmoothingEnabled = false;
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        // Scale up to fill the painter while preserving pixel edges (nearest-neighbor).
+        const scale = Math.min(canvas.width / img.width, canvas.height / img.height);
+        const dw = img.width * scale;
+        const dh = img.height * scale;
+        const dx = (canvas.width - dw) / 2;
+        const dy = (canvas.height - dh) / 2;
+        ctx.drawImage(img, 0, 0, img.width, img.height, dx, dy, dw, dh);
+        painterWrapper?.classList.add("texture-loaded");
       };
       img.src = event.target.result;
     };
@@ -1466,7 +1510,14 @@ async function loadTextureIntoPainter(name) {
       ctx.fillStyle = "#ffffff";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      // Scale up to fill the painter while preserving pixel edges (nearest-neighbor).
+      const scale = Math.min(canvas.width / img.width, canvas.height / img.height);
+      const dw = img.width * scale;
+      const dh = img.height * scale;
+      const dx = (canvas.width - dw) / 2;
+      const dy = (canvas.height - dh) / 2;
+      ctx.drawImage(img, 0, 0, img.width, img.height, dx, dy, dw, dh);
+      painterWrapper?.classList.add("texture-loaded");
     };
     img.src = localTexture;
     return;
@@ -1479,11 +1530,13 @@ async function loadTextureIntoPainter(name) {
     ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     console.log(`No texture for ${name}, filled with color_rgb: rgb(${r}, ${g}, ${b})`);
+    painterWrapper?.classList.remove("texture-loaded");
     return;
   }
   
   // No local texture or color_rgb - canvas stays white
   console.log(`No texture or color for ${name}, using blank canvas`);
+  painterWrapper?.classList.remove("texture-loaded");
 }
 
 initPainter();
