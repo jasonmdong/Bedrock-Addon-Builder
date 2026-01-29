@@ -56,6 +56,8 @@ DEEPSEEK_MODEL_NAME = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
 GEMINI_MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-1.5-pro")
 CLAUDE_MODEL_NAME = os.environ.get("CLAUDE_MODEL", "claude-3-5-sonnet-20240620")
 DEFAULT_LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "openai")
+# local dev flag toggle (need to fix server side sync still)
+LOCAL_LLM_DEV = True
 
 # World template candidates (now in data/templates/)
 DATA_DIR = BASE_DIR / "data"

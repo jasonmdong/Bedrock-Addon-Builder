@@ -6,6 +6,7 @@ from typing import Optional
 
 from fastapi import File, Form, HTTPException, Body, UploadFile, Response
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, JSONResponse
+import shutil
 
 from spec_utils import (
     read_mob_spec, write_mob_spec, delete_mob_spec, list_mob_names,
@@ -14,7 +15,9 @@ from spec_utils import (
 )
 from llm import llm_rewrite_spec
 from packaging import build_addon
-import shutil
+from builders import make_png_rgba
+
+from core import BACKEND_DIR, COLOR_WORDS, SPECS_DIR, FRONTEND_DIR, LOCAL_LLM_DEV
 
 
 def _save_upload(tmpdir: Path, uf: Optional[UploadFile]) -> Optional[Path]:
@@ -192,12 +195,68 @@ async def patch_spec(operations: list[dict] = Body(...)):
 def llm_spec_editor(payload: dict = Body(...)):
     """Use LLM to rewrite a spec."""
     data = payload or {}
-    prompt = data.get("prompt", "")
-    if not prompt or not prompt.strip():
+    prompt = data.get("prompt") or data.get("instruction") or ""
+    if not prompt or not str(prompt).strip():
         raise HTTPException(status_code=400, detail="prompt is required")
     provider = data.get("provider")
     api_key = data.get("api_key")
-    print(f"[LLM] provider={provider} prompt_len={len(prompt.strip())}")
+    current = data.get("current_spec") or data.get("spec")
+    if not current:
+        current = read_current_spec()
+
+    print(f"[LLM] provider={provider} prompt_len={len(str(prompt).strip())}")
+
+    # if server running in local dev mode prefer mock to avoid external calls
+    if LOCAL_LLM_DEV and not provider:
+        return llm_spec_mock(payload)
+
+    try:
+        updated = llm_rewrite_spec(prompt, current, provider, api_key)
+    except SpecValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except RuntimeError as exc:
+        print(f"[LLM] error: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    if data.get("save"):
+        try:
+            name = updated.get("short_name") or "current"
+            saved = write_mob_spec(name, updated)
+            return {"spec": saved, "saved": True}
+        except SpecValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+
+    return {"spec": updated, "saved": False}
+
+def llm_spec_mock(payload: dict = Body(...)):
+    data = payload or {}
+    prompt = (data.get("prompt") or data.get("instruction") or "").strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="prompt is required")
+    current = data.get("current_spec") or data.get("spec")
+    if not current:
+        current = read_current_spec()
+    spec = dict(current)
+    try:
+        if "increase hp by" in prompt.lower():
+            import re
+            m = re.search(r"increase hp by\s*(\d+)", prompt.lower())
+            if m:
+                delta = int(m.group(1))
+            else:
+                delta = 1
+            spec["hp"] = int(spec.get("hp", 1)) + delta
+        if "double damage" in prompt.lower() or "double the damage" in prompt.lower():
+            spec["damage"] = float(spec.get("damage", 1)) * 2
+        ti = list(spec.get("texture_instructions") or [])
+        ti.append(f"[mock applied] {prompt}")
+        spec["texture_instructions"] = ti
+        validated = validate_spec(spec)
+        return {"spec": validated}
+    except SpecValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 def validate_spec_endpoint(payload: dict = Body(...)):
