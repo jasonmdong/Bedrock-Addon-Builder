@@ -22,6 +22,7 @@ from routes import (
     patch_spec,
     llm_spec_editor,
     validate_spec_endpoint,
+    llm_spec_mock,
     index,
     styles_css,
     healthz,
@@ -69,6 +70,7 @@ app.post("/build")(build_form)
 app.post("/api/build")(api_build)
 app.get("/download/{name}")(download)
 app.get("/api/templates")(get_templates)
+app.post("/api/spec/llm_mock")(llm_spec_mock)
 
 # Static routes
 app.get("/")(index)
