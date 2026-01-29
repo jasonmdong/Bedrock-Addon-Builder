@@ -430,7 +430,38 @@
     padding: 0.5rem;
   }
   .hidden { display: none !important; }
+  /* 3D Viewport Styles */
+  .viewport-3d {
+    width: 100%;
+    height: 500px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: #1a1a1a;
+    position: relative;
+  }
+  .viewport-controls {
+    display: flex;
+    gap: 1rem;
+    margin-top: 1rem;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .viewport-controls button {
+    padding: 0.5rem 1rem;
+    font-size: 0.9rem;
+  }
+  .viewport-info {
+    font-size: 0.85rem;
+    color: var(--muted);
+    padding: 0.5rem;
+    background: var(--secondary-bg);
+    border-radius: 6px;
+    margin-top: 0.5rem;
+  }
 </style>
+
+<!-- Three.js Library -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 
 <!-- User Selection Modal -->
 <div id="user-modal-overlay" class="user-modal-overlay hidden">
@@ -608,6 +639,36 @@
     </div>
   </div>
   
+  <div class="painter-container" id="geometry-container" style="display: none;">
+    <h2 style="margin-top: 0;">📐 Mob Geometry</h2>
+    <p class="hint">Geometry file from Mojang's bedrock-samples repository.</p>
+    <div style="position: relative; margin-bottom: 1rem;">
+      <div style="display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;">
+        <a id="geometry-url" href="#" target="_blank" rel="noopener" style="color: var(--primary); text-decoration: underline; font-size: 0.9rem;"></a>
+        <button type="button" class="secondary" id="geometry-copy" style="padding: 0.5rem 1rem; font-size: 0.9rem;">📋 Copy JSON</button>
+      </div>
+    </div>
+    
+    <!-- 3D Viewport -->
+    <div style="margin-bottom: 1.5rem;">
+      <h3 style="margin-top: 0; margin-bottom: 0.75rem; font-size: 0.95rem;">3D Model Preview</h3>
+      <div id="viewport-3d" class="viewport-3d"></div>
+      <div class="viewport-controls">
+        <button type="button" class="secondary" id="viewport-reset" title="Reset view">🔄 Reset View</button>
+        <button type="button" class="secondary" id="viewport-wireframe" title="Toggle wireframe">🔲 Wireframe</button>
+        <div class="viewport-info">
+          <span>💡 Tip: Use mouse to rotate (left click), pan (right click), and scroll to zoom</span>
+        </div>
+      </div>
+    </div>
+    
+    <!-- JSON Viewer -->
+    <details style="margin-top: 1.5rem;">
+      <summary style="cursor: pointer; font-weight: bold; margin-bottom: 0.75rem;">View JSON Source</summary>
+      <pre id="geometry-viewer" style="background: var(--editor-bg); color: var(--editor-text); padding: 1rem; border-radius: 12px; border: 1px solid var(--border); overflow-x: auto; overflow-y: auto; max-height: 400px; margin: 0; font-size: 0.85rem;"></pre>
+    </details>
+  </div>
+
   <div class="painter-container">
     <h2 style="margin-top: 0;">Texture Painter</h2>
     <p class="hint">Paint the 64x64 skin for the selected mob.</p>
@@ -1150,6 +1211,9 @@ function initLoadTemplateModal() {
     await loadMobList();
     await selectMob(safeName);
     
+    // Fetch and display geometry from bedrock-samples
+    await fetchAndDisplayGeometry(templateId);
+    
     // Close modal
     loadTemplateModalOverlay.classList.add("hidden");
     templateMobInput.value = "";
@@ -1240,6 +1304,413 @@ async function fetchTemplateTexture(templateId) {
     return null;
   }
 }
+
+// Fetch mob geometry JSON from server endpoint
+async function fetchAndDisplayGeometry(mobName) {
+  if (!mobName) return;
+  
+  const geometryContainer = document.getElementById("geometry-container");
+  const geometryViewer = document.getElementById("geometry-viewer");
+  const geometryUrl = document.getElementById("geometry-url");
+  const geometryCopy = document.getElementById("geometry-copy");
+  
+  if (!geometryContainer || !geometryViewer) return;
+  
+  try {
+    // Call our backend endpoint that fetches from bedrock-samples
+    const res = await fetch(`/api/geometry/${encodeURIComponent(mobName)}`);
+    
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({}));
+      console.warn(`[GEOMETRY] Failed to fetch geometry for ${mobName}:`, error.detail || res.statusText);
+      geometryContainer.style.display = "none";
+      return;
+    }
+    
+    const data = await res.json();
+    const geometryData = data.geometry;
+    const url = data.url;
+    
+    // Format JSON with indentation
+    const formattedJson = JSON.stringify(geometryData, null, 2);
+    
+    // Display the geometry
+    geometryViewer.textContent = formattedJson;
+    geometryUrl.href = url;
+    geometryUrl.textContent = `View on GitHub: ${mobName}.geo.json`;
+    geometryContainer.style.display = "block";
+    
+    // Store formatted JSON for copy functionality
+    geometryCopy.dataset.json = formattedJson;
+    
+    // Render the 3D model
+    render3DGeometry(geometryData);
+    
+    console.log(`[GEOMETRY] Successfully loaded geometry for ${mobName}`);
+  } catch (err) {
+    console.warn(`[GEOMETRY] Error fetching geometry for ${mobName}:`, err);
+    geometryContainer.style.display = "none";
+  }
+}
+
+// 3D Geometry Visualization
+let viewer3D = null;
+
+function initializeViewer3D() {
+  const container = document.getElementById("viewport-3d");
+  if (!container) return null;
+  
+  // Clear any existing viewer
+  container.innerHTML = "";
+  
+  // Scene setup
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x222222);
+  
+  // Camera setup
+  const width = container.clientWidth;
+  const height = container.clientHeight;
+  const camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
+  camera.position.set(0, 0, 100);
+  
+  // Renderer setup
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  renderer.setSize(width, height);
+  renderer.shadowMap.enabled = true;
+  container.appendChild(renderer.domElement);
+  
+  // Lighting
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+  scene.add(ambientLight);
+  
+  const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+  directionalLight.position.set(50, 100, 50);
+  directionalLight.castShadow = true;
+  directionalLight.shadow.mapSize.width = 2048;
+  directionalLight.shadow.mapSize.height = 2048;
+  scene.add(directionalLight);
+  
+  // Grid helper (optional, for reference)
+  const gridHelper = new THREE.GridHelper(200, 20, 0x444444, 0x222222);
+  scene.add(gridHelper);
+  
+  // Mouse controls (OrbitControls-like behavior)
+  const controls = {
+    isRotating: false,
+    isPanning: false,
+    previousMousePosition: { x: 0, y: 0 },
+    rotationSpeed: 0.005,
+    panSpeed: 0.5,
+    zoomSpeed: 5
+  };
+  
+  renderer.domElement.addEventListener("mousedown", (e) => {
+    controls.previousMousePosition = { x: e.clientX, y: e.clientY };
+    if (e.button === 0) controls.isRotating = true; // Left click
+    if (e.button === 2) controls.isPanning = true;  // Right click
+  });
+  
+  renderer.domElement.addEventListener("mousemove", (e) => {
+    const deltaX = e.clientX - controls.previousMousePosition.x;
+    const deltaY = e.clientY - controls.previousMousePosition.y;
+    
+    if (controls.isRotating) {
+      // Rotate around Y axis
+      const quaternion = new THREE.Quaternion();
+      quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), deltaX * controls.rotationSpeed);
+      viewer3D.mesh?.quaternion.multiplyQuaternions(quaternion, viewer3D.mesh.quaternion);
+      
+      // Rotate around X axis (local)
+      const quaternionX = new THREE.Quaternion();
+      quaternionX.setFromAxisAngle(new THREE.Vector3(1, 0, 0), deltaY * controls.rotationSpeed);
+      viewer3D.mesh?.quaternion.multiplyQuaternions(viewer3D.mesh.quaternion, quaternionX);
+    }
+    
+    if (controls.isPanning) {
+      camera.position.x -= deltaX * controls.panSpeed;
+      camera.position.y += deltaY * controls.panSpeed;
+    }
+    
+    controls.previousMousePosition = { x: e.clientX, y: e.clientY };
+  });
+  
+  renderer.domElement.addEventListener("mouseup", () => {
+    controls.isRotating = false;
+    controls.isPanning = false;
+  });
+  
+  renderer.domElement.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const zoomDirection = e.deltaY > 0 ? 1 : -1;
+    const direction = camera.position.clone().normalize();
+    camera.position.addScaledVector(direction, zoomDirection * controls.zoomSpeed);
+  }, { passive: false });
+  
+  renderer.domElement.addEventListener("contextmenu", (e) => e.preventDefault());
+  
+  // Handle window resize
+  const handleResize = () => {
+    const newWidth = container.clientWidth;
+    const newHeight = container.clientHeight;
+    camera.aspect = newWidth / newHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(newWidth, newHeight);
+  };
+  
+  window.addEventListener("resize", handleResize);
+  
+  // Animation loop
+  const animate = () => {
+    requestAnimationFrame(animate);
+    renderer.render(scene, camera);
+  };
+  
+  animate();
+  
+  return {
+    scene,
+    camera,
+    renderer,
+    mesh: null,
+    controls,
+    dispose: () => {
+      window.removeEventListener("resize", handleResize);
+      renderer.dispose();
+      container.innerHTML = "";
+    }
+  };
+}
+
+function render3DGeometry(geometryData) {
+  // Initialize viewer if not already done
+  if (!viewer3D) {
+    viewer3D = initializeViewer3D();
+  }
+  
+  if (!viewer3D) return;
+  
+  // Clear previous mesh
+  if (viewer3D.mesh) {
+    viewer3D.scene.remove(viewer3D.mesh);
+  }
+  
+  // Create group for all bones
+  const group = new THREE.Group();
+  
+  try {
+    // Debug: Log the structure of the geometry data
+    console.log("[3D] Raw geometry data keys:", Object.keys(geometryData));
+    
+    // Parse Bedrock geometry format
+    // The JSON structure can be:
+    // 1. { "format_version": "...", "minecraft:geometry": [...] }
+    // 2. { "format_version": "...", "geometry.mobname.v1.8": {...} }
+    // 3. Direct array of geometry objects
+    // 4. Single geometry object with bones directly
+    
+    let geometries = [];
+    
+    if (Array.isArray(geometryData)) {
+      // Direct array of geometry objects
+      geometries = geometryData;
+      console.log("[3D] Parsed as direct array");
+    } else if (geometryData["minecraft:geometry"]) {
+      // Wrapped in minecraft:geometry key
+      geometries = geometryData["minecraft:geometry"];
+      console.log("[3D] Parsed minecraft:geometry array");
+    } else if (geometryData.bones) {
+      // Single geometry object with bones directly
+      geometries = [geometryData];
+      console.log("[3D] Parsed as single geometry with bones");
+    } else {
+      // Look for any key that contains "geometry" (handles "geometry.cow.v1.8" format)
+      const geometryKeys = Object.keys(geometryData).filter(key => key.includes("geometry"));
+      if (geometryKeys.length > 0) {
+        // Use the first geometry key found
+        const geometryKey = geometryKeys[0];
+        const geometryObj = geometryData[geometryKey];
+        
+        if (Array.isArray(geometryObj)) {
+          geometries = geometryObj;
+          console.log(`[3D] Parsed ${geometryKey} as array`);
+        } else if (geometryObj && geometryObj.bones) {
+          geometries = [geometryObj];
+          console.log(`[3D] Parsed ${geometryKey} as single geometry with bones`);
+        } else {
+          console.warn("[3D] Geometry object found but no bones. Keys:", Object.keys(geometryObj || {}));
+          return;
+        }
+      } else {
+        console.warn("[3D] Could not parse geometry structure. Available keys:", Object.keys(geometryData));
+        return;
+      }
+    }
+    
+    console.log("[3D] Found geometries:", geometries.length);
+    
+    let cubeCount = 0;
+    let boneCount = 0;
+    
+    geometries.forEach((geom, geomIdx) => {
+      if (!geom) {
+        console.warn(`[3D] Geometry ${geomIdx} is null`);
+        return;
+      }
+      
+      console.log(`[3D] Geometry ${geomIdx} keys:`, Object.keys(geom));
+      
+      if (!geom.bones) {
+        console.warn(`[3D] Geometry ${geomIdx} has no bones. Available keys:`, Object.keys(geom));
+        return;
+      }
+      
+      console.log(`[3D] Geometry ${geomIdx} has ${geom.bones.length} bones`);
+      
+      geom.bones.forEach((bone, boneIdx) => {
+        if (!bone) {
+          console.warn(`[3D] Bone ${boneIdx} is null`);
+          return;
+        }
+        
+        boneCount++;
+        
+        if (!bone.cubes) {
+          console.log(`[3D] Bone "${bone.name}" has no cubes`);
+          return;
+        }
+        
+        console.log(`[3D] Bone "${bone.name}" has ${bone.cubes.length} cubes`);
+        
+        bone.cubes.forEach((cube, cubeIdx) => {
+          cubeCount++;
+          
+          // Create geometry from cube data
+          const origin = cube.origin || [0, 0, 0];
+          const size = cube.size || [1, 1, 1];
+          const rotation = cube.rotation || [0, 0, 0];
+          const inflate = cube.inflate || 0;
+          
+          console.log(`[3D] Cube ${cubeIdx}: origin=${JSON.stringify(origin)}, size=${JSON.stringify(size)}, rotation=${JSON.stringify(rotation)}`);
+          
+          // Adjust size with inflation
+          const adjustedSize = [
+            size[0] + inflate * 2,
+            size[1] + inflate * 2,
+            size[2] + inflate * 2
+          ];
+          
+          // Create box geometry
+          const boxGeom = new THREE.BoxGeometry(...adjustedSize);
+          const material = new THREE.MeshPhongMaterial({
+            color: Math.random() * 0xffffff,
+            emissive: 0x111111,
+            side: THREE.DoubleSide,
+            wireframe: false
+          });
+          
+          const mesh = new THREE.Mesh(boxGeom, material);
+          
+          // Position - Bedrock uses center-based positioning
+          mesh.position.set(
+            origin[0],
+            origin[1],
+            origin[2]
+          );
+          
+          // Rotation (convert from degrees to radians)
+          if (rotation[0] || rotation[1] || rotation[2]) {
+            mesh.rotation.order = "ZYX";
+            mesh.rotation.x = (rotation[0] || 0) * Math.PI / 180;
+            mesh.rotation.y = (rotation[1] || 0) * Math.PI / 180;
+            mesh.rotation.z = (rotation[2] || 0) * Math.PI / 180;
+          }
+          
+          group.add(mesh);
+        });
+      });
+    });
+    
+    // Only proceed if we have cubes
+    if (cubeCount === 0) {
+      console.warn("[3D] No cubes found in geometry data. Bones processed:", boneCount);
+      return;
+    }
+    
+    // Center the group
+    const box = new THREE.Box3().setFromObject(group);
+    const center = box.getCenter(new THREE.Vector3());
+    group.position.sub(center);
+    
+    // Adjust camera to view the model
+    const size = box.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z);
+    const fov = viewer3D.camera.fov * (Math.PI / 180);
+    let cameraZ = Math.abs(maxDim / 2 / Math.tan(fov / 2));
+    cameraZ *= 1.5; // Add some distance
+    viewer3D.camera.position.z = cameraZ;
+    viewer3D.camera.lookAt(0, 0, 0);
+    
+    viewer3D.scene.add(group);
+    viewer3D.mesh = group;
+    
+    console.log(`[3D] Rendered geometry with ${cubeCount} cubes from ${boneCount} bones`);
+  } catch (err) {
+    console.error(`[3D] Error rendering geometry:`, err);
+    console.error("[3D] Error stack:", err.stack);
+  }
+}
+
+// Viewport controls
+const resetViewBtn = document.getElementById("viewport-reset");
+const wireframeBtn = document.getElementById("viewport-wireframe");
+
+resetViewBtn?.addEventListener("click", () => {
+  if (viewer3D && viewer3D.mesh) {
+    // Reset rotation
+    viewer3D.mesh.quaternion.set(0, 0, 0, 1);
+    // Reset camera position
+    const box = new THREE.Box3().setFromObject(viewer3D.mesh);
+    const size = box.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z);
+    const fov = viewer3D.camera.fov * (Math.PI / 180);
+    let cameraZ = Math.abs(maxDim / 2 / Math.tan(fov / 2));
+    cameraZ *= 1.5;
+    viewer3D.camera.position.set(0, 0, cameraZ);
+    viewer3D.camera.lookAt(0, 0, 0);
+  }
+});
+
+wireframeBtn?.addEventListener("click", () => {
+  if (viewer3D && viewer3D.mesh) {
+    viewer3D.mesh.traverse(child => {
+      if (child.isMesh) {
+        child.material.wireframe = !child.material.wireframe;
+      }
+    });
+    wireframeBtn.style.opacity = viewer3D.mesh.children[0]?.material?.wireframe ? "1" : "0.6";
+  }
+});
+
+
+// Copy geometry JSON to clipboard
+const geometryCopy = document.getElementById("geometry-copy");
+geometryCopy?.addEventListener("click", () => {
+  const json = geometryCopy.dataset.json;
+  if (!json) {
+    alert("No geometry loaded yet.");
+    return;
+  }
+  
+  navigator.clipboard.writeText(json).then(() => {
+    const originalText = geometryCopy.textContent;
+    geometryCopy.textContent = "✅ Copied!";
+    setTimeout(() => {
+      geometryCopy.textContent = originalText;
+    }, 2000);
+  }).catch(() => {
+    alert("Failed to copy to clipboard");
+  });
+});
 
 templateSelect?.addEventListener("change", async () => {
   const templateId = templateSelect.value;

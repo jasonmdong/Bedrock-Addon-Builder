@@ -3,6 +3,8 @@ import tempfile
 import uuid
 from pathlib import Path
 from typing import Optional
+import json
+import httpx
 
 from fastapi import File, Form, HTTPException, Body, UploadFile, Response
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, JSONResponse
@@ -94,6 +96,51 @@ def get_templates():
         except Exception as e:
             print(f"Failed to load templates: {e}")
     return {"mobs": {}}
+
+
+async def fetch_mob_geometry(mob_name: str):
+    """Fetch mob geometry JSON from Mojang's bedrock-samples repository."""
+    if not mob_name:
+        raise HTTPException(status_code=400, detail="mob_name is required")
+    
+    # Sanitize mob_name to prevent directory traversal
+    safe_name = mob_name.strip().replace("..", "").replace("/", "")
+    
+    url = f"https://raw.githubusercontent.com/Mojang/bedrock-samples/main/resource_pack/models/entity/{safe_name}.geo.json"
+    
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(url)
+            
+            if response.status_code == 404:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Geometry file not found for mob '{mob_name}' on bedrock-samples repository"
+                )
+            
+            if response.status_code != 200:
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail=f"Failed to fetch geometry from GitHub (status {response.status_code})"
+                )
+            
+            # Parse the JSON to ensure it's valid
+            try:
+                geometry_data = response.json()
+            except json.JSONDecodeError:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Retrieved file is not valid JSON"
+                )
+            
+            return {"geometry": geometry_data, "url": url}
+    
+    except httpx.HTTPError as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch geometry from GitHub: {str(e)}"
+        )
+
 
 
 def get_mob(name: str):

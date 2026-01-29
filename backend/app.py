@@ -29,6 +29,7 @@ from routes import (
     api_build,
     download,
     get_templates,
+    fetch_mob_geometry,
 )
 
 
@@ -69,6 +70,7 @@ app.post("/build")(build_form)
 app.post("/api/build")(api_build)
 app.get("/download/{name}")(download)
 app.get("/api/templates")(get_templates)
+app.get("/api/geometry/{mob_name}")(fetch_mob_geometry)
 
 # Static routes
 app.get("/")(index)
