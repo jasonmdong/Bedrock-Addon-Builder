@@ -53,8 +53,10 @@ HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 # LLM configuration
 LLM_MODEL_NAME = os.environ.get("LLM_MODEL", "gpt-4o")
 DEEPSEEK_MODEL_NAME = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
-GEMINI_MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-1.5-pro")
+GEMINI_MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
 CLAUDE_MODEL_NAME = os.environ.get("CLAUDE_MODEL", "claude-3-5-sonnet-20240620")
+OLLAMA_MODEL_NAME = os.environ.get("OLLAMA_MODEL", "llama3.2")
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 DEFAULT_LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "openai")
 # local dev flag toggle (need to fix server side sync still)
 LOCAL_LLM_DEV = True
