@@ -1981,17 +1981,36 @@ async function requestLlm() {
   try {
     const user = getCurrentUser();
     if (user) {
-      const histKey = `llm_history_${user}`;
-      const raw = localStorage.getItem(histKey);
-      const hist = raw ? JSON.parse(raw) : [];
       const entry = { ts: new Date().toISOString(), prompt: instruction, spec: payload.spec };
-      hist.unshift(entry);
-      localStorage.setItem(histKey, JSON.stringify(hist.slice(0, 50)));
+      pushLlmStack(user, entry);
       renderLlmHistory();
     }
   } catch (e) {
     console.warn('Failed to write llm history', e);
   }
+}
+
+// llm history stack -> newerst first
+function llmStackKey(user) { return `llm_stack_${user}`; }
+const LLM_STACK_MAX = 50;
+function readLlmStack(user) {
+  const raw = localStorage.getItem(llmStackKey(user));
+  return raw ? JSON.parse(raw) : [];
+}
+function pushLlmStack(user, entry) {
+  const key = llmStackKey(user);
+  const arr = readLlmStack(user);
+  arr.unshift(entry);
+  arr.splice(LLM_STACK_MAX);
+  localStorage.setItem(key, JSON.stringify(arr));
+}
+function popToLlmIndex(user, index) {
+  const key = llmStackKey(user);
+  const arr = readLlmStack(user);
+  if (index < 0 || index >= arr.length) return arr;
+  const newArr = arr.slice(index);
+  localStorage.setItem(key, JSON.stringify(newArr));
+  return newArr;
 }
 
 function renderLlmHistory() {
@@ -2000,9 +2019,7 @@ function renderLlmHistory() {
     if (llmHistoryList) llmHistoryList.innerHTML = '<div style="color: var(--muted);">No history</div>';
     return;
   }
-  const histKey = `llm_history_${user}`;
-  const raw = localStorage.getItem(histKey);
-  const hist = raw ? JSON.parse(raw) : [];
+  const hist = readLlmStack(user);
   if (!hist.length) {
     llmHistoryList.innerHTML = '<div style="color: var(--muted); font-style:italic; text-align:center;">No history yet</div>';
     if (llmSessionCount) llmSessionCount.textContent = '0';
@@ -2014,8 +2031,9 @@ function renderLlmHistory() {
     el.style.display = 'flex';
     el.style.flexDirection = 'column';
     el.style.border = '1px solid var(--border)';
-    el.style.padding = '0.4rem';
-    el.style.borderRadius = '6px';
+    el.style.padding = '0.6rem 0.8rem';
+    el.style.borderRadius = '8px';
+    el.style.position = 'relative';
     const time = new Date(h.ts).toLocaleTimeString();
     const title = document.createElement('div');
     title.style.fontWeight = '600';
@@ -2032,23 +2050,93 @@ function renderLlmHistory() {
     const reuse = document.createElement('button');
     reuse.className = 'secondary';
     reuse.textContent = 'Reuse';
-    reuse.onclick = () => { llmPrompt.value = h.prompt; }; 
+    reuse.onclick = () => { llmPrompt.value = h.prompt; };
     const reapply = document.createElement('button');
     reapply.className = 'primary';
     reapply.textContent = 'Apply';
     reapply.onclick = async () => { llmPrompt.value = h.prompt; await requestLlm(); };
     btnRow.appendChild(reuse); btnRow.appendChild(reapply);
+
+    // restore button
+    if (typeof idx !== 'undefined' && idx > 0) {
+      const restore = document.createElement('button');
+      restore.className = 'ghost';
+      restore.textContent = 'restore';
+      restore.style.position = 'absolute';
+      restore.style.right = '8px';
+      restore.style.top = '8px';
+      restore.style.fontSize = '0.72rem';
+      restore.style.padding = '0.2rem 0.45rem';
+      restore.style.borderRadius = '999px';
+      restore.style.opacity = '0.95';
+      restore.style.minWidth = '44px';
+      restore.style.textTransform = 'lowercase';
+      restore.onclick = () => { restoreHistoryEntry(idx, restore); };
+      el.appendChild(restore);
+    }
     el.appendChild(title); el.appendChild(p); el.appendChild(btnRow);
     llmHistoryList.appendChild(el);
   });
   if (llmSessionCount) llmSessionCount.textContent = String(hist.length);
 }
 
+function restoreHistoryEntry(index, btnEl) {
+    const user = getCurrentUser();
+    if (!user) return;
+    const hist = readLlmStack(user);
+    if (!hist || index < 0 || index >= hist.length) return;
+    const entry = hist[index];
+    if (!entry || !entry.spec) return;
+
+    if (!confirm(`restore workspace to checkpoint from ${new Date(entry.ts).toLocaleString()}?`)) return;
+
+    if (btnEl) {
+      btnEl.disabled = true;
+      const prevText = btnEl.textContent;
+      btnEl.textContent = '...';
+      setTimeout(() => {
+        try {
+          editor.value = JSON.stringify(entry.spec, null, 2);
+          if (currentMobName) {
+            saveUserMob(currentMobName, entry.spec);
+            loadTextureIntoPainter(currentMobName);
+            updateFileTree(entry.spec);
+          }
+          setStatus(`restored spec from ${new Date(entry.ts).toLocaleString()}`);
+          // stack pop -> drop new entries + keep from index..end
+          popToLlmIndex(user, index);
+          renderLlmHistory();
+        } catch (e) {
+          console.warn('failed to restore history entry', e);
+          setStatus('restore failed', true);
+        } finally {
+          btnEl.textContent = prevText;
+          btnEl.disabled = false;
+        }
+      }, 500);
+    } else {
+      try {
+        editor.value = JSON.stringify(entry.spec, null, 2);
+        if (currentMobName) {
+          saveUserMob(currentMobName, entry.spec);
+          loadTextureIntoPainter(currentMobName);
+          updateFileTree(entry.spec);
+        }
+        setStatus(`restored spec from ${new Date(entry.ts).toLocaleString()}`);
+        popToLlmIndex(user, index);
+        renderLlmHistory();
+      } catch (e) {
+        console.warn('failed to restore history entry', e);
+        setStatus('restore failed', true);
+      }
+    }
+}
+
 clearLlmHistoryBtn?.addEventListener('click', () => {
   const user = getCurrentUser();
   if (!user) return;
   if (!confirm('Clear LLM history for user ' + user + '?')) return;
-  localStorage.removeItem(`llm_history_${user}`);
+  localStorage.removeItem(`llm_stack_${user}`);
   renderLlmHistory();
 });
 
