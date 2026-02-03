@@ -10,6 +10,10 @@ pinned: false
 
 A preview is available here: https://jasonmdong-baobuilder.hf.space/
 
+[![GitHub Repository](https://img.shields.io/badge/GitHub-Repository-blue?logo=github)](https://github.com/jasonmdong/Bedrock-Addon-Builder)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Hugging Face Space](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Space-orange)](https://huggingface.co/spaces/jasonmdong/baobuilder)
+
 # Bedrock Add-on Builder
 A powerful, web-based tool for creating Minecraft Bedrock Edition Add-ons (Behavior and Resource packs) with ease.
 
