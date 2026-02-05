@@ -1494,39 +1494,28 @@ function render3DGeometry(geometryData) {
     viewer3D.scene.remove(viewer3D.mesh);
   }
   
-  // Create group for all bones
-  const group = new THREE.Group();
+  // Create root group for all bones
+  const rootGroup = new THREE.Group();
   
   try {
     // Debug: Log the structure of the geometry data
     console.log("[3D] Raw geometry data keys:", Object.keys(geometryData));
     
     // Parse Bedrock geometry format
-    // The JSON structure can be:
-    // 1. { "format_version": "...", "minecraft:geometry": [...] }
-    // 2. { "format_version": "...", "geometry.mobname.v1.8": {...} }
-    // 3. Direct array of geometry objects
-    // 4. Single geometry object with bones directly
-    
     let geometries = [];
     
     if (Array.isArray(geometryData)) {
-      // Direct array of geometry objects
       geometries = geometryData;
       console.log("[3D] Parsed as direct array");
     } else if (geometryData["minecraft:geometry"]) {
-      // Wrapped in minecraft:geometry key
       geometries = geometryData["minecraft:geometry"];
       console.log("[3D] Parsed minecraft:geometry array");
     } else if (geometryData.bones) {
-      // Single geometry object with bones directly
       geometries = [geometryData];
       console.log("[3D] Parsed as single geometry with bones");
     } else {
-      // Look for any key that contains "geometry" (handles "geometry.cow.v1.8" format)
       const geometryKeys = Object.keys(geometryData).filter(key => key.includes("geometry"));
       if (geometryKeys.length > 0) {
-        // Use the first geometry key found
         const geometryKey = geometryKeys[0];
         const geometryObj = geometryData[geometryKey];
         
@@ -1552,81 +1541,176 @@ function render3DGeometry(geometryData) {
     let boneCount = 0;
     
     geometries.forEach((geom, geomIdx) => {
-      if (!geom) {
-        console.warn(`[3D] Geometry ${geomIdx} is null`);
-        return;
-      }
-      
-      console.log(`[3D] Geometry ${geomIdx} keys:`, Object.keys(geom));
-      
-      if (!geom.bones) {
-        console.warn(`[3D] Geometry ${geomIdx} has no bones. Available keys:`, Object.keys(geom));
-        return;
-      }
+      if (!geom || !geom.bones) return;
       
       console.log(`[3D] Geometry ${geomIdx} has ${geom.bones.length} bones`);
       
-      geom.bones.forEach((bone, boneIdx) => {
-        if (!bone) {
-          console.warn(`[3D] Bone ${boneIdx} is null`);
-          return;
-        }
+      // Create a map of bone names to bone objects for parent lookup
+      const boneMap = {};
+      geom.bones.forEach(bone => {
+        boneMap[bone.name] = bone;
+      });
+      
+      // Create a map of bone names to THREE.Group objects
+      const boneGroupMap = {};
+      
+      // First pass: Create groups for all bones positioned at their pivot
+      geom.bones.forEach((bone) => {
+        if (!bone) return;
         
         boneCount++;
         
-        if (!bone.cubes) {
-          console.log(`[3D] Bone "${bone.name}" has no cubes`);
+        // Create a group for this bone
+        const boneGroup = new THREE.Group();
+        
+        // Position the bone group at the bone's pivot point
+        const pivot = bone.pivot || [0, 0, 0];
+        boneGroup.position.set(pivot[0], pivot[1], -pivot[2]); // Z is inverted for Minecraft Y-up
+        
+        // Apply bone rotation (convert from degrees to radians)
+        const rotation = bone.rotation || [0, 0, 0];
+        const bindPoseRotation = bone.bind_pose_rotation || [0, 0, 0];
+        
+        // Combine rotation and bind_pose_rotation
+        const totalRotation = [
+          (rotation[0] || 0) + (bindPoseRotation[0] || 0),
+          (rotation[1] || 0) + (bindPoseRotation[1] || 0),
+          (rotation[2] || 0) + (bindPoseRotation[2] || 0)
+        ];
+        
+        if (totalRotation[0] || totalRotation[1] || totalRotation[2]) {
+          boneGroup.rotation.order = "ZYX";
+          boneGroup.rotation.x = totalRotation[0] * Math.PI / 180;
+          boneGroup.rotation.y = totalRotation[1] * Math.PI / 180;
+          boneGroup.rotation.z = totalRotation[2] * Math.PI / 180;
+          
+          if (bindPoseRotation[0] || bindPoseRotation[1] || bindPoseRotation[2]) {
+            console.log(`[3D] Applied bind_pose_rotation to bone "${bone.name}": ${JSON.stringify(bindPoseRotation)}`);
+          }
+        }
+        
+        // Apply scale if present
+        const scale = bone.scale || [1, 1, 1];
+        if (scale[0] !== 1 || scale[1] !== 1 || scale[2] !== 1) {
+          boneGroup.scale.set(scale[0], scale[1], scale[2]);
+        }
+        
+        boneGroupMap[bone.name] = boneGroup;
+      });
+      
+      // Second pass: Build hierarchy and add cubes
+      geom.bones.forEach((bone) => {
+        if (!bone) return;
+        
+        // Skip bones marked as neverRender
+        if (bone.neverRender === true) {
+          console.log(`[3D] Skipping bone "${bone.name}" (neverRender=true)`);
           return;
         }
         
-        console.log(`[3D] Bone "${bone.name}" has ${bone.cubes.length} cubes`);
+        const boneGroup = boneGroupMap[bone.name];
         
-        bone.cubes.forEach((cube, cubeIdx) => {
-          cubeCount++;
+        // Add cubes to this bone's group
+        if (bone.cubes && bone.cubes.length > 0) {
+          console.log(`[3D] Bone "${bone.name}" has ${bone.cubes.length} cubes`);
           
-          // Create geometry from cube data
-          const origin = cube.origin || [0, 0, 0];
-          const size = cube.size || [1, 1, 1];
-          const rotation = cube.rotation || [0, 0, 0];
-          const inflate = cube.inflate || 0;
+          bone.cubes.forEach((cube, cubeIdx) => {
+            // Skip cubes marked as neverRender
+            if (cube.neverRender === true) {
+              console.log(`[3D] Skipping cube ${cubeIdx} in bone "${bone.name}" (neverRender=true)`);
+              return;
+            }
+            
+            cubeCount++;
+            
+            // Get cube properties
+            const origin = cube.origin || [0, 0, 0];
+            const size = cube.size || [1, 1, 1];
+            const cubeRotation = cube.rotation || [0, 0, 0];
+            const inflate = cube.inflate || 0;
+            
+            console.log(`[3D] Cube ${cubeIdx}: origin=${JSON.stringify(origin)}, size=${JSON.stringify(size)}`);
+            
+            // Adjust size with inflation (inflate expands in all directions)
+            const adjustedSize = [
+              size[0] + inflate * 2,
+              size[1] + inflate * 2,
+              size[2] + inflate * 2
+            ];
+            
+            // Create box geometry
+            const boxGeom = new THREE.BoxGeometry(...adjustedSize);
+            const material = new THREE.MeshPhongMaterial({
+              color: Math.random() * 0xffffff,
+              emissive: 0x111111,
+              side: THREE.DoubleSide,
+              wireframe: false
+            });
+            
+            const mesh = new THREE.Mesh(boxGeom, material);
+            
+            // Get bone pivot for offset calculation
+            const pivot = bone.pivot || [0, 0, 0];
+            
+            // Calculate cube center (Minecraft origin is min corner, Three.js positions at center)
+            const cubeCenter = [
+              origin[0] + size[0] / 2,
+              origin[1] + size[1] / 2,
+              origin[2] + size[2] / 2
+            ];
+            
+            // Cube position in local space: cubeCenter - pivot
+            const localPos = [
+              cubeCenter[0] - pivot[0],
+              cubeCenter[1] - pivot[1],
+              -(cubeCenter[2] - pivot[2]) // Z is inverted for Minecraft Y-up
+            ];
+            
+            mesh.position.set(localPos[0], localPos[1], localPos[2]);
+            
+            // Apply cube rotation (convert from degrees to radians)
+            if (cubeRotation[0] || cubeRotation[1] || cubeRotation[2]) {
+              mesh.rotation.order = "ZYX";
+              mesh.rotation.x = (cubeRotation[0] || 0) * Math.PI / 180;
+              mesh.rotation.y = (cubeRotation[1] || 0) * Math.PI / 180;
+              mesh.rotation.z = (cubeRotation[2] || 0) * Math.PI / 180;
+            }
+            
+            boneGroup.add(mesh);
+          });
+        }
+        
+        // Build parent-child hierarchy
+        const parentName = bone.parent;
+        if (parentName && boneGroupMap[parentName]) {
+          // Convert child bone position to parent-local space
+          // Child pivot is in world space, parent pivot is in world space
+          // When adding as child, position must be relative to parent
+          const parentBone = boneMap[parentName];
+          const parentPivot = parentBone.pivot || [0, 0, 0];
+          const childPivot = bone.pivot || [0, 0, 0];
           
-          console.log(`[3D] Cube ${cubeIdx}: origin=${JSON.stringify(origin)}, size=${JSON.stringify(size)}, rotation=${JSON.stringify(rotation)}`);
-          
-          // Adjust size with inflation
-          const adjustedSize = [
-            size[0] + inflate * 2,
-            size[1] + inflate * 2,
-            size[2] + inflate * 2
+          // Convert child's world-space position to parent-local space
+          const childInParentSpace = [
+            childPivot[0] - parentPivot[0],
+            childPivot[1] - parentPivot[1],
+            -(childPivot[2] - parentPivot[2]) // Z is inverted for Minecraft Y-up
           ];
           
-          // Create box geometry
-          const boxGeom = new THREE.BoxGeometry(...adjustedSize);
-          const material = new THREE.MeshPhongMaterial({
-            color: Math.random() * 0xffffff,
-            emissive: 0x111111,
-            side: THREE.DoubleSide,
-            wireframe: false
-          });
+          // Update the child bone group's position to parent-local space
+          boneGroup.position.set(childInParentSpace[0], childInParentSpace[1], childInParentSpace[2]);
           
-          const mesh = new THREE.Mesh(boxGeom, material);
-          
-          // Position - Bedrock uses center-based positioning
-          mesh.position.set(
-            origin[0],
-            origin[1],
-            origin[2]
-          );
-          
-          // Rotation (convert from degrees to radians)
-          if (rotation[0] || rotation[1] || rotation[2]) {
-            mesh.rotation.order = "ZYX";
-            mesh.rotation.x = (rotation[0] || 0) * Math.PI / 180;
-            mesh.rotation.y = (rotation[1] || 0) * Math.PI / 180;
-            mesh.rotation.z = (rotation[2] || 0) * Math.PI / 180;
-          }
-          
-          group.add(mesh);
-        });
+          // Add this bone group to its parent
+          boneGroupMap[parentName].add(boneGroup);
+          console.log(`[3D] Connected bone "${bone.name}" to parent "${parentName}" at local position ${JSON.stringify(childInParentSpace)}`);
+        } else if (parentName) {
+          console.warn(`[3D] Bone "${bone.name}" references parent "${parentName}" which was not found`);
+          // Add to root if parent not found
+          rootGroup.add(boneGroup);
+        } else {
+          // No parent, add to root - keep pivot position as-is
+          rootGroup.add(boneGroup);
+        }
       });
     });
     
@@ -1636,10 +1720,10 @@ function render3DGeometry(geometryData) {
       return;
     }
     
-    // Center the group
-    const box = new THREE.Box3().setFromObject(group);
+    // Center and frame the model
+    const box = new THREE.Box3().setFromObject(rootGroup);
     const center = box.getCenter(new THREE.Vector3());
-    group.position.sub(center);
+    rootGroup.position.sub(center);
     
     // Adjust camera to view the model
     const size = box.getSize(new THREE.Vector3());
@@ -1650,8 +1734,8 @@ function render3DGeometry(geometryData) {
     viewer3D.camera.position.z = cameraZ;
     viewer3D.camera.lookAt(0, 0, 0);
     
-    viewer3D.scene.add(group);
-    viewer3D.mesh = group;
+    viewer3D.scene.add(rootGroup);
+    viewer3D.mesh = rootGroup;
     
     console.log(`[3D] Rendered geometry with ${cubeCount} cubes from ${boneCount} bones`);
   } catch (err) {
