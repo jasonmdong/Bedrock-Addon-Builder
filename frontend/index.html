@@ -571,6 +571,7 @@
               <option value="deepseek">DeepSeek</option>
               <option value="gemini">Gemini</option>
               <option value="claude">Claude</option>
+              <option value="mock">Local Mock (dev)</option>
             </select>
           </div>
           <div class="field">
@@ -583,7 +584,7 @@
           <span>🔒</span>
           <span><strong>Private:</strong> The API key is stored locally in your browser only. Never sent to our server.</span>
         </div>
-        <div class="actions">
+          <div class="actions">
           <button type="button" class="primary" id="llm-run">Ask LLM</button>
         </div>
       </div>
@@ -607,8 +608,20 @@
       <!-- LLM Changes Diff (Always Visible) -->
       <div style="padding: 1rem; background: var(--card-bg); border-radius: 8px; border: 1px solid var(--border); flex: 1; display: flex; flex-direction: column; overflow: hidden;">
         <h3 style="margin: 0 0 0.75rem 0; font-size: 1rem; font-weight: bold;">🔄 LLM Changes</h3>
-        <div id="llm-diff-content" style="font-family: monospace; font-size: 0.85rem; overflow-x: auto; overflow-y: auto; flex: 1;">
-          <div style="color: var(--muted); font-style: italic; padding: 1rem; text-align: center;">No changes made yet</div>
+        <div style="display:flex; gap:1rem; height:100%;">
+          <div id="llm-diff-content" style="font-family: monospace; font-size: 0.85rem; overflow-x: auto; overflow-y: auto; flex: 1;">
+            <div style="color: var(--muted); font-style: italic; padding: 1rem; text-align: center;">No changes made yet</div>
+          </div>
+          <div id="llm-history" style="width:240px; background: var(--status-bg); color: var(--status-text); border-radius:8px; padding:0.5rem; overflow:auto;">
+            <div style="font-weight:700; margin-bottom:0.5rem;">LLM History</div>
+            <div id="llm-history-list" style="font-size:0.85rem; display:flex; flex-direction:column; gap:0.5rem;">
+              <div style="color: var(--muted); font-style: italic; text-align:center;">No history yet</div>
+            </div>
+            <div style="margin-top:0.5rem; display:flex; gap:0.5rem;">
+              <button id="clear-llm-history" class="ghost" style="flex:1;">Clear</button>
+            </div>
+            <div style="margin-top:0.5rem; font-size:0.8rem; color:var(--muted);">Session: <span id="llm-session-count">0</span> iterations</div>
+          </div>
         </div>
       </div>
     </div>
@@ -1255,6 +1268,9 @@ const templateSelect = document.getElementById("template-select");
 const validationBadge = document.getElementById("validation-badge");
 const fileTreeEl = document.getElementById("file-tree");
 const diffContent = document.getElementById("llm-diff-content");
+const llmHistoryList = document.getElementById("llm-history-list");
+const llmSessionCount = document.getElementById("llm-session-count");
+const clearLlmHistoryBtn = document.getElementById("clear-llm-history");
 
 // Templates storage
 let vanillaTemplates = {};
@@ -2477,9 +2493,13 @@ async function requestLlm() {
   if (apiKey) {
     requestBody.api_key = apiKey;
   }
+  // mock uses dedicated mock route for dev
+  let endpoint = "/api/spec/llm";
+  if (provider === "mock") endpoint = "/api/spec/llm_mock";
+
   let res;
   try {
-    res = await fetch("/api/spec/llm", {
+    res = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(requestBody)
@@ -2512,7 +2532,169 @@ async function requestLlm() {
   }
   
   setStatus(`${provider} updated the spec at ${new Date().toLocaleTimeString()}.`);
+
+  try {
+    const user = getCurrentUser();
+    if (user) {
+      const entry = { ts: new Date().toISOString(), prompt: instruction, spec: payload.spec };
+      pushLlmStack(user, entry);
+      renderLlmHistory();
+    }
+  } catch (e) {
+    console.warn('Failed to write llm history', e);
+  }
 }
+
+// llm history stack -> newerst first
+function llmStackKey(user) { return `llm_stack_${user}`; }
+const LLM_STACK_MAX = 50;
+function readLlmStack(user) {
+  const raw = localStorage.getItem(llmStackKey(user));
+  return raw ? JSON.parse(raw) : [];
+}
+function pushLlmStack(user, entry) {
+  const key = llmStackKey(user);
+  const arr = readLlmStack(user);
+  arr.unshift(entry);
+  arr.splice(LLM_STACK_MAX);
+  localStorage.setItem(key, JSON.stringify(arr));
+}
+function popToLlmIndex(user, index) {
+  const key = llmStackKey(user);
+  const arr = readLlmStack(user);
+  if (index < 0 || index >= arr.length) return arr;
+  const newArr = arr.slice(index);
+  localStorage.setItem(key, JSON.stringify(newArr));
+  return newArr;
+}
+
+function renderLlmHistory() {
+  const user = getCurrentUser();
+  if (!user || !llmHistoryList) {
+    if (llmHistoryList) llmHistoryList.innerHTML = '<div style="color: var(--muted);">No history</div>';
+    return;
+  }
+  const hist = readLlmStack(user);
+  if (!hist.length) {
+    llmHistoryList.innerHTML = '<div style="color: var(--muted); font-style:italic; text-align:center;">No history yet</div>';
+    if (llmSessionCount) llmSessionCount.textContent = '0';
+    return;
+  }
+  llmHistoryList.innerHTML = '';
+  hist.forEach((h, idx) => {
+    const el = document.createElement('div');
+    el.style.display = 'flex';
+    el.style.flexDirection = 'column';
+    el.style.border = '1px solid var(--border)';
+    el.style.padding = '0.6rem 0.8rem';
+    el.style.borderRadius = '8px';
+    el.style.position = 'relative';
+    const time = new Date(h.ts).toLocaleTimeString();
+    const title = document.createElement('div');
+    title.style.fontWeight = '600';
+    title.style.fontSize = '0.85rem';
+    title.textContent = `${time}`;
+    const p = document.createElement('div');
+    p.style.fontSize = '0.8rem';
+    p.style.color = 'var(--muted)';
+    p.textContent = h.prompt.length > 120 ? h.prompt.slice(0,120)+'...' : h.prompt;
+    const btnRow = document.createElement('div');
+    btnRow.style.display = 'flex';
+    btnRow.style.gap = '0.4rem';
+    btnRow.style.marginTop = '0.4rem';
+    const reuse = document.createElement('button');
+    reuse.className = 'secondary';
+    reuse.textContent = 'Reuse';
+    reuse.onclick = () => { llmPrompt.value = h.prompt; };
+    const reapply = document.createElement('button');
+    reapply.className = 'primary';
+    reapply.textContent = 'Apply';
+    reapply.onclick = async () => { llmPrompt.value = h.prompt; await requestLlm(); };
+    btnRow.appendChild(reuse); btnRow.appendChild(reapply);
+
+    // restore button
+    if (typeof idx !== 'undefined' && idx > 0) {
+      const restore = document.createElement('button');
+      restore.className = 'ghost';
+      restore.textContent = 'restore';
+      restore.style.position = 'absolute';
+      restore.style.right = '8px';
+      restore.style.top = '8px';
+      restore.style.fontSize = '0.72rem';
+      restore.style.padding = '0.2rem 0.45rem';
+      restore.style.borderRadius = '999px';
+      restore.style.opacity = '0.95';
+      restore.style.minWidth = '44px';
+      restore.style.textTransform = 'lowercase';
+      restore.onclick = () => { restoreHistoryEntry(idx, restore); };
+      el.appendChild(restore);
+    }
+    el.appendChild(title); el.appendChild(p); el.appendChild(btnRow);
+    llmHistoryList.appendChild(el);
+  });
+  if (llmSessionCount) llmSessionCount.textContent = String(hist.length);
+}
+
+function restoreHistoryEntry(index, btnEl) {
+    const user = getCurrentUser();
+    if (!user) return;
+    const hist = readLlmStack(user);
+    if (!hist || index < 0 || index >= hist.length) return;
+    const entry = hist[index];
+    if (!entry || !entry.spec) return;
+
+    if (!confirm(`restore workspace to checkpoint from ${new Date(entry.ts).toLocaleString()}?`)) return;
+
+    if (btnEl) {
+      btnEl.disabled = true;
+      const prevText = btnEl.textContent;
+      btnEl.textContent = '...';
+      setTimeout(() => {
+        try {
+          editor.value = JSON.stringify(entry.spec, null, 2);
+          if (currentMobName) {
+            saveUserMob(currentMobName, entry.spec);
+            loadTextureIntoPainter(currentMobName);
+            updateFileTree(entry.spec);
+          }
+          setStatus(`restored spec from ${new Date(entry.ts).toLocaleString()}`);
+          // stack pop -> drop new entries + keep from index..end
+          popToLlmIndex(user, index);
+          renderLlmHistory();
+        } catch (e) {
+          console.warn('failed to restore history entry', e);
+          setStatus('restore failed', true);
+        } finally {
+          btnEl.textContent = prevText;
+          btnEl.disabled = false;
+        }
+      }, 500);
+    } else {
+      try {
+        editor.value = JSON.stringify(entry.spec, null, 2);
+        if (currentMobName) {
+          saveUserMob(currentMobName, entry.spec);
+          loadTextureIntoPainter(currentMobName);
+          updateFileTree(entry.spec);
+        }
+        setStatus(`restored spec from ${new Date(entry.ts).toLocaleString()}`);
+        popToLlmIndex(user, index);
+        renderLlmHistory();
+      } catch (e) {
+        console.warn('failed to restore history entry', e);
+        setStatus('restore failed', true);
+      }
+    }
+}
+
+clearLlmHistoryBtn?.addEventListener('click', () => {
+  const user = getCurrentUser();
+  if (!user) return;
+  if (!confirm('Clear LLM history for user ' + user + '?')) return;
+  localStorage.removeItem(`llm_stack_${user}`);
+  renderLlmHistory();
+});
+
 
 document.getElementById("reset").addEventListener("click", (e) => {
   e.preventDefault();
