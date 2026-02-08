@@ -1,3 +1,5 @@
+/* Bedrock Add-on Builder - Styles */
+
 :root {
   box-sizing: border-box;
 }
@@ -52,55 +54,52 @@ body {
   transition: background .3s ease, color .3s ease;
   display: flex;
   min-height: 100vh;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 aside {
-  width: 300px;
-  min-width: 200px;
+  width: 350px;
+  min-width: 350px;
   max-width: 600px;
-  height: 100vh;
-  position: sticky;
-  top: 0;
   background: var(--card-bg);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   padding: 0;
   flex-shrink: 0;
+  height: 100vh;
   overflow: hidden;
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
 }
 
 .resizer {
+  position: absolute;
+  top: 0;
+  right: 0;
   width: 6px;
+  height: 100%;
   cursor: col-resize;
   background: transparent;
-  flex-shrink: 0;
-  margin-left: -3px;
   z-index: 100;
   transition: background 0.2s;
-  position: sticky;
-  top: 0;
-  height: 100vh;
 }
 
-.resizer:hover, .resizing .resizer {
+.resizer:hover, body.resizing .resizer {
   background: var(--primary);
   opacity: 0.5;
 }
 
-
 main {
   flex-grow: 1;
-  max-width: 960px;
-  margin: 2rem auto;
+  max-width: 1600px;
+  margin: 1rem auto;
   background: var(--card-bg);
   border-radius: 16px;
   padding: 2rem;
   box-shadow: 0 18px 35px rgba(15,23,42,.08);
-  height: fit-content;
-  overflow-y: auto;
-  max-height: 100vh;
 }
 
 .mob-list {
@@ -109,7 +108,6 @@ main {
   margin: 0;
   flex-grow: 1;
   overflow-y: auto;
-  min-height: 0;   
 }
 
 .mob-item {
@@ -210,7 +208,7 @@ main {
   padding: 0.5rem;
 }
 
-.sidebar-footer{
+.sidebar-footer {
   border-top: 1px solid var(--border);
   padding: 1.5rem;
   display: flex;
@@ -226,9 +224,7 @@ main {
   margin-bottom: 0.25rem;
 }
 
-h1 {
-  margin-top: 0;
-}
+h1 { margin-top: 0; }
 
 textarea {
   width: 100%;
@@ -241,16 +237,9 @@ textarea {
   color: var(--editor-text);
 }
 
-textarea:focus {
-  outline: 2px solid var(--primary);
-}
+textarea:focus { outline: 2px solid var(--primary); }
 
-.actions {
-  display: flex;
-  gap: 1rem;
-  margin-top: 1rem;
-  flex-wrap: wrap;
-}
+.actions { display: flex; gap: 1rem; margin-top: 1rem; flex-wrap: wrap; }
 
 button {
   padding: .75rem 1.4rem;
@@ -261,41 +250,16 @@ button {
   transition: transform .2s ease;
 }
 
-button:active {
-  transform: scale(0.97);
-}
+button:active { transform: scale(0.97); }
 
-button.primary {
-  background: var(--primary);
-  color: #fff;
-}
+button.primary { background: var(--primary); color: #fff; }
+button.secondary { background: var(--secondary-bg); color: var(--secondary-text); }
+button.danger { background: var(--danger); color: #fff; }
+button.ghost { background: var(--ghost-bg); color: var(--ghost-text); }
 
-button.secondary {
-  background: var(--secondary-bg);
-  color: var(--secondary-text);
-}
+label { font-weight: 600; display: block; margin-bottom: .35rem; }
 
-button.danger {
-  background: var(--danger);
-  color: #fff;
-}
-
-button.ghost {
-  background: var(--ghost-bg);
-  color: var(--ghost-text);
-}
-
-label {
-  font-weight: 600;
-  display: block;
-  margin-bottom: .35rem;
-}
-
-input[type=file] {
-  width: 100%;
-  padding: .35rem 0;
-  color: var(--text);
-}
+input[type=file] { width: 100%; padding: .35rem 0; color: var(--text); }
 
 input[type=password], select {
   width: 100%;
@@ -307,12 +271,7 @@ input[type=password], select {
   font: inherit;
 }
 
-.row {
-  display: grid;
-  gap: 1rem;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  margin-top: 1rem;
-}
+.row { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin-top: 1rem; }
 
 .llm-card {
   margin-top: 1.5rem;
@@ -332,9 +291,7 @@ input[type=password], select {
   align-items: end;
 }
 
-.llm-controls .field {
-  min-width: 0;
-}
+.llm-controls .field { min-width: 0; }
 
 .llm-controls .field label {
   font-size: .9rem;
@@ -379,6 +336,10 @@ input[type=password], select {
   image-rendering: pixelated;
 }
 
+.painter-canvas-wrapper.texture-loaded {
+  background: #000;
+}
+
 canvas#pixel-canvas {
   image-rendering: pixelated;
   display: block;
@@ -419,10 +380,7 @@ canvas#pixel-canvas {
   resize: vertical;
 }
 
-.llm-footnote {
-  color: var(--hint);
-  font-size: .85rem;
-}
+.llm-footnote { color: var(--hint); font-size: .85rem; }
 
 #status {
   background: var(--status-bg);
@@ -434,40 +392,142 @@ canvas#pixel-canvas {
   white-space: pre-wrap;
 }
 
-.hint {
-  color: var(--hint);
-  font-size: .95rem;
-  margin-bottom: 1rem;
-}
+.hint { color: var(--hint); font-size: .95rem; margin-bottom: 1rem; }
 
-.build-options {
-  margin-top: 1.25rem;
+.build-options { margin-top: 1.25rem; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+.build-options label { margin: 0; font-size: .95rem; }
+.build-options select { width: auto; min-width: 220px; }
+
+details { margin-top: 1rem; }
+
+code { font-family: ui-monospace, SFMono-Regular, Consolas, Menlo, monospace; }
+
+.toolbar { display: flex; justify-content: flex-end; margin-bottom: 1rem; }
+
+/* User Modal Styles */
+.user-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
   display: flex;
   align-items: center;
-  gap: 1rem;
-  flex-wrap: wrap;
+  justify-content: center;
+  z-index: 1000;
 }
 
-.build-options label {
-  margin: 0;
-  font-size: .95rem;
+.user-modal {
+  background: var(--card-bg);
+  border-radius: 16px;
+  padding: 2rem;
+  min-width: 320px;
+  max-width: 400px;
+  box-shadow: 0 25px 50px rgba(0, 0, 0, 0.25);
 }
 
-.build-options select {
-  width: auto;
-  min-width: 220px;
+.user-modal h2 {
+  margin-top: 0;
+  margin-bottom: 1.5rem;
+  text-align: center;
 }
 
-details {
+.user-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 1.5rem 0;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.user-list-item {
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  cursor: pointer;
+  margin-bottom: 0.5rem;
+  background: var(--bg);
+  border: 1px solid transparent;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.user-list-item:hover {
+  border-color: var(--primary);
+}
+
+.user-list-item .user-name {
+  font-weight: 600;
+}
+
+.user-list-item .delete-user-btn {
+  opacity: 0;
+  background: none;
+  color: var(--danger);
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  border-radius: 4px;
+  border: none;
+  cursor: pointer;
+}
+
+.user-list-item:hover .delete-user-btn {
+  opacity: 0.7;
+}
+
+.user-list-item .delete-user-btn:hover {
+  opacity: 1;
+  background: rgba(220, 38, 38, 0.1);
+}
+
+.new-user-form {
+  display: flex;
+  gap: 0.5rem;
   margin-top: 1rem;
 }
 
-code {
-  font-family: ui-monospace, SFMono-Regular, Consolas, Menlo, monospace;
+.new-user-form input {
+  flex-grow: 1;
+  padding: 0.6rem 0.75rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+  color: var(--text);
+  font: inherit;
 }
 
-.toolbar {
+.hidden { display: none !important; }
+
+/* 3D Viewport Styles */
+.viewport-3d {
+  width: 100%;
+  height: 500px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #1a1a1a;
+  position: relative;
+}
+
+.viewport-controls {
   display: flex;
-  justify-content: flex-end;
-  margin-bottom: 1rem;
+  gap: 1rem;
+  margin-top: 1rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.viewport-controls button {
+  padding: 0.5rem 1rem;
+  font-size: 0.9rem;
+}
+
+.viewport-info {
+  font-size: 0.85rem;
+  color: var(--muted);
+  padding: 0.5rem;
+  background: var(--secondary-bg);
+  border-radius: 6px;
+  margin-top: 0.5rem;
 }

@@ -25,6 +25,7 @@ from routes import (
     llm_spec_mock,
     index,
     styles_css,
+    serve_js,
     healthz,
     build_form,
     api_build,
@@ -77,6 +78,7 @@ app.post("/api/spec/llm_mock")(llm_spec_mock)
 # Static routes
 app.get("/")(index)
 app.get("/styles.css")(styles_css)
+app.get("/js/{filename}")(serve_js)
 app.get("/healthz")(healthz)
 
 # =========================

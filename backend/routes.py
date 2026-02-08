@@ -358,6 +358,16 @@ def styles_css():
         return PlainTextResponse("/* styles.css not found */", media_type="text/css")
     return FileResponse(path, media_type="text/css")
 
+def serve_js(filename: str):
+    """Serve JavaScript files from frontend/js directory."""
+    from core import FRONTEND_DIR
+    # Sanitize filename to prevent directory traversal
+    safe_filename = filename.replace("..", "").replace("/", "").replace("\\", "")
+    path = FRONTEND_DIR / "js" / safe_filename
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail=f"JS file not found: {safe_filename}")
+    return FileResponse(path, media_type="application/javascript")
+
 
 def healthz():
     """Health check endpoint."""
