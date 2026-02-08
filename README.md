@@ -63,7 +63,7 @@ Bedrock-Addon-Builder/
 
 1. **Clone the repository**
 ```bash
-git clone <repository-url>
+git clone https://github.com/jasonmdong/Bedrock-Addon-Builder
 cd Bedrock-Addon-Builder
 ```
 
@@ -87,7 +87,7 @@ python run.py
 ```
 
 5. **Access the application**
-Open your browser to `http://localhost:7860`
+Open your browser to `http://localhost:7860` or `http://127.0.0.1:7860`
 
 ### Docker Deployment
 
