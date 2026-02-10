@@ -7,8 +7,19 @@ const statusEl = document.getElementById("status");
 const schemaView = document.getElementById("schema-view");
 const validationBadge = document.getElementById("validation-badge");
 const fileTreeEl = document.getElementById("file-tree");
-const diffContent = document.getElementById("llm-diff-content");
+const lineGutter = document.getElementById('line-gutter');
+const specPre = document.getElementById('spec-pre');
+const specContentWrapper = document.getElementById('spec-content-wrapper');
+const specToggleSlider = document.getElementById('spec-toggle-slider');
 const mobListEl = document.getElementById("mob-list");
+
+function originalSpecKey(user, mob) { return `original_spec_${user}_${mob}`; }
+function setOriginalSpec(user, mob, spec) {
+  try { localStorage.setItem(originalSpecKey(user, mob), JSON.stringify(spec)); } catch (e) {}
+}
+function getOriginalSpec(user, mob) {
+  try { const raw = localStorage.getItem(originalSpecKey(user, mob)); return raw ? JSON.parse(raw) : null; } catch (e) { return null; }
+}
 
 async function loadMobList() {
   const user = getCurrentUser();
@@ -85,6 +96,14 @@ async function selectMob(name) {
   
   // Update file tree preview
   updateFileTree(spec);
+
+  // check if a og snapshot exists
+  try {
+    const user = getCurrentUser();
+    const orig = getOriginalSpec(user, name);
+    if (!orig) setOriginalSpec(user, name, spec);
+  } catch (e) {}
+  renderGlobalDiff();
 }
 
 async function loadSpec() {
@@ -253,52 +272,123 @@ function updateFileTree(spec) {
 }
 
 function showDiff(beforeSpec, afterSpec) {
-  if (!diffContent) return;
-  
-  const changes = [];
-  const allKeys = new Set([...Object.keys(beforeSpec), ...Object.keys(afterSpec)]);
-  
-  allKeys.forEach(key => {
-    const before = JSON.stringify(beforeSpec[key], null, 2);
-    const after = JSON.stringify(afterSpec[key], null, 2);
-    
-    if (before !== after) {
-      changes.push({ key, before: beforeSpec[key], after: afterSpec[key] });
+  if (!specPre || !lineGutter) return;
+  try {
+    const DiffLib = (typeof Diff !== 'undefined') ? Diff : ((typeof diff !== 'undefined') ? diff : null);
+    const diffLines = DiffLib && DiffLib.diffLines ? DiffLib.diffLines : null;
+    const beforeStr = beforeSpec ? JSON.stringify(beforeSpec, null, 2) : '';
+    const afterStr = afterSpec ? JSON.stringify(afterSpec, null, 2) : '';
+    let raw = diffLines ? diffLines(beforeStr, afterStr) : null;
+    if (!raw) {
+      const a = beforeStr.split('\n');
+      const b = afterStr.split('\n');
+      raw = [];
+      let ia = 0, ib = 0;
+      while (ia < a.length || ib < b.length) {
+        const va = a[ia] || '';
+        const vb = b[ib] || '';
+        if (va === vb) { 
+          raw.push({ value: va + '\n' }); 
+          ia++; ib++; 
+        } else if (vb && a.slice(ia, ia+3).indexOf(vb) === -1) { 
+          raw.push({ value: vb + '\n', added: true }); 
+          ib++; 
+        } else { 
+          raw.push({ value: va + '\n', removed: true }); 
+          ia++; 
+        }
+      }
     }
-  });
-  
-  if (changes.length === 0) {
-    diffContent.innerHTML = '<div style="color: var(--muted); font-style: italic; padding: 1rem; text-align: center;">No changes detected</div>';
-  } else {
-    let html = '<div style="display: flex; flex-direction: column; gap: 1rem;">';
-    
-    changes.forEach(change => {
-      const beforeStr = JSON.stringify(change.before, null, 2);
-      const afterStr = JSON.stringify(change.after, null, 2);
-      
-      html += `
-        <div style="border: 2px solid var(--border); border-radius: 8px; overflow: hidden;">
-          <div style="background: var(--primary); color: white; padding: 0.75rem; font-weight: bold; font-size: 0.9rem;">
-            🔑 ${escapeHtml(change.key)}
-          </div>
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0;">
-            <div style="background: #3d1a1a; border-right: 1px solid var(--border); padding: 1rem;">
-              <div style="color: #ff6b6b; font-weight: bold; margin-bottom: 0.75rem; font-size: 0.85rem;">❌ BEFORE</div>
-              <pre style="margin: 0; white-space: pre-wrap; word-break: break-word; color: #ffcccc; font-size: 0.8rem; line-height: 1.4;">${escapeHtml(beforeStr)}</pre>
-            </div>
-            <div style="background: #1a3d1a; padding: 1rem;">
-              <div style="color: #51cf66; font-weight: bold; margin-bottom: 0.75rem; font-size: 0.85rem;">✅ AFTER</div>
-              <pre style="margin: 0; white-space: pre-wrap; word-break: break-word; color: #ccffcc; font-size: 0.8rem; line-height: 1.4;">${escapeHtml(afterStr)}</pre>
-            </div>
-          </div>
-        </div>
-      `;
+    let oldLine = 1; let newLine = 1;
+    const contentParts = [];
+    const gutterParts = [];
+
+    raw.forEach(chunk => {
+      const lines = (chunk.value || '').split('\n');
+      if (lines.length && lines[lines.length-1] === '') lines.pop();
+      lines.forEach(l => {
+        if (chunk.added) {
+          contentParts.push(`<div style="white-space:pre; padding:2px 6px; background:rgba(16,185,129,0.06); color:#10b981;">+ ${escapeHtml(l)}</div>`);
+          gutterParts.push(`<div style="padding:2px 6px; text-align:right; color: #a7f3d0;">→ ${newLine}</div>`);
+          newLine++;
+        } else if (chunk.removed) {
+          contentParts.push(`<div style="white-space:pre; padding:2px 6px; background:rgba(239,68,68,0.06); color:#ef4444;">- ${escapeHtml(l)}</div>`);
+          gutterParts.push(`<div style="padding:2px 6px; text-align:right; color: #fecaca;">${oldLine} →</div>`);
+          oldLine++;
+        } else {
+          contentParts.push(`<div style="white-space:pre; padding:2px 6px; color:var(--muted);">  ${escapeHtml(l)}</div>`);
+          gutterParts.push(`<div style="padding:2px 6px; text-align:right; color:var(--muted);">${oldLine} | ${newLine}</div>`);
+          oldLine++; newLine++;
+        }
+      });
     });
-    
-    html += '</div>';
-    diffContent.innerHTML = html;
+    specPre.innerHTML = contentParts.join('');
+    lineGutter.innerHTML = gutterParts.join('');
+  } catch (e) {
+    specPre.innerHTML = '<div style="color: var(--muted); padding:8px;">Could not compute diff</div>';
+    lineGutter.textContent = '';
   }
 }
+
+function renderGlobalDiff() {
+  // render diff b/w og & current editor
+  try {
+    const user = getCurrentUser();
+    const mob = currentMobName;
+    if (!user || !mob) return;
+    const orig = getOriginalSpec(user, mob) || {};
+    let curr = {};
+    try { curr = JSON.parse(editor.value); } catch (e) { curr = {}; }
+    showDiff(orig, curr);
+  } catch (e) {
+    console.warn('renderGlobalDiff failed', e);
+  }
+}
+
+let currentSpecView = 'editor';
+const specEditorContainerEl = document.getElementById('spec-editor-container');
+const specDiffContainerEl = document.getElementById('spec-diff-container');
+const diffScroll = document.getElementById('diff-scroll');
+
+editor?.addEventListener && editor.addEventListener('input', () => {
+  if (currentSpecView === 'diff') renderGlobalDiff();
+});
+
+const specViewEditorBtn = document.getElementById('spec-view-editor-btn');
+const specViewDiffBtn = document.getElementById('spec-view-diff-btn');
+const specViewToggle = document.getElementById('spec-view-toggle');
+
+function moveToggleSlider(toBtn) {
+  if (!specToggleSlider || !specViewToggle || !toBtn) return;
+  const parentRect = specViewToggle.getBoundingClientRect();
+  const b = toBtn.getBoundingClientRect();
+  const left = b.left - parentRect.left + 2;
+  specToggleSlider.style.left = left + 'px';
+  specToggleSlider.style.width = (b.width - 4) + 'px';
+}
+
+function setSpecView(mode) {
+  currentSpecView = mode;
+  if (mode === 'diff') {
+    try { specEditorContainerEl.style.display = 'none'; } catch (e) {}
+    try { specDiffContainerEl.style.display = 'flex'; } catch (e) {}
+    moveToggleSlider(specViewDiffBtn);
+    try { renderGlobalDiff(); } catch (e) { console.warn('renderGlobalDiff error', e); }
+    try { if (diffScroll) diffScroll.scrollTop = 0; } catch (e) {}
+  } else {
+    try { specEditorContainerEl.style.display = 'flex'; } catch (e) {}
+    try { specDiffContainerEl.style.display = 'none'; } catch (e) {}
+    moveToggleSlider(specViewEditorBtn);
+    try { editor.focus(); } catch (e) {}
+  }
+}
+
+specViewEditorBtn?.addEventListener && specViewEditorBtn.addEventListener('click', () => setSpecView('editor'));
+specViewDiffBtn?.addEventListener && specViewDiffBtn.addEventListener('click', () => setSpecView('diff'));
+window.requestAnimationFrame(() => setSpecView('editor'));
+window.addEventListener && window.addEventListener('resize', () => {
+  try { moveToggleSlider(currentSpecView === 'editor' ? specViewEditorBtn : specViewDiffBtn); } catch (e) {}
+});
 
 function escapeHtml(text) {
   const div = document.createElement('div');
