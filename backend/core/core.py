@@ -38,9 +38,13 @@ COLOR_WORDS = {
     "cyan": (0, 200, 200),
 }
 
-# Paths - BASE_DIR is project root (parent of backend/)
-BASE_DIR = Path(__file__).resolve().parent.parent
-BACKEND_DIR = Path(__file__).resolve().parent
+# Paths - BASE_DIR is project root
+# Since core.py is at backend/core/core.py:
+# .parent = backend/core
+# .parent.parent = backend
+# .parent.parent.parent = project root
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+BACKEND_DIR = Path(__file__).resolve().parent.parent
 SCHEMA_PATH = BACKEND_DIR / "schemas" / "mob_spec.schema.json"
 SPECS_DIR = BASE_DIR / "data" / "specs"
 FRONTEND_DIR = BASE_DIR / "frontend"

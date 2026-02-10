@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Optional
 import uuid
 
-from core import BASE_DIR
+from backend.core.core import BASE_DIR
 
 
 # Log directory

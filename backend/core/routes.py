@@ -10,16 +10,16 @@ from fastapi import File, Form, HTTPException, Body, UploadFile, Response
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, JSONResponse
 import shutil
 
-from spec_utils import (
+from backend.schemas.spec_utils import (
     read_mob_spec, write_mob_spec, delete_mob_spec, list_mob_names,
     read_current_spec, write_current_spec, apply_spec_patch,
     validate_spec, SpecValidationError
 )
-from llm import llm_rewrite_spec
-from packaging import build_addon
-from builders import make_png_rgba
+from backend.llm.llm import llm_rewrite_spec
+from backend.core.packaging import build_addon
+from backend.core.builders import make_png_rgba
 
-from core import BACKEND_DIR, COLOR_WORDS, SPECS_DIR, FRONTEND_DIR, LOCAL_LLM_DEV
+from backend.core.core import BACKEND_DIR, COLOR_WORDS, SPECS_DIR, FRONTEND_DIR, LOCAL_LLM_DEV
 
 
 def _save_upload(tmpdir: Path, uf: Optional[UploadFile]) -> Optional[Path]:
@@ -64,7 +64,6 @@ def _build_and_bundle(res_path: Optional[Path],
                       textures_dir: Optional[Path] = None) -> tuple[str, Path, dict]:
     """Build and bundle addon, selecting appropriate specs."""
     if specs_override:
-        from spec_utils import validate_spec
         specs = [validate_spec(s) for s in specs_override]
         print(f"[BUILD] Overriding specs with: {[s.get('short_name') for s in specs]}")
     else:
@@ -90,7 +89,6 @@ def get_mobs():
 
 def get_templates():
     """Get vanilla mob templates."""
-    from core import BACKEND_DIR
     import json
     path = BACKEND_DIR / "data" / "vanilla_mobs.json"
     if path.exists():
@@ -158,8 +156,8 @@ def get_mob(name: str):
 
 def get_mob_texture(name: str):
     """Get a mob's texture image."""
-    from builders import make_png_rgba
-    from core import COLOR_WORDS, SPECS_DIR
+    from backend.core.builders import make_png_rgba
+    from backend.core.core import COLOR_WORDS, SPECS_DIR
     path = SPECS_DIR / f"{name}.png"
     if path.exists():
         return FileResponse(path, media_type="image/png")
@@ -172,7 +170,7 @@ def get_mob_texture(name: str):
 
 async def save_mob_texture(name: str, file: UploadFile = File(...)):
     """Save a custom texture for a mob."""
-    from core import SPECS_DIR
+    from backend.core.core import SPECS_DIR
     path = SPECS_DIR / f"{name}.png"
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("wb") as f:
@@ -308,7 +306,7 @@ def llm_spec_mock(payload: dict = Body(...)):
 
 def validate_spec_endpoint(payload: dict = Body(...)):
     """Validate a spec without saving it."""
-    from spec_utils import validate_spec
+    from backend.schemas.spec_utils import validate_spec
     try:
         validated = validate_spec(payload)
         return {"valid": True, "spec": validated}
@@ -330,10 +328,6 @@ def validate_spec_endpoint(payload: dict = Body(...)):
         current = read_current_spec()
         
     try:
-        updated = llm_rewrite_spec(prompt, current, provider, api_key)
-        # We don't necessarily want to write to the server's disk here if using client-side storage,
-        # but returning it is enough. We'll return it as a validated spec.
-        from spec_utils import validate_spec
         spec = validate_spec(updated)
         print("[LLM] update complete; short_name=", spec.get("short_name"))
     except SpecValidationError as exc:
@@ -346,12 +340,12 @@ def validate_spec_endpoint(payload: dict = Body(...)):
 
 def index():
     """Serve the main HTML page."""
-    from core import FRONTEND_DIR
+    from backend.core.core import FRONTEND_DIR
     return HTMLResponse((FRONTEND_DIR / "index.html").read_text(encoding="utf-8"))
 
 def styles_css():
     """Serve the main stylesheet."""
-    from core import FRONTEND_DIR
+    from backend.core.core import FRONTEND_DIR
     path = FRONTEND_DIR / "styles.css"
     if not path.exists():
         # Fallback: minimal inline CSS if file missing
@@ -360,7 +354,7 @@ def styles_css():
 
 def serve_js(filename: str):
     """Serve JavaScript files from frontend/js directory."""
-    from core import FRONTEND_DIR
+    from backend.core.core import FRONTEND_DIR
     # Sanitize filename to prevent directory traversal
     safe_filename = filename.replace("..", "").replace("/", "").replace("\\", "")
     path = FRONTEND_DIR / "js" / safe_filename
@@ -398,8 +392,8 @@ async def api_build(resource: Optional[UploadFile] = File(None),
     """Build endpoint for JSON API."""
     import json
     import base64
-    from spec_utils import validate_spec
-    from core import SPECS_DIR
+    from backend.schemas.spec_utils import validate_spec
+    from backend.core.core import SPECS_DIR
     tmp = Path(tempfile.mkdtemp(prefix="http_"))
     try:
         specs_override = None

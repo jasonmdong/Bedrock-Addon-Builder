@@ -4,9 +4,9 @@ import os
 import time
 from typing import Optional
 
-from core import LLM_MODEL_NAME, DEEPSEEK_MODEL_NAME, GEMINI_MODEL_NAME, CLAUDE_MODEL_NAME, OLLAMA_MODEL_NAME, OLLAMA_BASE_URL, DEFAULT_LLM_PROVIDER, LLM_SYSTEM_PROMPT, BACKEND_DIR
-from schemas_loader import SPEC_SCHEMA
-from spec_utils import validate_spec, SpecValidationError
+from backend.core.core import LLM_MODEL_NAME, DEEPSEEK_MODEL_NAME, GEMINI_MODEL_NAME, CLAUDE_MODEL_NAME, OLLAMA_MODEL_NAME, OLLAMA_BASE_URL, DEFAULT_LLM_PROVIDER, LLM_SYSTEM_PROMPT, BACKEND_DIR
+from backend.schemas.schemas_loader import SPEC_SCHEMA
+from backend.schemas.spec_utils import validate_spec, SpecValidationError
 
 # Optional logging - gracefully handle if not available
 try:

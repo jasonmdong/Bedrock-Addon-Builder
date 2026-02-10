@@ -7,9 +7,9 @@ import zipfile
 from pathlib import Path
 from typing import Optional
 
-from core import WORLD_TEMPLATE_BASES, BASE_DIR
-from builders import make_uuid, safe_json_load, _manifest_version, make_png_rgba
-from spec_utils import validate_spec, default_spec
+from backend.core.core import WORLD_TEMPLATE_BASES, BASE_DIR
+from backend.core.builders import make_uuid, safe_json_load, _manifest_version, make_png_rgba
+from backend.schemas.spec_utils import validate_spec, default_spec
 
 
 def zip_dir(src_dir: Path, out_zip: Path):

@@ -3,8 +3,8 @@ import json
 import uuid
 from pathlib import Path
 
-from core import DEFAULTS, COLOR_WORDS
-from spec_utils import default_spec, validate_spec
+from backend.core.core import DEFAULTS, COLOR_WORDS
+from backend.schemas.spec_utils import default_spec, validate_spec
 
 
 def make_uuid() -> str:

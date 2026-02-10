@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
 # Import route handlers
-from routes import (
+from backend.core.routes import (
     get_mobs,
     get_mob,
     get_mob_texture,
