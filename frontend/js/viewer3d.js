@@ -22,7 +22,7 @@ function initializeViewer3D() {
   const camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
   camera.position.set(0, 0, 100);
   camera.up.set(0, 1, 0); // Explicitly set Y as up
-  alert("[CAMERA] Y-up orientation set: " + camera.up.x + ", " + camera.up.y + ", " + camera.up.z);
+  console.log("[CAMERA] Y-up orientation set: " + camera.up.x + ", " + camera.up.y + ", " + camera.up.z);
   
   // Renderer setup
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -190,7 +190,7 @@ function render3DGeometry(geometryData) {
     }
     
     console.log("[3D] Found geometries:", geometries.length);
-    alert("[VIEWER3D] Found " + geometries.length + " geometries to render!");
+    console.log("[VIEWER3D] Found " + geometries.length + " geometries to render!");
     
     let cubeCount = 0;
     let boneCount = 0;
@@ -199,16 +199,11 @@ function render3DGeometry(geometryData) {
       if (!geom || !geom.bones) return;
       
       console.log(`[3D] Geometry ${geomIdx} has ${geom.bones.length} bones`);
-      alert(`[GEOMETRY] ${geomIdx} has ${geom.bones.length} bones\n[First few bone pivots]:`);
       
       // Create a map of bone names to bone objects for parent lookup
       const boneMap = {};
       geom.bones.forEach((bone, idx) => {
         boneMap[bone.name] = bone;
-        if (idx < 3) {  // Show first 3 bone pivots
-          const pivot = bone.pivot || [0, 0, 0];
-          alert(`Bone ${idx}: "${bone.name}" pivot=[${pivot[0]}, ${pivot[1]}, ${pivot[2]}]`);
-        }
       });
       
       // Create a map of bone names to THREE.Group objects
@@ -228,9 +223,7 @@ function render3DGeometry(geometryData) {
         // In Y-up system: X=right, Y=up, Z=forward. NO Z-inversion needed.
         boneGroup.position.set(pivot[0], pivot[1], pivot[2]);
         
-        if (bone.name === "body") {
-          alert(`[BONE: ${bone.name}] Position in Y-up: X=${pivot[0]}, Y=${pivot[1]}, Z=${pivot[2]}`);
-        }
+        console.log(`[BONE: ${bone.name}] Position: X=${pivot[0]}, Y=${pivot[1]}, Z=${pivot[2]}`);
         
         // Apply bone rotation (convert from degrees to radians)
         const rotation = bone.rotation || [0, 0, 0];
@@ -254,9 +247,7 @@ function render3DGeometry(geometryData) {
           boneGroup.rotation.y = totalRotation[1] * Math.PI / 180;
           boneGroup.rotation.z = totalRotation[2] * Math.PI / 180;
           
-          if (bone.name === "body") {
-            alert(`[BONE: ${bone.name}] Rotation (Y-up): X=${totalRotation[0]}°, Y=${totalRotation[1]}°, Z=${totalRotation[2]}°`);
-          }
+          console.log(`[BONE: ${bone.name}] Rotation: X=${totalRotation[0]}°, Y=${totalRotation[1]}°, Z=${totalRotation[2]}°`);
         }
         
         // Apply scale if present
@@ -300,9 +291,10 @@ function render3DGeometry(geometryData) {
             const origin = cube.origin || [0, 0, 0];
             const size = cube.size || [1, 1, 1];
             const cubeRotation = cube.rotation || [0, 0, 0];
+            const cubePivot = cube.pivot || null;  // Cube-level pivot (separate from bone pivot)
             const inflate = cube.inflate || 0;
             
-            console.log(`[3D] Cube ${cubeIdx}: origin=${JSON.stringify(origin)}, size=${JSON.stringify(size)}`);
+            console.log(`[3D] Cube ${cubeIdx}: origin=${JSON.stringify(origin)}, size=${JSON.stringify(size)}, cubePivot=${JSON.stringify(cubePivot)}`);
             
             // Adjust size with inflation (inflate expands in all directions)
             const adjustedSize = [
@@ -323,7 +315,7 @@ function render3DGeometry(geometryData) {
             const mesh = new THREE.Mesh(boxGeom, material);
             
             // Get bone pivot for offset calculation
-            const pivot = bone.pivot || [0, 0, 0];
+            const bonePivot = bone.pivot || [0, 0, 0];
             
             // Calculate cube center (Minecraft origin is min corner, Three.js positions at center)
             const cubeCenter = [
@@ -332,32 +324,60 @@ function render3DGeometry(geometryData) {
               origin[2] + size[2] / 2
             ];
             
-            // Cube position in local space: cubeCenter - pivot (Y-up coordinates)
-            // X=right, Y=up, Z=forward - NO inversions (consistent with Y-up system)
-            if (bone.name === "body" && cubeIdx === 0) {
-              alert(`[CUBE in ${bone.name}] Origin: [${origin[0]}, ${origin[1]}, ${origin[2]}], Size: [${size[0]}, ${size[1]}, ${size[2]}], Pivot: [${pivot[0]}, ${pivot[1]}, ${pivot[2]}]`);
+            const hasCubeRotation = cubeRotation[0] || cubeRotation[1] || cubeRotation[2];
+            
+            if (hasCubeRotation && cubePivot) {
+              // --- CUBE HAS ITS OWN PIVOT AND ROTATION ---
+              // The rotation must be applied around the cube's pivot point, not its center.
+              // Strategy: Create a pivot group at the cube-pivot position (relative to bone pivot),
+              // offset the mesh from the pivot group center, then rotate the pivot group.
+              
+              const pivotGroup = new THREE.Group();
+              
+              // Position pivot group at cubePivot relative to bone pivot
+              pivotGroup.position.set(
+                cubePivot[0] - bonePivot[0],
+                cubePivot[1] - bonePivot[1],
+                cubePivot[2] - bonePivot[2]
+              );
+              
+              // Position mesh relative to the cube pivot (not the bone pivot)
+              mesh.position.set(
+                cubeCenter[0] - cubePivot[0],
+                cubeCenter[1] - cubePivot[1],
+                cubeCenter[2] - cubePivot[2]
+              );
+              
+              // Apply rotation to the pivot group (rotates mesh around cubePivot)
+              // Bedrock uses opposite rotation direction from Three.js, so negate angles
+              pivotGroup.rotation.order = "ZYX";
+              pivotGroup.rotation.x = -(cubeRotation[0] || 0) * Math.PI / 180;
+              pivotGroup.rotation.y = -(cubeRotation[1] || 0) * Math.PI / 180;
+              pivotGroup.rotation.z = -(cubeRotation[2] || 0) * Math.PI / 180;
+              
+              pivotGroup.add(mesh);
+              boneGroup.add(pivotGroup);
+              
+            } else {
+              // --- SIMPLE CASE: No cube-level pivot, or no rotation ---
+              // Position cube center relative to bone pivot
+              mesh.position.set(
+                cubeCenter[0] - bonePivot[0],
+                cubeCenter[1] - bonePivot[1],
+                cubeCenter[2] - bonePivot[2]
+              );
+              
+              // Apply cube rotation around its own center (if any, no separate pivot)
+              // Bedrock uses opposite rotation direction from Three.js, so negate angles
+              if (hasCubeRotation) {
+                mesh.rotation.order = "ZYX";
+                mesh.rotation.x = -(cubeRotation[0] || 0) * Math.PI / 180;
+                mesh.rotation.y = -(cubeRotation[1] || 0) * Math.PI / 180;
+                mesh.rotation.z = -(cubeRotation[2] || 0) * Math.PI / 180;
+              }
+              
+              boneGroup.add(mesh);
             }
-            const localPos = [
-              cubeCenter[0] - pivot[0],
-              cubeCenter[1] - pivot[1],
-              cubeCenter[2] - pivot[2]  // NO Z-inversion: consistent Y-up coordinates
-            ];
-            
-            if (bone.name === "body" && cubeIdx === 0) {
-              alert(`[CUBE in ${bone.name}] Local position (Y-up): [${localPos[0].toFixed(1)}, ${localPos[1].toFixed(1)}, ${localPos[2].toFixed(1)}]`);
-            }
-            
-            mesh.position.set(localPos[0], localPos[1], localPos[2]);
-            
-            // Apply cube rotation (convert from degrees to radians)
-            if (cubeRotation[0] || cubeRotation[1] || cubeRotation[2]) {
-              mesh.rotation.order = "ZYX";
-              mesh.rotation.x = (cubeRotation[0] || 0) * Math.PI / 180;
-              mesh.rotation.y = (cubeRotation[1] || 0) * Math.PI / 180;
-              mesh.rotation.z = (cubeRotation[2] || 0) * Math.PI / 180;
-            }
-            
-            boneGroup.add(mesh);
           });
         }
         
@@ -397,12 +417,12 @@ function render3DGeometry(geometryData) {
     
     // Only proceed if we have cubes
     if (cubeCount === 0) {
-      alert("[VIEWER3D] ERROR: No cubes found in geometry! Bones found: " + boneCount);
+      console.warn("[VIEWER3D] ERROR: No cubes found in geometry! Bones found: " + boneCount);
       console.warn("[3D] No cubes found in geometry data. Bones processed:", boneCount);
       return;
     }
     
-    alert("[VIEWER3D] SUCCESS: Found " + cubeCount + " cubes in " + boneCount + " bones. Rendering now...");
+    console.log(`[VIEWER3D] SUCCESS: Found ${cubeCount} cubes in ${boneCount} bones. Rendering now...`);
     
     // TEMPORARILY DISABLED: Baking rotations (testing if it causes distortion)
     // The hierarchical structure should render correctly without baking
@@ -411,16 +431,16 @@ function render3DGeometry(geometryData) {
     // Scale model 16x to match Minecraft's in-game appearance
     // (Minecraft geometry uses 1/16 block units, scale 16x for proper size)
     rootGroup.scale.set(16, 16, 16);
-    alert("[SCALING] Applied 16x scale to model: " + rootGroup.scale.x + ", " + rootGroup.scale.y + ", " + rootGroup.scale.z);
+    console.log("[SCALING] Applied 16x scale");
     
     // Center and frame the model
     const box = new THREE.Box3().setFromObject(rootGroup);
     const center = box.getCenter(new THREE.Vector3());
-    alert("[CENTERING] Model bounding box center: X=" + center.x.toFixed(2) + ", Y=" + center.y.toFixed(2) + ", Z=" + center.z.toFixed(2));
+    console.log("[CENTERING] BBox center:", center.x.toFixed(2), center.y.toFixed(2), center.z.toFixed(2));
     const boxSize = box.getSize(new THREE.Vector3());
-    alert("[CENTERING] Bounding box size (after 16x scale): Width=" + boxSize.x.toFixed(2) + ", Height=" + boxSize.y.toFixed(2) + ", Depth=" + boxSize.z.toFixed(2));
+    console.log("[CENTERING] BBox size:", boxSize.x.toFixed(2), boxSize.y.toFixed(2), boxSize.z.toFixed(2));
     rootGroup.position.sub(center);
-    alert("[CENTERING] Model now positioned at origin. Root position: " + rootGroup.position.x.toFixed(2) + ", " + rootGroup.position.y.toFixed(2) + ", " + rootGroup.position.z.toFixed(2));
+    console.log("[CENTERING] Root pos:", rootGroup.position.x.toFixed(2), rootGroup.position.y.toFixed(2), rootGroup.position.z.toFixed(2));
     
     // Adjust camera to view the model
     // Recalculate bounding box after centering to get accurate size
@@ -432,17 +452,16 @@ function render3DGeometry(geometryData) {
     cameraZ *= 1.5; // Add some distance
     viewer3D.camera.position.z = cameraZ;
     viewer3D.camera.lookAt(0, 0, 0);
-    alert("[CAMERA] Camera at: (0, 0, " + cameraZ.toFixed(2) + "), looking at (0, 0, 0). Model size: " + maxDim.toFixed(2) + " units");
+    console.log("[CAMERA] Positioned at Z=" + cameraZ.toFixed(2) + ", model maxDim=" + maxDim.toFixed(2));
     
     // Add model to scene
     viewer3D.scene.add(rootGroup);
     viewer3D.mesh = rootGroup;
     
-    alert("[VIEWPORT] Model centered and added to scene. Close these alerts to view the model.");
+    console.log("[VIEWPORT] Model centered and added to scene.");
   } catch (err) {
     console.error(`[3D] Error rendering geometry:`, err);
     console.error("[3D] Error stack:", err.stack);
-    alert("[VIEWER3D] ERROR: " + err.message);
   }
 }
 
