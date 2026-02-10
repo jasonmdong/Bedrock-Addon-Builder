@@ -122,9 +122,8 @@ async function requestLlm() {
 function renderLlmHistory() {
   const user = getCurrentUser();
   if (!user || !llmHistoryList) {
-    if (llmHistoryList) llmHistoryList.innerHTML = '<div style="color: var(--muted);">No history</div>';
-    return;
   }
+    try { renderGlobalDiff(); } catch (e) {}
   const hist = readLlmStack(user);
   if (!hist.length) {
     llmHistoryList.innerHTML = '<div style="color: var(--muted); font-style:italic; text-align:center;">No history yet</div>';
@@ -133,13 +132,19 @@ function renderLlmHistory() {
   }
   llmHistoryList.innerHTML = '';
   hist.forEach((h, idx) => {
-    const el = document.createElement('div');
-    el.style.display = 'flex';
-    el.style.flexDirection = 'column';
-    el.style.border = '1px solid var(--border)';
-    el.style.padding = '0.6rem 0.8rem';
-    el.style.borderRadius = '8px';
-    el.style.position = 'relative';
+    const container = document.createElement('div');
+    container.style.display = 'flex';
+    container.style.gap = '0.5rem';
+    container.style.alignItems = 'stretch';
+    const card = document.createElement('div');
+    card.style.display = 'flex';
+    card.style.flexDirection = 'column';
+    card.style.border = '1px solid var(--border)';
+    card.style.padding = '0.6rem 0.8rem';
+    card.style.borderRadius = '8px';
+    card.style.position = 'relative';
+    card.style.flex = '1 1 auto';
+
     const time = new Date(h.ts).toLocaleTimeString();
     const title = document.createElement('div');
     title.style.fontWeight = '600';
@@ -178,10 +183,26 @@ function renderLlmHistory() {
       restore.style.minWidth = '44px';
       restore.style.textTransform = 'lowercase';
       restore.onclick = () => { restoreHistoryEntry(idx, restore); };
-      el.appendChild(restore);
+      card.appendChild(restore);
     }
-    el.appendChild(title); el.appendChild(p); el.appendChild(btnRow);
-    llmHistoryList.appendChild(el);
+
+    card.appendChild(title); card.appendChild(p); card.appendChild(btnRow);
+    let prevSpec = undefined;
+    try {
+      if (idx < hist.length - 1) prevSpec = hist[idx + 1].spec;
+      else if (typeof currentMobName !== 'undefined' && currentMobName) prevSpec = getUserMob(currentMobName);
+      else prevSpec = {};
+    } catch (e) {
+      prevSpec = {};
+    }
+    card.addEventListener('click', (e) => {
+      e.stopPropagation();
+      try { showDiff(prevSpec || {}, h.spec || {}); } catch (er) {}
+      try { if (typeof setSpecView === 'function') setSpecView('diff'); } catch (er) {}
+    });
+
+    container.appendChild(card);
+    llmHistoryList.appendChild(container);
   });
   if (llmSessionCount) llmSessionCount.textContent = String(hist.length);
 }
@@ -196,31 +217,12 @@ function restoreHistoryEntry(index, btnEl) {
 
     if (!confirm(`restore workspace to checkpoint from ${new Date(entry.ts).toLocaleString()}?`)) return;
 
-    if (btnEl) {
-      btnEl.disabled = true;
-      const prevText = btnEl.textContent;
-      btnEl.textContent = '...';
-      setTimeout(() => {
-        try {
-          editor.value = JSON.stringify(entry.spec, null, 2);
-          if (currentMobName) {
-            saveUserMob(currentMobName, entry.spec);
-            loadTextureIntoPainter(currentMobName);
-            updateFileTree(entry.spec);
-          }
-          setStatus(`restored spec from ${new Date(entry.ts).toLocaleString()}`);
-          // stack pop -> drop new entries + keep from index..end
-          popToLlmIndex(user, index);
-          renderLlmHistory();
-        } catch (e) {
-          console.warn('failed to restore history entry', e);
-          setStatus('restore failed', true);
-        } finally {
-          btnEl.textContent = prevText;
-          btnEl.disabled = false;
-        }
-      }, 500);
-    } else {
+    let prior = undefined;
+    if (hist && index < hist.length - 1) prior = hist[index + 1].spec;
+    else {
+      try { prior = getUserMob(currentMobName); } catch (e) { prior = {}; }
+    }
+    const doRestore = () => {
       try {
         editor.value = JSON.stringify(entry.spec, null, 2);
         if (currentMobName) {
@@ -231,10 +233,24 @@ function restoreHistoryEntry(index, btnEl) {
         setStatus(`restored spec from ${new Date(entry.ts).toLocaleString()}`);
         popToLlmIndex(user, index);
         renderLlmHistory();
+        try { showDiff(prior || {}, entry.spec || {}); if (typeof setSpecView === 'function') setSpecView('diff'); } catch (er) {}
       } catch (e) {
         console.warn('failed to restore history entry', e);
         setStatus('restore failed', true);
       }
+    };
+
+    if (btnEl) {
+      btnEl.disabled = true;
+      const prevText = btnEl.textContent;
+      btnEl.textContent = '...';
+      setTimeout(() => {
+        doRestore();
+        btnEl.textContent = prevText;
+        btnEl.disabled = false;
+      }, 500);
+    } else {
+      doRestore();
     }
 }
 
