@@ -97,7 +97,7 @@ async function fetchAndDisplayGeometry(mobName) {
     geometryCopy.dataset.json = formattedJson;
     
     // Render the 3D model
-    render3DGeometry(geometryData);
+    render3DGeometry(geometryData, mobName);
     
     console.log(`[GEOMETRY] Successfully loaded geometry for ${mobName}`);
   } catch (err) {
