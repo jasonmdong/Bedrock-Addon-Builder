@@ -100,41 +100,99 @@ def get_templates():
 
 
 async def fetch_mob_geometry(mob_name: str):
-    """Fetch mob geometry JSON from Mojang's bedrock-samples repository."""
+    """Fetch mob geometry JSON from Mojang's bedrock-samples repository.
+    
+    Searches for all .geo.json files containing the mob_name (with version numbers/descriptors),
+    and fetches the most recently updated one.
+    """
     if not mob_name:
         raise HTTPException(status_code=400, detail="mob_name is required")
     
     # Sanitize mob_name to prevent directory traversal
     safe_name = mob_name.strip().replace("..", "").replace("/", "")
-    
-    url = f"https://raw.githubusercontent.com/Mojang/bedrock-samples/main/resource_pack/models/entity/{safe_name}.geo.json"
+    safe_name_lower = safe_name.lower()
     
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(url)
-            
-            if response.status_code == 404:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Geometry file not found for mob '{mob_name}' on bedrock-samples repository"
-                )
+            # Query GitHub API to list files in entity folder
+            api_url = "https://api.github.com/repos/Mojang/bedrock-samples/contents/resource_pack/models/entity"
+            response = await client.get(api_url)
             
             if response.status_code != 200:
                 raise HTTPException(
                     status_code=response.status_code,
-                    detail=f"Failed to fetch geometry from GitHub (status {response.status_code})"
+                    detail=f"Failed to query GitHub API (status {response.status_code})"
+                )
+            
+            files = response.json()
+            if not isinstance(files, list):
+                raise HTTPException(
+                    status_code=500,
+                    detail="Unexpected GitHub API response format"
+                )
+            
+            # Filter for .geo.json files that contain the mob name
+            matching_files = []
+            for file_info in files:
+                filename = file_info.get("name", "").lower()
+                # Check if filename contains mob name and ends with .geo.json
+                if safe_name_lower in filename and filename.endswith(".geo.json"):
+                    matching_files.append({
+                        "name": file_info.get("name", ""),
+                        "url": file_info.get("download_url", ""),
+                        "updated_at": file_info.get("sha", "")  # Using sha as a unique identifier
+                    })
+            
+            if not matching_files:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No geometry files found for mob '{mob_name}' on bedrock-samples repository"
+                )
+            
+            # If multiple files found, fetch each one to get its git history timestamps
+            if len(matching_files) > 1:
+                # Get commit info for each file to determine which is most recently updated
+                for file_info in matching_files:
+                    commits_url = f"https://api.github.com/repos/Mojang/bedrock-samples/commits?path=resource_pack/models/entity/{file_info['name']}&per_page=1"
+                    commits_response = await client.get(commits_url)
+                    if commits_response.status_code == 200:
+                        commits = commits_response.json()
+                        if commits and isinstance(commits, list) and len(commits) > 0:
+                            file_info["last_updated"] = commits[0].get("commit", {}).get("committer", {}).get("date", "")
+                    if "last_updated" not in file_info:
+                        file_info["last_updated"] = ""
+                
+                # Sort by last_updated timestamp (descending) to get most recent
+                matching_files.sort(key=lambda x: x.get("last_updated", ""), reverse=True)
+            
+            # Use the first (most recent) file
+            selected_file = matching_files[0]
+            url = selected_file["url"]
+            
+            # Fetch the actual geometry file
+            geometry_response = await client.get(url)
+            
+            if geometry_response.status_code != 200:
+                raise HTTPException(
+                    status_code=geometry_response.status_code,
+                    detail=f"Failed to fetch geometry file from GitHub"
                 )
             
             # Parse the JSON to ensure it's valid
             try:
-                geometry_data = response.json()
+                geometry_data = geometry_response.json()
             except json.JSONDecodeError:
                 raise HTTPException(
                     status_code=400,
                     detail="Retrieved file is not valid JSON"
                 )
             
-            return {"geometry": geometry_data, "url": url}
+            return {
+                "geometry": geometry_data,
+                "url": url,
+                "filename": selected_file["name"],
+                "matches_found": len(matching_files)
+            }
     
     except httpx.HTTPError as e:
         raise HTTPException(
@@ -146,7 +204,7 @@ async def fetch_mob_geometry(mob_name: str):
 
 def get_mob(name: str):
     """Retrieve a specific mob spec."""
-    from schemas_loader import SPEC_SCHEMA
+    from backend.schemas.schemas_loader import SPEC_SCHEMA
     try:
         spec = read_mob_spec(name)
         return {"spec": spec, "schema": SPEC_SCHEMA}
@@ -210,7 +268,7 @@ def duplicate_mob(name: str):
 
 def get_spec():
     """Get the current/active spec."""
-    from schemas_loader import SPEC_SCHEMA
+    from backend.schemas.schemas_loader import SPEC_SCHEMA
     return {
         "spec": read_current_spec(),
         "schema": SPEC_SCHEMA

@@ -15,11 +15,14 @@ function initializeViewer3D() {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x222222);
   
-  // Camera setup
+  // Camera setup - Y-up like Minecraft/Blockbench
+  // Camera positioned along Z-axis: X goes left-right, Y goes up-down, Z goes away/toward
   const width = container.clientWidth;
   const height = container.clientHeight;
   const camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
   camera.position.set(0, 0, 100);
+  camera.up.set(0, 1, 0); // Explicitly set Y as up
+  console.log("[CAMERA] Y-up orientation set: " + camera.up.x + ", " + camera.up.y + ", " + camera.up.z);
   
   // Renderer setup
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -130,6 +133,9 @@ function initializeViewer3D() {
 }
 
 function render3DGeometry(geometryData) {
+  // CACHE-BUSTING DEBUG - verify new version is loaded
+  console.log("[3D] render3DGeometry called - Version with baking DISABLED - " + new Date().toISOString());
+  
   // Initialize viewer if not already done
   if (!viewer3D) {
     viewer3D = initializeViewer3D();
@@ -184,6 +190,7 @@ function render3DGeometry(geometryData) {
     }
     
     console.log("[3D] Found geometries:", geometries.length);
+    console.log("[VIEWER3D] Found " + geometries.length + " geometries to render!");
     
     let cubeCount = 0;
     let boneCount = 0;
@@ -195,7 +202,7 @@ function render3DGeometry(geometryData) {
       
       // Create a map of bone names to bone objects for parent lookup
       const boneMap = {};
-      geom.bones.forEach(bone => {
+      geom.bones.forEach((bone, idx) => {
         boneMap[bone.name] = bone;
       });
       
@@ -211,13 +218,21 @@ function render3DGeometry(geometryData) {
         // Create a group for this bone
         const boneGroup = new THREE.Group();
         
-        // Position the bone group at the bone's pivot point
+        // Position the bone group at the bone's pivot point (Y-up coordinates)
         const pivot = bone.pivot || [0, 0, 0];
-        boneGroup.position.set(pivot[0], pivot[1], -pivot[2]); // Z is inverted for Minecraft Y-up
+        // In Y-up system: X=right, Y=up, Z=forward. NO Z-inversion needed.
+        boneGroup.position.set(pivot[0], pivot[1], pivot[2]);
+        
+        console.log(`[BONE: ${bone.name}] Position: X=${pivot[0]}, Y=${pivot[1]}, Z=${pivot[2]}`);
         
         // Apply bone rotation (convert from degrees to radians)
         const rotation = bone.rotation || [0, 0, 0];
         const bindPoseRotation = bone.bind_pose_rotation || [0, 0, 0];
+        
+        // DEBUG: Log if bind_pose_rotation is present
+        if (bindPoseRotation[0] || bindPoseRotation[1] || bindPoseRotation[2]) {
+          console.log(`[3D] Bone "${bone.name}" has bind_pose_rotation: ${JSON.stringify(bindPoseRotation)}`);
+        }
         
         // Combine rotation and bind_pose_rotation
         const totalRotation = [
@@ -232,9 +247,7 @@ function render3DGeometry(geometryData) {
           boneGroup.rotation.y = totalRotation[1] * Math.PI / 180;
           boneGroup.rotation.z = totalRotation[2] * Math.PI / 180;
           
-          if (bindPoseRotation[0] || bindPoseRotation[1] || bindPoseRotation[2]) {
-            console.log(`[3D] Applied bind_pose_rotation to bone "${bone.name}": ${JSON.stringify(bindPoseRotation)}`);
-          }
+          console.log(`[BONE: ${bone.name}] Rotation: X=${totalRotation[0]}°, Y=${totalRotation[1]}°, Z=${totalRotation[2]}°`);
         }
         
         // Apply scale if present
@@ -258,6 +271,9 @@ function render3DGeometry(geometryData) {
         
         const boneGroup = boneGroupMap[bone.name];
         
+        // NOTE: Bones are structural only - they don't render themselves.
+        // Only cubes attached to bones are rendered.
+        
         // Add cubes to this bone's group
         if (bone.cubes && bone.cubes.length > 0) {
           console.log(`[3D] Bone "${bone.name}" has ${bone.cubes.length} cubes`);
@@ -275,9 +291,10 @@ function render3DGeometry(geometryData) {
             const origin = cube.origin || [0, 0, 0];
             const size = cube.size || [1, 1, 1];
             const cubeRotation = cube.rotation || [0, 0, 0];
+            const cubePivot = cube.pivot || null;  // Cube-level pivot (separate from bone pivot)
             const inflate = cube.inflate || 0;
             
-            console.log(`[3D] Cube ${cubeIdx}: origin=${JSON.stringify(origin)}, size=${JSON.stringify(size)}`);
+            console.log(`[3D] Cube ${cubeIdx}: origin=${JSON.stringify(origin)}, size=${JSON.stringify(size)}, cubePivot=${JSON.stringify(cubePivot)}`);
             
             // Adjust size with inflation (inflate expands in all directions)
             const adjustedSize = [
@@ -298,7 +315,7 @@ function render3DGeometry(geometryData) {
             const mesh = new THREE.Mesh(boxGeom, material);
             
             // Get bone pivot for offset calculation
-            const pivot = bone.pivot || [0, 0, 0];
+            const bonePivot = bone.pivot || [0, 0, 0];
             
             // Calculate cube center (Minecraft origin is min corner, Three.js positions at center)
             const cubeCenter = [
@@ -307,24 +324,60 @@ function render3DGeometry(geometryData) {
               origin[2] + size[2] / 2
             ];
             
-            // Cube position in local space: cubeCenter - pivot
-            const localPos = [
-              cubeCenter[0] - pivot[0],
-              cubeCenter[1] - pivot[1],
-              -(cubeCenter[2] - pivot[2]) // Z is inverted for Minecraft Y-up
-            ];
+            const hasCubeRotation = cubeRotation[0] || cubeRotation[1] || cubeRotation[2];
             
-            mesh.position.set(localPos[0], localPos[1], localPos[2]);
-            
-            // Apply cube rotation (convert from degrees to radians)
-            if (cubeRotation[0] || cubeRotation[1] || cubeRotation[2]) {
-              mesh.rotation.order = "ZYX";
-              mesh.rotation.x = (cubeRotation[0] || 0) * Math.PI / 180;
-              mesh.rotation.y = (cubeRotation[1] || 0) * Math.PI / 180;
-              mesh.rotation.z = (cubeRotation[2] || 0) * Math.PI / 180;
+            if (hasCubeRotation && cubePivot) {
+              // --- CUBE HAS ITS OWN PIVOT AND ROTATION ---
+              // The rotation must be applied around the cube's pivot point, not its center.
+              // Strategy: Create a pivot group at the cube-pivot position (relative to bone pivot),
+              // offset the mesh from the pivot group center, then rotate the pivot group.
+              
+              const pivotGroup = new THREE.Group();
+              
+              // Position pivot group at cubePivot relative to bone pivot
+              pivotGroup.position.set(
+                cubePivot[0] - bonePivot[0],
+                cubePivot[1] - bonePivot[1],
+                cubePivot[2] - bonePivot[2]
+              );
+              
+              // Position mesh relative to the cube pivot (not the bone pivot)
+              mesh.position.set(
+                cubeCenter[0] - cubePivot[0],
+                cubeCenter[1] - cubePivot[1],
+                cubeCenter[2] - cubePivot[2]
+              );
+              
+              // Apply rotation to the pivot group (rotates mesh around cubePivot)
+              // Bedrock uses opposite rotation direction from Three.js, so negate angles
+              pivotGroup.rotation.order = "ZYX";
+              pivotGroup.rotation.x = -(cubeRotation[0] || 0) * Math.PI / 180;
+              pivotGroup.rotation.y = -(cubeRotation[1] || 0) * Math.PI / 180;
+              pivotGroup.rotation.z = -(cubeRotation[2] || 0) * Math.PI / 180;
+              
+              pivotGroup.add(mesh);
+              boneGroup.add(pivotGroup);
+              
+            } else {
+              // --- SIMPLE CASE: No cube-level pivot, or no rotation ---
+              // Position cube center relative to bone pivot
+              mesh.position.set(
+                cubeCenter[0] - bonePivot[0],
+                cubeCenter[1] - bonePivot[1],
+                cubeCenter[2] - bonePivot[2]
+              );
+              
+              // Apply cube rotation around its own center (if any, no separate pivot)
+              // Bedrock uses opposite rotation direction from Three.js, so negate angles
+              if (hasCubeRotation) {
+                mesh.rotation.order = "ZYX";
+                mesh.rotation.x = -(cubeRotation[0] || 0) * Math.PI / 180;
+                mesh.rotation.y = -(cubeRotation[1] || 0) * Math.PI / 180;
+                mesh.rotation.z = -(cubeRotation[2] || 0) * Math.PI / 180;
+              }
+              
+              boneGroup.add(mesh);
             }
-            
-            boneGroup.add(mesh);
           });
         }
         
@@ -338,11 +391,11 @@ function render3DGeometry(geometryData) {
           const parentPivot = parentBone.pivot || [0, 0, 0];
           const childPivot = bone.pivot || [0, 0, 0];
           
-          // Convert child's world-space position to parent-local space
+          // Convert child's world-space position to parent-local space (Y-up, NO inversions)
           const childInParentSpace = [
             childPivot[0] - parentPivot[0],
             childPivot[1] - parentPivot[1],
-            -(childPivot[2] - parentPivot[2]) // Z is inverted for Minecraft Y-up
+            childPivot[2] - parentPivot[2]  // NO Z-inversion: consistent Y-up coordinates
           ];
           
           // Update the child bone group's position to parent-local space
@@ -364,28 +417,48 @@ function render3DGeometry(geometryData) {
     
     // Only proceed if we have cubes
     if (cubeCount === 0) {
+      console.warn("[VIEWER3D] ERROR: No cubes found in geometry! Bones found: " + boneCount);
       console.warn("[3D] No cubes found in geometry data. Bones processed:", boneCount);
       return;
     }
     
+    console.log(`[VIEWER3D] SUCCESS: Found ${cubeCount} cubes in ${boneCount} bones. Rendering now...`);
+    
+    // TEMPORARILY DISABLED: Baking rotations (testing if it causes distortion)
+    // The hierarchical structure should render correctly without baking
+    // if bone rotations are properly calculated
+    
+    // Scale model 16x to match Minecraft's in-game appearance
+    // (Minecraft geometry uses 1/16 block units, scale 16x for proper size)
+    rootGroup.scale.set(16, 16, 16);
+    console.log("[SCALING] Applied 16x scale");
+    
     // Center and frame the model
     const box = new THREE.Box3().setFromObject(rootGroup);
     const center = box.getCenter(new THREE.Vector3());
+    console.log("[CENTERING] BBox center:", center.x.toFixed(2), center.y.toFixed(2), center.z.toFixed(2));
+    const boxSize = box.getSize(new THREE.Vector3());
+    console.log("[CENTERING] BBox size:", boxSize.x.toFixed(2), boxSize.y.toFixed(2), boxSize.z.toFixed(2));
     rootGroup.position.sub(center);
+    console.log("[CENTERING] Root pos:", rootGroup.position.x.toFixed(2), rootGroup.position.y.toFixed(2), rootGroup.position.z.toFixed(2));
     
     // Adjust camera to view the model
-    const size = box.getSize(new THREE.Vector3());
-    const maxDim = Math.max(size.x, size.y, size.z);
+    // Recalculate bounding box after centering to get accurate size
+    const boxAfterCentering = new THREE.Box3().setFromObject(rootGroup);
+    const sizeAfterCentering = boxAfterCentering.getSize(new THREE.Vector3());
+    const maxDim = Math.max(sizeAfterCentering.x, sizeAfterCentering.y, sizeAfterCentering.z);
     const fov = viewer3D.camera.fov * (Math.PI / 180);
     let cameraZ = Math.abs(maxDim / 2 / Math.tan(fov / 2));
     cameraZ *= 1.5; // Add some distance
     viewer3D.camera.position.z = cameraZ;
     viewer3D.camera.lookAt(0, 0, 0);
+    console.log("[CAMERA] Positioned at Z=" + cameraZ.toFixed(2) + ", model maxDim=" + maxDim.toFixed(2));
     
+    // Add model to scene
     viewer3D.scene.add(rootGroup);
     viewer3D.mesh = rootGroup;
     
-    console.log(`[3D] Rendered geometry with ${cubeCount} cubes from ${boneCount} bones`);
+    console.log("[VIEWPORT] Model centered and added to scene.");
   } catch (err) {
     console.error(`[3D] Error rendering geometry:`, err);
     console.error("[3D] Error stack:", err.stack);
