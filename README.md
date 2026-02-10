@@ -67,7 +67,7 @@ Bedrock-Addon-Builder/
 
 1. **Clone the repository**
 ```bash
-git clone <repository-url>
+git clone https://github.com/jasonmdong/Bedrock-Addon-Builder
 cd Bedrock-Addon-Builder
 ```
 
@@ -91,7 +91,7 @@ python run.py
 ```
 
 5. **Access the application**
-Open your browser to `http://localhost:7860`
+Open your browser to `http://localhost:7860` or `http://127.0.0.1:7860`
 
 ### Docker Deployment
 
@@ -123,40 +123,6 @@ docker run -p 7860:7860 bedrock-addon-builder
 5. **Import to Minecraft**
    - Open the downloaded file with Minecraft Bedrock Edition
    - Enable the behavior and resource packs in your world settings
-
-## API Endpoints
-
-### Mob Management
-- `GET /api/mobs` - List all custom mobs
-- `GET /api/mobs/{name}` - Get specific mob data
-- `POST /api/mobs/{name}` - Create/update a mob
-- `DELETE /api/mobs/{name}` - Delete a mob
-- `POST /api/mobs/{name}/duplicate` - Duplicate a mob
-- `GET /api/mobs/{name}/texture` - Get mob texture
-- `POST /api/mobs/{name}/texture` - Save mob texture
-
-### Spec Operations
-- `GET /api/spec` - Get current mob specification
-- `PUT /api/spec` - Replace entire specification
-- `POST /api/spec/patch` - Patch specific fields
-- `POST /api/spec/validate` - Validate specification
-- `POST /api/spec/llm` - AI-powered spec editing
-
-### Building & Export
-- `POST /api/build` - Build addon bundle
-- `GET /download/{name}` - Download generated file
-- `GET /api/templates` - Get available mob templates
-
-### Health Check
-- `GET /healthz` - Server health check
-
-## Configuration
-
-### Environment Variables
-- `PORT` - Server port (default: 7860)
-- `OPENAI_API_KEY` - OpenAI API key for LLM features
-- `GOOGLE_API_KEY` - Google Gemini API key
-- `ANTHROPIC_API_KEY` - Anthropic Claude API key
 
 ## Contributing
 Contributions are welcome! Please feel free to submit pull requests or open issues for bugs and feature requests.

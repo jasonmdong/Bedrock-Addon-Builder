@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from core import (
+from backend.core.core import (
     DEFAULTS, COLOR_WORDS, SPECS_DIR, IDENTIFIER_RE, SHORT_NAME_RE, HEX_COLOR_RE
 )
 

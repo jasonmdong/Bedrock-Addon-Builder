@@ -23,15 +23,15 @@ from pathlib import Path
 # Add backend to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from llm_scoring import (
+from backend.llm.llm_scoring import (
     GOLDEN_TESTS,
     run_golden_test,
     compare_providers,
     GoldenTestResult,
     check_semantic_consistency,
 )
-from llm import llm_rewrite_spec
-from spec_utils import validate_spec, SpecValidationError
+from backend.llm.llm import llm_rewrite_spec
+from backend.schemas.spec_utils import validate_spec, SpecValidationError
 
 
 def mock_llm_response(test) -> dict:

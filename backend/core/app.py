@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
 # Import route handlers
-from routes import (
+from backend.core.routes import (
     get_mobs,
     get_mob,
     get_mob_texture,
@@ -25,11 +25,13 @@ from routes import (
     llm_spec_mock,
     index,
     styles_css,
+    serve_js,
     healthz,
     build_form,
     api_build,
     download,
     get_templates,
+    fetch_mob_geometry,
 )
 
 
@@ -70,11 +72,13 @@ app.post("/build")(build_form)
 app.post("/api/build")(api_build)
 app.get("/download/{name}")(download)
 app.get("/api/templates")(get_templates)
+app.get("/api/geometry/{mob_name}")(fetch_mob_geometry)
 app.post("/api/spec/llm_mock")(llm_spec_mock)
 
 # Static routes
 app.get("/")(index)
 app.get("/styles.css")(styles_css)
+app.get("/js/{filename}")(serve_js)
 app.get("/healthz")(healthz)
 
 # =========================
