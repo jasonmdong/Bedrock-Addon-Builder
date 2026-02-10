@@ -59,10 +59,17 @@ def _manifest_version(manifest: dict) -> list:
     return manifest.get("header", {}).get("version") or [1, 0, 0]
 
 
-def patch_resource_pack(res_root: Path, specs: list[dict]):
+def patch_resource_pack(res_root: Path, specs: list[dict], textures_dir: Path = None):
     """Patch a resource pack with custom mob textures, entities, and manifests."""
+    import shutil
     ent_dir = res_root / "entity"
     ent_dir.mkdir(parents=True, exist_ok=True)
+    
+    geo_dir = res_root / "models" / "entity"
+    geo_dir.mkdir(parents=True, exist_ok=True)
+
+    rc_dir = res_root / "render_controllers"
+    rc_dir.mkdir(parents=True, exist_ok=True)
 
     texts_dir = res_root / "texts"
     texts_dir.mkdir(parents=True, exist_ok=True)
@@ -79,22 +86,64 @@ def patch_resource_pack(res_root: Path, specs: list[dict]):
         "texture_data": {}
     }
 
+    # Create a truly generic render controller for custom geometries
+    generic_rc_path = rc_dir / "custom_mob.render_controller.json"
+    generic_rc = {
+        "format_version": "1.8.0",
+        "render_controllers": {
+            "controller.render.custom_mob": {
+                "geometry": "Geometry.default",
+                "materials": [ { "*": "Material.default" } ],
+                "textures": [ "Texture.default" ]
+            }
+        }
+    }
+    generic_rc_path.write_text(json.dumps(generic_rc, indent=2), encoding="utf-8")
+
     first_png = None
 
     for spec in specs:
         client_file = ent_dir / f"{spec['short_name']}.client.entity.json"
-        textures_dir = res_root / "textures" / "entity" / spec["short_name"]
-        textures_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Handle custom geometry
+        actual_geometry = spec.get("geometry", DEFAULTS["geometry"])
+        actual_rc = spec.get("render_controller", DEFAULTS["render_controller"])
+        
+        custom_geo = spec.get("geometry_json")
+        if custom_geo and isinstance(custom_geo, dict) and "minecraft:geometry" in custom_geo:
+            # Ensure the geometry has a unique identifier based on the mob name
+            unique_geo_id = f"geometry.{spec['short_name']}.custom"
+            try:
+                # Force the internal identifier to be unique to this mob
+                custom_geo["minecraft:geometry"][0]["description"]["identifier"] = unique_geo_id
+                actual_geometry = unique_geo_id
+                # Use our generic render controller for custom geometries to ensure they show up
+                actual_rc = "controller.render.custom_mob"
+            except (KeyError, IndexError):
+                pass
+                
+            geo_file = geo_dir / f"{spec['short_name']}.geo.json"
+            geo_file.write_text(json.dumps(custom_geo, indent=2), encoding="utf-8")
+        
+        mob_textures_dir = res_root / "textures" / "entity" / spec["short_name"]
+        mob_textures_dir.mkdir(parents=True, exist_ok=True)
 
-        png_path = textures_dir / f"{spec['short_name']}.png"
-        mers_tga = textures_dir / f"{spec['short_name']}_mers.tga"
-        texset = textures_dir / f"{spec['short_name']}.texture_set.json"
+        png_path = mob_textures_dir / f"{spec['short_name']}.png"
+        mers_tga = mob_textures_dir / f"{spec['short_name']}_mers.tga"
+        texset = mob_textures_dir / f"{spec['short_name']}.texture_set.json"
 
-        # Try to copy persistent texture if it exists
-        persistent_png = Path("specs") / f"{spec['short_name']}.png"
-        if persistent_png.exists():
-            import shutil
-            shutil.copyfile(persistent_png, png_path)
+        # Try to copy texture from client-provided textures_dir first
+        if textures_dir:
+            client_texture = textures_dir / f"{spec['short_name']}.png"
+            if client_texture.exists():
+                shutil.copyfile(client_texture, png_path)
+        
+        # Fallback: try server-side SPECS_DIR
+        if not png_path.exists():
+            from core import SPECS_DIR
+            persistent_png = SPECS_DIR / f"{spec['short_name']}.png"
+            if persistent_png.exists():
+                shutil.copyfile(persistent_png, png_path)
 
         if not png_path.exists():
             col = spec.get("color_rgb", COLOR_WORDS.get("red"))
@@ -126,8 +175,8 @@ def patch_resource_pack(res_root: Path, specs: list[dict]):
                     "min_engine_version": "1.8.0",
                     "materials": {"default": "entity_alphatest"},
                     "textures": {"default": f"textures/entity/{spec['short_name']}/{spec['short_name']}"},
-                    "geometry": {"default": spec.get("geometry", DEFAULTS["geometry"])},
-                    "render_controllers": [spec.get("render_controller", DEFAULTS["render_controller"])]
+                    "geometry": {"default": actual_geometry},
+                    "render_controllers": [actual_rc]
                 }
             }
         }
@@ -256,6 +305,17 @@ def patch_behavior_pack(beh_root: Path, specs: list[dict]):
                 }
             }
         }
+
+        # Merge custom components from spec
+        custom_components = spec.get("components", {})
+        if custom_components:
+            for k, v in custom_components.items():
+                if v is None:
+                    if k in entity["minecraft:entity"]["components"]:
+                        del entity["minecraft:entity"]["components"][k]
+                else:
+                    entity["minecraft:entity"]["components"][k] = v
+
         ent_file.write_text(json.dumps(entity, indent=2), encoding="utf-8")
 
     if lang_lines:

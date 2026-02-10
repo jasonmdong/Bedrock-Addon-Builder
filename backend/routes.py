@@ -3,18 +3,23 @@ import tempfile
 import uuid
 from pathlib import Path
 from typing import Optional
+import json
+import httpx
 
 from fastapi import File, Form, HTTPException, Body, UploadFile, Response
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, JSONResponse
+import shutil
 
 from spec_utils import (
     read_mob_spec, write_mob_spec, delete_mob_spec, list_mob_names,
     read_current_spec, write_current_spec, apply_spec_patch,
-    SpecValidationError
+    validate_spec, SpecValidationError
 )
 from llm import llm_rewrite_spec
 from packaging import build_addon
-import shutil
+from builders import make_png_rgba
+
+from core import BACKEND_DIR, COLOR_WORDS, SPECS_DIR, FRONTEND_DIR, LOCAL_LLM_DEV
 
 
 def _save_upload(tmpdir: Path, uf: Optional[UploadFile]) -> Optional[Path]:
@@ -55,7 +60,8 @@ def _select_artifact(artifacts: dict, build_mode: str) -> tuple[str, Path]:
 def _build_and_bundle(res_path: Optional[Path],
                       beh_path: Optional[Path],
                       specs_override: Optional[list[dict]] = None,
-                      build_mode: str = "bundle") -> tuple[str, Path, dict]:
+                      build_mode: str = "bundle",
+                      textures_dir: Optional[Path] = None) -> tuple[str, Path, dict]:
     """Build and bundle addon, selecting appropriate specs."""
     if specs_override:
         from spec_utils import validate_spec
@@ -70,7 +76,7 @@ def _build_and_bundle(res_path: Optional[Path],
         print(f"[BUILD] Using all discovered mobs: {[s.get('short_name') for s in specs]}")
 
     out_dir = Path(tempfile.mkdtemp(prefix="out_"))
-    artifacts = build_addon(specs, out_dir, res_path, beh_path)
+    artifacts = build_addon(specs, out_dir, res_path, beh_path, textures_dir=textures_dir)
     kind, artifact_path = _select_artifact(artifacts, build_mode)
     return kind, artifact_path, artifacts
 
@@ -80,6 +86,64 @@ def _build_and_bundle(res_path: Optional[Path],
 def get_mobs():
     """List all mob names."""
     return {"mobs": list_mob_names()}
+
+
+def get_templates():
+    """Get vanilla mob templates."""
+    from core import BACKEND_DIR
+    import json
+    path = BACKEND_DIR / "data" / "vanilla_mobs.json"
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception as e:
+            print(f"Failed to load templates: {e}")
+    return {"mobs": {}}
+
+
+async def fetch_mob_geometry(mob_name: str):
+    """Fetch mob geometry JSON from Mojang's bedrock-samples repository."""
+    if not mob_name:
+        raise HTTPException(status_code=400, detail="mob_name is required")
+    
+    # Sanitize mob_name to prevent directory traversal
+    safe_name = mob_name.strip().replace("..", "").replace("/", "")
+    
+    url = f"https://raw.githubusercontent.com/Mojang/bedrock-samples/main/resource_pack/models/entity/{safe_name}.geo.json"
+    
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(url)
+            
+            if response.status_code == 404:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Geometry file not found for mob '{mob_name}' on bedrock-samples repository"
+                )
+            
+            if response.status_code != 200:
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail=f"Failed to fetch geometry from GitHub (status {response.status_code})"
+                )
+            
+            # Parse the JSON to ensure it's valid
+            try:
+                geometry_data = response.json()
+            except json.JSONDecodeError:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Retrieved file is not valid JSON"
+                )
+            
+            return {"geometry": geometry_data, "url": url}
+    
+    except httpx.HTTPError as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch geometry from GitHub: {str(e)}"
+        )
+
 
 
 def get_mob(name: str):
@@ -95,8 +159,8 @@ def get_mob(name: str):
 def get_mob_texture(name: str):
     """Get a mob's texture image."""
     from builders import make_png_rgba
-    from core import COLOR_WORDS
-    path = Path("specs") / f"{name}.png"
+    from core import COLOR_WORDS, SPECS_DIR
+    path = SPECS_DIR / f"{name}.png"
     if path.exists():
         return FileResponse(path, media_type="image/png")
     # Fallback to a generated one based on the spec
@@ -108,7 +172,8 @@ def get_mob_texture(name: str):
 
 async def save_mob_texture(name: str, file: UploadFile = File(...)):
     """Save a custom texture for a mob."""
-    path = Path("specs") / f"{name}.png"
+    from core import SPECS_DIR
+    path = SPECS_DIR / f"{name}.png"
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("wb") as f:
         shutil.copyfileobj(file.file, f)
@@ -177,16 +242,99 @@ async def patch_spec(operations: list[dict] = Body(...)):
 def llm_spec_editor(payload: dict = Body(...)):
     """Use LLM to rewrite a spec."""
     data = payload or {}
-    prompt = data.get("prompt", "")
-    if not prompt or not prompt.strip():
+    prompt = data.get("prompt") or data.get("instruction") or ""
+    if not prompt or not str(prompt).strip():
         raise HTTPException(status_code=400, detail="prompt is required")
     provider = data.get("provider")
     api_key = data.get("api_key")
-    print(f"[LLM] provider={provider} prompt_len={len(prompt.strip())}")
-    current = read_current_spec()
+    current = data.get("current_spec") or data.get("spec")
+    if not current:
+        current = read_current_spec()
+
+    print(f"[LLM] provider={provider} prompt_len={len(str(prompt).strip())}")
+
+    # if server running in local dev mode prefer mock to avoid external calls
+    if LOCAL_LLM_DEV and not provider:
+        return llm_spec_mock(payload)
+
     try:
         updated = llm_rewrite_spec(prompt, current, provider, api_key)
-        spec = write_current_spec(updated)
+    except SpecValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except RuntimeError as exc:
+        print(f"[LLM] error: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    if data.get("save"):
+        try:
+            name = updated.get("short_name") or "current"
+            saved = write_mob_spec(name, updated)
+            return {"spec": saved, "saved": True}
+        except SpecValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+
+    return {"spec": updated, "saved": False}
+
+def llm_spec_mock(payload: dict = Body(...)):
+    data = payload or {}
+    prompt = (data.get("prompt") or data.get("instruction") or "").strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="prompt is required")
+    current = data.get("current_spec") or data.get("spec")
+    if not current:
+        current = read_current_spec()
+    spec = dict(current)
+    try:
+        if "increase hp by" in prompt.lower():
+            import re
+            m = re.search(r"increase hp by\s*(\d+)", prompt.lower())
+            if m:
+                delta = int(m.group(1))
+            else:
+                delta = 1
+            spec["hp"] = int(spec.get("hp", 1)) + delta
+        if "double damage" in prompt.lower() or "double the damage" in prompt.lower():
+            spec["damage"] = float(spec.get("damage", 1)) * 2
+        ti = list(spec.get("texture_instructions") or [])
+        ti.append(f"[mock applied] {prompt}")
+        spec["texture_instructions"] = ti
+        validated = validate_spec(spec)
+        return {"spec": validated}
+    except SpecValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+def validate_spec_endpoint(payload: dict = Body(...)):
+    """Validate a spec without saving it."""
+    from spec_utils import validate_spec
+    try:
+        validated = validate_spec(payload)
+        return {"valid": True, "spec": validated}
+    except SpecValidationError as exc:
+        # Return structured error with path information
+        error_msg = str(exc)
+        # Try to extract field name from error message
+        field = None
+        for key in ["identifier", "short_name", "display_name", "hp", "damage", "speed", 
+                    "collision_box", "egg_base", "egg_overlay", "scale", "engine_min"]:
+            if key in error_msg.lower():
+                field = key
+                break
+        return {"valid": False, "error": error_msg, "field": field}
+    
+    # Use client-provided spec if available, otherwise fallback to server's 'current'
+    current = data.get("current_spec")
+    if not current:
+        current = read_current_spec()
+        
+    try:
+        updated = llm_rewrite_spec(prompt, current, provider, api_key)
+        # We don't necessarily want to write to the server's disk here if using client-side storage,
+        # but returning it is enough. We'll return it as a validated spec.
+        from spec_utils import validate_spec
+        spec = validate_spec(updated)
         print("[LLM] update complete; short_name=", spec.get("short_name"))
     except SpecValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
@@ -198,15 +346,27 @@ def llm_spec_editor(payload: dict = Body(...)):
 
 def index():
     """Serve the main HTML page."""
-    return HTMLResponse(Path("index.html").read_text(encoding="utf-8"))
+    from core import FRONTEND_DIR
+    return HTMLResponse((FRONTEND_DIR / "index.html").read_text(encoding="utf-8"))
 
 def styles_css():
     """Serve the main stylesheet."""
-    path = Path("styles.css")
+    from core import FRONTEND_DIR
+    path = FRONTEND_DIR / "styles.css"
     if not path.exists():
         # Fallback: minimal inline CSS if file missing
         return PlainTextResponse("/* styles.css not found */", media_type="text/css")
     return FileResponse(path, media_type="text/css")
+
+def serve_js(filename: str):
+    """Serve JavaScript files from frontend/js directory."""
+    from core import FRONTEND_DIR
+    # Sanitize filename to prevent directory traversal
+    safe_filename = filename.replace("..", "").replace("/", "").replace("\\", "")
+    path = FRONTEND_DIR / "js" / safe_filename
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail=f"JS file not found: {safe_filename}")
+    return FileResponse(path, media_type="application/javascript")
 
 
 def healthz():
@@ -232,20 +392,49 @@ def build_form(resource: Optional[UploadFile] = File(None),
 async def api_build(resource: Optional[UploadFile] = File(None),
                     behavior: Optional[UploadFile] = File(None),
                     build_mode: str = Form("bundle"),
-                    target_mobs: Optional[str] = Form(None)):
+                    target_mobs: Optional[str] = Form(None),
+                    specs_json: Optional[str] = Form(None),
+                    textures_json: Optional[str] = Form(None)):
     """Build endpoint for JSON API."""
+    import json
+    import base64
+    from spec_utils import validate_spec
+    from core import SPECS_DIR
     tmp = Path(tempfile.mkdtemp(prefix="http_"))
     try:
         specs_override = None
-        if target_mobs:
-            # target_mobs is a comma-separated list of mob names
+        # Prefer specs_json from client (localStorage) over server-side target_mobs
+        if specs_json:
+            try:
+                raw_specs = json.loads(specs_json)
+                specs_override = [validate_spec(s) for s in raw_specs]
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Invalid specs_json: {e}")
+        elif target_mobs:
+            # Fallback: target_mobs is a comma-separated list of mob names from server
             names = [n.strip() for n in target_mobs.split(",") if n.strip()]
             if names:
                 specs_override = [read_mob_spec(n) for n in names]
 
+        # Save textures from localStorage to temp directory for build process
+        textures_dir = tmp / "textures"
+        textures_dir.mkdir(parents=True, exist_ok=True)
+        if textures_json:
+            try:
+                textures = json.loads(textures_json)
+                for mob_name, base64_data in textures.items():
+                    # base64_data is like "data:image/png;base64,iVBORw0..."
+                    if "," in base64_data:
+                        base64_data = base64_data.split(",", 1)[1]
+                    png_bytes = base64.b64decode(base64_data)
+                    tex_path = textures_dir / f"{mob_name}.png"
+                    tex_path.write_bytes(png_bytes)
+            except Exception as e:
+                print(f"[BUILD] Warning: Failed to process textures: {e}")
+
         res_path = _save_upload(tmp, resource)
         beh_path = _save_upload(tmp, behavior)
-        kind, artifact, artifacts = _build_and_bundle(res_path, beh_path, specs_override=specs_override, build_mode=build_mode)
+        kind, artifact, artifacts = _build_and_bundle(res_path, beh_path, specs_override=specs_override, build_mode=build_mode, textures_dir=textures_dir)
 
         downloads = {
             "bundle": f"/download/{Path(artifacts['bundle_zip']).name}",

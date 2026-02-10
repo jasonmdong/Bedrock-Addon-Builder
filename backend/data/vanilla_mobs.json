@@ -1,0 +1,282 @@
+{
+  "mobs": {
+    "zombie": {
+      "identifier": "minecraft:zombie",
+      "display_name": "Zombie",
+      "short_name": "zombie",
+      "engine_min": [1, 21, 110],
+      "hp": 20,
+      "damage": 3,
+      "speed": 0.23,
+      "collision_box": {"width": 0.6, "height": 1.9},
+      "geometry": "geometry.zombie",
+      "render_controller": "controller.render.zombie",
+      "texture_hint": "green skin, blue shirt, purple pants",
+      "egg_base": "#00A411",
+      "egg_overlay": "#385223",
+      "scale": 1.0,
+      "color_rgb": [255, 0, 0],
+      "geometry_json": {},
+      "texture_instructions": [],
+      "components": {
+        "minecraft:burns_in_daylight": {}
+      }
+    },
+    "creeper": {
+      "identifier": "minecraft:creeper",
+      "display_name": "Creeper",
+      "short_name": "creeper",
+      "engine_min": [1, 21, 110],
+      "hp": 20,
+      "damage": 3,
+      "speed": 0.2,
+      "collision_box": {"width": 0.6, "height": 1.8},
+      "geometry": "geometry.creeper",
+      "render_controller": "controller.render.creeper",
+      "texture_hint": "green pixelated pattern",
+      "egg_base": "#0DA70B",
+      "egg_overlay": "#000000",
+      "scale": 1.0,
+      "color_rgb": [255, 0, 0],
+      "geometry_json": {},
+      "texture_instructions": [],
+      "components": {
+        "minecraft:behavior.swell": {
+          "start_distance": 2.5,
+          "stop_distance": 6.0,
+          "priority": 2
+        },
+        "minecraft:explode": {
+          "fuse_length": 1.5,
+          "power": 3,
+          "causes_fire": false,
+          "destroy_affected_by_griefing": true
+        },
+        "minecraft:behavior.melee_attack": null
+      }
+    },
+    "skeleton": {
+      "identifier": "minecraft:skeleton",
+      "display_name": "Skeleton",
+      "short_name": "skeleton",
+      "engine_min": [1, 21, 110],
+      "hp": 20,
+      "damage": 2,
+      "speed": 0.25,
+      "collision_box": {"width": 0.6, "height": 1.9},
+      "geometry": "geometry.skeleton",
+      "render_controller": "controller.render.skeleton",
+      "texture_hint": "grey bones",
+      "egg_base": "#C1C1C1",
+      "egg_overlay": "#494949",
+      "scale": 1.0,
+      "color_rgb": [255, 0, 0],
+      "geometry_json": {},
+      "texture_instructions": [],
+      "components": {
+        "minecraft:burns_in_daylight": {}
+      }
+    },
+    "spider": {
+      "identifier": "minecraft:spider",
+      "display_name": "Spider",
+      "short_name": "spider",
+      "engine_min": [1, 21, 110],
+      "hp": 16,
+      "damage": 2,
+      "speed": 0.3,
+      "collision_box": {"width": 1.4, "height": 0.9},
+      "geometry": "geometry.spider",
+      "render_controller": "controller.render.spider",
+      "texture_hint": "dark brown with red eyes",
+      "egg_base": "#342D27",
+      "egg_overlay": "#A80E0E",
+      "scale": 1.0,
+      "color_rgb": [255, 0, 0],
+      "geometry_json": {},
+      "texture_instructions": [],
+      "components": {
+        "minecraft:can_climb": {}
+      }
+    },
+    "cow": {
+      "identifier": "minecraft:cow",
+      "display_name": "Cow",
+      "short_name": "cow",
+      "engine_min": [1, 21, 110],
+      "hp": 10,
+      "damage": 0,
+      "speed": 0.25,
+      "collision_box": {"width": 0.9, "height": 1.4},
+      "geometry": "geometry.cow",
+      "render_controller": "controller.render.cow",
+      "texture_hint": "brown and white spots",
+      "egg_base": "#443626",
+      "egg_overlay": "#A1A1A1",
+      "scale": 1.0,
+      "color_rgb": [255, 0, 0],
+      "geometry_json": {},
+      "texture_instructions": [],
+      "components": {
+        "minecraft:behavior.panic": { "speed_multiplier": 1.25 },
+        "minecraft:behavior.tempt": { "speed_multiplier": 1.2, "items": ["wheat"] }
+      }
+    },
+    "pig": {
+      "identifier": "minecraft:pig",
+      "display_name": "Pig",
+      "short_name": "pig",
+      "engine_min": [1, 21, 110],
+      "hp": 10,
+      "damage": 0,
+      "speed": 0.25,
+      "collision_box": {"width": 0.9, "height": 0.9},
+      "geometry": "geometry.pig",
+      "render_controller": "controller.render.pig",
+      "texture_hint": "pink skin",
+      "egg_base": "#F0A5A2",
+      "egg_overlay": "#DB635F",
+      "scale": 1.0,
+      "color_rgb": [255, 0, 0],
+      "geometry_json": {},
+      "texture_instructions": [],
+      "components": {
+        "minecraft:behavior.panic": { "speed_multiplier": 1.25 },
+        "minecraft:behavior.tempt": { "speed_multiplier": 1.2, "items": ["carrot", "potato", "beetroot"] }
+      }
+    },
+    "sheep": {
+      "identifier": "minecraft:sheep",
+      "display_name": "Sheep",
+      "short_name": "sheep",
+      "engine_min": [1, 21, 110],
+      "hp": 8,
+      "damage": 0,
+      "speed": 0.23,
+      "collision_box": {"width": 0.9, "height": 1.3},
+      "geometry": "geometry.sheep",
+      "render_controller": "controller.render.sheep",
+      "texture_hint": "white wool",
+      "egg_base": "#E7E7E7",
+      "egg_overlay": "#FFB5B5",
+      "scale": 1.0,
+      "color_rgb": [255, 0, 0],
+      "geometry_json": {},
+      "texture_instructions": [],
+      "components": {
+        "minecraft:behavior.panic": { "speed_multiplier": 1.25 },
+        "minecraft:behavior.tempt": { "speed_multiplier": 1.2, "items": ["wheat"] }
+      }
+    },
+    "chicken": {
+      "identifier": "minecraft:chicken",
+      "display_name": "Chicken",
+      "short_name": "chicken",
+      "engine_min": [1, 21, 110],
+      "hp": 4,
+      "damage": 0,
+      "speed": 0.25,
+      "collision_box": {"width": 0.4, "height": 0.7},
+      "geometry": "geometry.chicken",
+      "render_controller": "controller.render.chicken",
+      "texture_hint": "white feathers, red wattle",
+      "egg_base": "#FEFEFE",
+      "egg_overlay": "#A00000",
+      "scale": 1.0,
+      "color_rgb": [255, 0, 0],
+      "geometry_json": {},
+      "texture_instructions": [],
+      "components": {
+        "minecraft:behavior.panic": { "speed_multiplier": 1.25 },
+        "minecraft:behavior.tempt": { "speed_multiplier": 1.2, "items": ["wheat_seeds", "pumpkin_seeds", "melon_seeds", "beetroot_seeds"] }
+      }
+    },
+    "iron_golem": {
+      "identifier": "minecraft:iron_golem",
+      "display_name": "Iron Golem",
+      "short_name": "iron_golem",
+      "engine_min": [1, 21, 110],
+      "hp": 100,
+      "damage": 15,
+      "speed": 0.25,
+      "collision_box": {"width": 1.4, "height": 2.9},
+      "geometry": "geometry.iron_golem",
+      "render_controller": "controller.render.iron_golem",
+      "texture_hint": "iron plates with vine patterns",
+      "egg_base": "#D1D1D1",
+      "egg_overlay": "#22A400",
+      "scale": 1.0,
+      "color_rgb": [255, 0, 0],
+      "geometry_json": {},
+      "texture_instructions": [],
+      "components": {
+        "minecraft:knockback_resistance": { "value": 1.0 },
+        "minecraft:behavior.nearest_attackable_target": { "entity_types": [{"filters": {"test": "is_family", "value": "monster"}}] }
+      }
+    },
+    "enderman": {
+      "identifier": "minecraft:enderman",
+      "display_name": "Enderman",
+      "short_name": "enderman",
+      "engine_min": [1, 21, 110],
+      "hp": 40,
+      "damage": 7,
+      "speed": 0.3,
+      "collision_box": {"width": 0.6, "height": 2.9},
+      "geometry": "geometry.enderman",
+      "render_controller": "controller.render.enderman",
+      "texture_hint": "black skin, purple eyes",
+      "egg_base": "#161616",
+      "egg_overlay": "#000000",
+      "scale": 1.0,
+      "color_rgb": [255, 0, 0],
+      "geometry_json": {},
+      "texture_instructions": [],
+      "components": {
+        "minecraft:teleport": { "random_teleports": true }
+      }
+    },
+    "blaze": {
+      "identifier": "minecraft:blaze",
+      "display_name": "Blaze",
+      "short_name": "blaze",
+      "engine_min": [1, 21, 110],
+      "hp": 20,
+      "damage": 6,
+      "speed": 0.23,
+      "collision_box": {"width": 0.6, "height": 1.8},
+      "geometry": "geometry.blaze",
+      "render_controller": "controller.render.blaze",
+      "texture_hint": "yellow floating rods, smoke",
+      "egg_base": "#F6B201",
+      "egg_overlay": "#FFF87E",
+      "scale": 1.0,
+      "color_rgb": [255, 0, 0],
+      "geometry_json": {},
+      "texture_instructions": [],
+      "components": {
+        "minecraft:behavior.float": { "priority": 0 }
+      }
+    },
+    "slime": {
+      "identifier": "minecraft:slime",
+      "display_name": "Slime",
+      "short_name": "slime",
+      "engine_min": [1, 21, 110],
+      "hp": 16,
+      "damage": 4,
+      "speed": 0.2,
+      "collision_box": {"width": 2.04, "height": 2.04},
+      "geometry": "geometry.slime",
+      "render_controller": "controller.render.slime",
+      "texture_hint": "translucent green cube",
+      "egg_base": "#51A03E",
+      "egg_overlay": "#7EBF6E",
+      "scale": 1.0,
+      "color_rgb": [255, 0, 0],
+      "geometry_json": {},
+      "texture_instructions": [],
+      "components": {}
+    }
+  }
+}

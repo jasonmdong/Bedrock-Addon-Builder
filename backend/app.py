@@ -21,12 +21,17 @@ from routes import (
     replace_spec,
     patch_spec,
     llm_spec_editor,
+    validate_spec_endpoint,
+    llm_spec_mock,
     index,
     styles_css,
+    serve_js,
     healthz,
     build_form,
     api_build,
     download,
+    get_templates,
+    fetch_mob_geometry,
 )
 
 
@@ -60,15 +65,20 @@ app.get("/api/spec")(get_spec)
 app.put("/api/spec")(replace_spec)
 app.post("/api/spec/patch")(patch_spec)
 app.post("/api/spec/llm")(llm_spec_editor)
+app.post("/api/spec/validate")(validate_spec_endpoint)
 
 # Build routes
 app.post("/build")(build_form)
 app.post("/api/build")(api_build)
 app.get("/download/{name}")(download)
+app.get("/api/templates")(get_templates)
+app.get("/api/geometry/{mob_name}")(fetch_mob_geometry)
+app.post("/api/spec/llm_mock")(llm_spec_mock)
 
 # Static routes
 app.get("/")(index)
 app.get("/styles.css")(styles_css)
+app.get("/js/{filename}")(serve_js)
 app.get("/healthz")(healthz)
 
 # =========================
