@@ -20,5 +20,5 @@ EXPOSE 7860
 ENV PYTHONUNBUFFERED=1
 
 # Add backend to Python path and start the server
-ENV PYTHONPATH="/app/backend:$PYTHONPATH"
-CMD gunicorn -w 4 -k uvicorn.workers.UvicornWorker backend.app:app --bind 0.0.0.0:7860
+ENV PYTHONPATH="/app:$PYTHONPATH"
+CMD gunicorn -w 4 -k uvicorn.workers.UvicornWorker backend.core.app:app --bind 0.0.0.0:7860
