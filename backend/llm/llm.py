@@ -292,3 +292,188 @@ def llm_rewrite_spec(prompt: str, current: dict, provider: str, api_key: Optiona
             )
     
     return output_spec
+
+
+GEOMETRY_SYSTEM_PROMPT = """You are a Minecraft Bedrock Edition geometry generator. You generate valid minecraft:geometry JSON for custom mobs and entities.
+
+Output format is a valid minecraft:geometry JSON object. The structure must be:
+{
+  "format_version": "1.12.0",
+  "minecraft:geometry": [
+    {
+      "description": {
+        "identifier": "geometry.custom_mob",
+        "texture_width": 64,
+        "texture_height": 64,
+        "visible_bounds_width": 2,
+        "visible_bounds_height": 2,
+        "visible_bounds_offset": [0, 1, 0]
+      },
+      "bones": [
+        {
+          "name": "root",
+          "pivot": [0, 0, 0]
+        },
+        {
+          "name": "body",
+          "parent": "root",
+          "pivot": [0, 12, 0],
+          "cubes": [
+            {
+              "origin": [-4, 8, -3],
+              "size": [8, 8, 6],
+              "uv": [0, 0]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+
+Key rules:
+1. All coordinates use Y-up coordinate system (Y is vertical)
+2. pivot defines the rotation point for a bone
+3. origin is the minimum corner of a cube (not center)
+4. size is [width_x, height_y, depth_z]
+5. Parent bones must be defined before children reference them
+6. Humanoid mobs typically have: root, body, head, left_arm, right_arm, left_leg, right_leg
+7. Quadruped mobs typically have: root, body, head, leg0-3
+8. Use appropriate UV coordinates for box UV mapping
+
+When modifying existing geometry, preserve the structure and only change what's requested.
+Output ONLY valid JSON, no explanations."""
+
+
+def _get_geometry_system_prompt() -> str:
+    """Get the system prompt for geometry generation."""
+    return GEOMETRY_SYSTEM_PROMPT
+
+
+def llm_generate_geometry(prompt: str, current_geometry: dict | None, provider: str, api_key: str | None) -> dict:
+    """Generate or modify Bedrock geometry JSON using LLM."""
+    provider_key = (provider or DEFAULT_LLM_PROVIDER or "openai").lower()
+    
+    start_time = time.time()
+    output = None
+    error_msg = None
+    
+    user_content = prompt.strip()
+    if current_geometry:
+        user_content = f"Current geometry:\n{json.dumps(current_geometry, indent=2)}\n\nInstruction:\n{prompt.strip()}"
+    
+    try:
+        if provider_key == "deepseek":
+            output = _call_geometry_deepseek(user_content, api_key)
+        elif provider_key == "gemini":
+            output = _call_geometry_gemini(user_content, api_key)
+        elif provider_key == "claude":
+            output = _call_geometry_claude(user_content, api_key)
+        elif provider_key == "ollama":
+            output = _call_geometry_ollama(user_content, api_key)
+        else:
+            output = _call_geometry_openai(user_content, api_key)
+            
+    except Exception as exc:
+        error_msg = str(exc)
+        raise
+    finally:
+        duration_ms = int((time.time() - start_time) * 1000)
+        print(f"[LLM] Geometry generation took {duration_ms}ms, provider={provider_key}")
+    
+    return output
+
+
+def _call_geometry_openai(user_content: str, api_key: str | None) -> dict:
+    """Call OpenAI to generate geometry."""
+    client = _get_openai_client(api_key)
+    messages = [
+        {"role": "system", "content": _get_geometry_system_prompt()},
+        {"role": "user", "content": user_content}
+    ]
+    resp = client.chat.completions.create(
+        model=LLM_MODEL_NAME,
+        response_format={"type": "json_object"},
+        messages=messages
+    )
+    return json.loads(resp.choices[0].message.content)
+
+
+def _call_geometry_deepseek(user_content: str, api_key: str | None) -> dict:
+    """Call DeepSeek to generate geometry."""
+    key = api_key or os.environ.get("DEEPSEEK_API_KEY")
+    if not key:
+        raise RuntimeError("Provide DEEPSEEK_API_KEY")
+    client = OpenAI(api_key=key, base_url="https://api.deepseek.com")
+    resp = client.chat.completions.create(
+        model=DEEPSEEK_MODEL_NAME,
+        messages=[
+            {"role": "system", "content": _get_geometry_system_prompt()},
+            {"role": "user", "content": user_content}
+        ],
+        response_format={"type": "json_object"}
+    )
+    return json.loads(resp.choices[0].message.content)
+
+
+def _call_geometry_gemini(user_content: str, api_key: str | None) -> dict:
+    """Call Gemini to generate geometry."""
+    if not GENAI_AVAILABLE:
+        raise RuntimeError("google-genai package not installed")
+    key = api_key or os.environ.get("GEMINI_API_KEY")
+    if not key:
+        raise RuntimeError("Provide GEMINI_API_KEY")
+    client = genai.Client(api_key=key)
+    response = client.models.generate_content(
+        model=GEMINI_MODEL_NAME,
+        contents=user_content,
+        config={
+            "system_instruction": _get_geometry_system_prompt(),
+            "response_mime_type": "application/json"
+        }
+    )
+    return json.loads(response.text)
+
+
+def _call_geometry_claude(user_content: str, api_key: str | None) -> dict:
+    """Call Claude to generate geometry."""
+    if anthropic is None:
+        raise RuntimeError("anthropic package not installed")
+    key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+    if not key:
+        raise RuntimeError("Provide ANTHROPIC_API_KEY")
+    client = anthropic.Anthropic(api_key=key)
+    response = client.messages.create(
+        model=CLAUDE_MODEL_NAME,
+        max_tokens=4096,
+        system=_get_geometry_system_prompt(),
+        messages=[{"role": "user", "content": user_content}]
+    )
+    content = response.content[0].text
+    if "```json" in content:
+        content = content.split("```json")[1].split("```")[0]
+    elif "```" in content:
+        content = content.split("```")[1].split("```")[0]
+    return json.loads(content)
+
+
+def _call_geometry_ollama(user_content: str, api_key: str | None) -> dict:
+    """Call Ollama to generate geometry."""
+    if OpenAI is None:
+        raise RuntimeError("openai package not installed")
+    client = OpenAI(base_url=f"{OLLAMA_BASE_URL}/v1", api_key="ollama")
+    response = client.chat.completions.create(
+        model=OLLAMA_MODEL_NAME,
+        messages=[
+            {"role": "system", "content": _get_geometry_system_prompt()},
+            {"role": "user", "content": user_content + "\n\nRespond with ONLY the JSON, no explanation."}
+        ],
+        temperature=0.2
+    )
+    content = response.choices[0].message.content
+    if "```json" in content:
+        content = content.split("```json")[1].split("```")[0]
+    elif "```" in content:
+        content = content.split("```")[1].split("```")[0]
+    return json.loads(content.strip())
+

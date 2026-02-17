@@ -101,11 +101,25 @@ function initApp() {
   initPainter();
   initViewportControls();
   initGeometryCopy();
+  initGeometryGenerator();
   initLlmHandlers();
   initFileUploadLabels();
   initTemplateSelect();
   initBuildHandlers();
   initEventListeners();
+  
+  // Initialize 3D Editor controls
+  if (typeof init3DEditorControls === 'function') {
+    init3DEditorControls();
+    // Retry after a short delay to ensure DOM is fully ready
+    setTimeout(() => {
+      const toolBtns = document.querySelectorAll('.editor-tool-btn');
+      if (toolBtns.length > 0) {
+        console.log('[App] Delayed 3D editor init - buttons found');
+        init3DEditorControls();
+      }
+    }, 100);
+  }
   
   // Load templates and initial data
   loadTemplates();

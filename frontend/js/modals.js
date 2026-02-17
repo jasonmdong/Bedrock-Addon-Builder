@@ -163,7 +163,7 @@ function initLoadTemplateModal() {
     await selectMob(safeName);
     
     // Fetch and display geometry from bedrock-samples
-    await fetchAndDisplayGeometry(templateId);
+    await fetchAndDisplayGeometry(templateId, safeName);  // Pass mob name for texture
     
     // Close modal
     loadTemplateModalOverlay.classList.add("hidden");

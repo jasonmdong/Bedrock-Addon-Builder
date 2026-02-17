@@ -72,6 +72,8 @@ function initPainter() {
     const base64Data = tempCanvas.toDataURL("image/png");
     if (saveUserMobTexture(currentMobName, base64Data)) {
       setStatus(`Texture saved for ${currentMobName}.`);
+      // Refresh the 3D viewer to show the updated texture
+      refresh3DTexture(currentMobName);
     } else {
       setStatus(`Failed to save texture.`, true);
     }

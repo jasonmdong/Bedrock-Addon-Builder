@@ -15,7 +15,7 @@ from backend.schemas.spec_utils import (
     read_current_spec, write_current_spec, apply_spec_patch,
     validate_spec, SpecValidationError
 )
-from backend.llm.llm import llm_rewrite_spec
+from backend.llm.llm import llm_rewrite_spec, llm_generate_geometry
 from backend.core.packaging import build_addon
 from backend.core.builders import make_png_rgba
 
@@ -330,6 +330,31 @@ def llm_spec_editor(payload: dict = Body(...)):
             raise HTTPException(status_code=422, detail=str(exc))
 
     return {"spec": updated, "saved": False}
+
+
+def llm_geometry_generate(payload: dict = Body(...)):
+    """Use LLM to generate or modify Bedrock geometry JSON."""
+    data = payload or {}
+    prompt = data.get("prompt") or ""
+    if not prompt or not str(prompt).strip():
+        raise HTTPException(status_code=400, detail="prompt is required")
+    
+    provider = data.get("provider")
+    api_key = data.get("api_key")
+    current_geometry = data.get("current_geometry")
+    
+    print(f"[LLM-GEOMETRY] provider={provider} prompt_len={len(str(prompt).strip())}")
+    
+    try:
+        geometry = llm_generate_geometry(prompt, current_geometry, provider, api_key)
+    except RuntimeError as exc:
+        print(f"[LLM-GEOMETRY] error: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+    except Exception as exc:
+        print(f"[LLM-GEOMETRY] unexpected error: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+    
+    return {"geometry": geometry}
 
 def llm_spec_mock(payload: dict = Body(...)):
     data = payload or {}

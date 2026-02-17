@@ -94,6 +94,10 @@ async function selectMob(name) {
   // Load texture into painter automatically
   loadTextureIntoPainter(name);
   
+  // Sync geometry viewer with the mob's base geometry
+  const geometryName = spec.geometry ? spec.geometry.replace('geometry.', '') : name;
+  await fetchAndDisplayGeometry(geometryName, name);  // Pass mob name for texture loading
+  
   // Update file tree preview
   updateFileTree(spec);
 

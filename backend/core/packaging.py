@@ -155,7 +155,7 @@ def create_mcworld(out_dir: Path,
 
 def build_addon(specs: list[dict], out_dir: Path, res_src: Optional[Path], beh_src: Optional[Path], textures_dir: Optional[Path] = None):
     """Build a complete addon bundle with resource and behavior packs."""
-    from builders import patch_resource_pack, patch_behavior_pack
+    from backend.core.builders import patch_resource_pack, patch_behavior_pack
 
     work = Path(tempfile.mkdtemp(prefix="addon_"))
     logs = io.StringIO()
