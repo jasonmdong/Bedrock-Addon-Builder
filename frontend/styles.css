@@ -73,6 +73,7 @@ aside {
   position: sticky;
   top: 0;
   align-self: flex-start;
+  transition: width 200ms ease, min-width 200ms ease, max-width 200ms ease;
 }
 
 .resizer {
@@ -90,6 +91,59 @@ aside {
 .resizer:hover, body.resizing .resizer {
   background: var(--primary);
   opacity: 0.5;
+}
+
+/* Sidebar Collapse/Expand */
+.sidebar-toggle {
+  width: 28px;
+  height: 28px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--text);
+  transition: all 0.2s;
+  padding: 0;
+}
+
+/* When sidebar is collapsed, keep toggle visible at top */
+aside#sidebar.collapsed .sidebar-toggle {
+  right: 4px !important;
+  top: 12px !important;
+}
+
+.sidebar-toggle:hover {
+  background: var(--primary);
+  color: white;
+  border-color: var(--primary);
+}
+
+aside#sidebar.collapsed {
+  width: 32px !important;
+  min-width: 32px !important;
+  max-width: 32px !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+}
+
+/* Don't let the resizer eat clicks when collapsed */
+aside#sidebar.collapsed .resizer {
+  pointer-events: none;
+}
+
+aside#sidebar.collapsed .sidebar-footer > *:not(.sidebar-toggle) {
+  opacity: 0;
+  pointer-events: none;
+}
+
+aside#sidebar.collapsed .sidebar-header,
+aside#sidebar.collapsed .mob-list,
+aside#sidebar.collapsed .user-section {
+  display: none;
 }
 
 main {
@@ -216,6 +270,7 @@ main {
   gap: 1rem;
   flex-shrink: 0;
   background: var(--card-bg);
+  position: relative;
 }
 
 .sidebar-footer label {
@@ -745,4 +800,64 @@ code { font-family: ui-monospace, SFMono-Regular, Consolas, Menlo, monospace; }
 
 #viewport-3d.cursor-move {
   cursor: move;
+}
+
+/* make the toggle a consistent size (still fits your footer) */
+.sidebar-toggle {
+  width: 28px;
+  height: 28px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  color: var(--text);
+  transition: all 0.2s;
+  padding: 0;
+}
+
+.sidebar-toggle:hover {
+  background: var(--primary);
+  color: white;
+  border-color: var(--primary);
+}
+
+/* collapsed = skinny rail, not zero */
+aside#sidebar.collapsed {
+  width: 56px !important;      /* <- rail width */
+  min-width: 56px !important;
+  max-width: 56px !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+}
+
+/* Don't let the resizer eat clicks when collapsed */
+aside#sidebar.collapsed .resizer {
+  pointer-events: none;
+  opacity: 0;
+}
+
+/* Keep footer visible, but center the toggle inside it */
+aside#sidebar.collapsed .sidebar-footer {
+  padding: 8px !important;
+  align-items: center;
+}
+
+/* Hide everything in footer except the toggle */
+aside#sidebar.collapsed .sidebar-footer > *:not(.sidebar-toggle) {
+  opacity: 0;
+  pointer-events: none;
+  height: 0;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* Hide the rest of the sidebar content when collapsed */
+aside#sidebar.collapsed .sidebar-header,
+aside#sidebar.collapsed .mob-list,
+aside#sidebar.collapsed .user-section {
+  display: none;
 }
