@@ -189,7 +189,7 @@
   </div>
   
   <!-- Bottom Section: Resource Packs & Texture Painter -->
-  <div class="row">
+  <div class="row" style="margin-top: 2rem;">
     <div class="field">
       <label>📦 Resource Pack (.zip/.mcpack)</label>
       <div style="position: relative;">
@@ -212,60 +212,66 @@
     </div>
   </div>
   
-  <div class="painter-container" id="geometry-container" style="display: none;">
-    <h2 style="margin-top: 0;">📐 Mob Geometry</h2>
-    <p class="hint">Geometry file from Mojang's bedrock-samples repository.</p>
-    <div style="position: relative; margin-bottom: 1rem;">
-      <div style="display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;">
-        <a id="geometry-url" href="#" target="_blank" rel="noopener" style="color: var(--primary); text-decoration: underline; font-size: 0.9rem;"></a>
-        <button type="button" class="secondary" id="geometry-copy" style="padding: 0.5rem 1rem; font-size: 0.9rem;">📋 Copy JSON</button>
-      </div>
-    </div>
+  <!-- Side by Side: Mob Geometry (Left) and Texture Painter (Right) -->
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-top: 2rem; margin-bottom: 2rem;">
     
-    <!-- 3D Viewport -->
-    <div style="margin-bottom: 1.5rem;">
-      <h3 style="margin-top: 0; margin-bottom: 0.75rem; font-size: 0.95rem;">3D Model Preview</h3>
-      <div id="viewport-3d" class="viewport-3d"></div>
-      <div class="viewport-controls">
-        <button type="button" class="secondary" id="viewport-reset" title="Reset view">🔄 Reset View</button>
-        <button type="button" class="secondary" id="viewport-wireframe" title="Toggle wireframe">🔲 Wireframe</button>
-        <div class="viewport-info">
-          <span>💡 Tip: Use mouse to rotate (left click), pan (right click), and scroll to zoom</span>
+    <!-- LEFT: Mob Geometry -->
+    <div class="painter-container" id="geometry-container" style="display: none; margin-top: 0;">
+      <h2 style="margin-top: 0;">📐 Mob Geometry</h2>
+      <p class="hint">Geometry file from Mojang's bedrock-samples repository.</p>
+      <div style="position: relative; margin-bottom: 1rem;">
+        <div style="display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;">
+          <a id="geometry-url" href="#" target="_blank" rel="noopener" style="color: var(--primary); text-decoration: underline; font-size: 0.9rem;"></a>
+          <button type="button" class="secondary" id="geometry-copy" style="padding: 0.5rem 1rem; font-size: 0.9rem;">📋 Copy JSON</button>
         </div>
       </div>
+      
+      <!-- 3D Viewport -->
+      <div style="margin-bottom: 1.5rem;">
+        <h3 style="margin-top: 0; margin-bottom: 0.75rem; font-size: 0.95rem;">3D Model Preview</h3>
+        <div id="viewport-3d" class="viewport-3d"></div>
+        <div class="viewport-controls">
+          <button type="button" class="secondary" id="viewport-reset" title="Reset view">🔄 Reset View</button>
+          <button type="button" class="secondary" id="viewport-wireframe" title="Toggle wireframe">🔲 Wireframe</button>
+          <div class="viewport-info">
+            <span>💡 Tip: Use mouse to rotate (left click), pan (right click), and scroll to zoom</span>
+          </div>
+        </div>
+      </div>
+      
+      <!-- JSON Viewer -->
+      <details style="margin-top: 1.5rem;">
+        <summary style="cursor: pointer; font-weight: bold; margin-bottom: 0.75rem;">View JSON Source</summary>
+        <pre id="geometry-viewer" style="background: var(--editor-bg); color: var(--editor-text); padding: 1rem; border-radius: 12px; border: 1px solid var(--border); overflow-x: auto; overflow-y: auto; max-height: 400px; margin: 0; font-size: 0.85rem;"></pre>
+      </details>
     </div>
-    
-    <!-- JSON Viewer -->
-    <details style="margin-top: 1.5rem;">
-      <summary style="cursor: pointer; font-weight: bold; margin-bottom: 0.75rem;">View JSON Source</summary>
-      <pre id="geometry-viewer" style="background: var(--editor-bg); color: var(--editor-text); padding: 1rem; border-radius: 12px; border: 1px solid var(--border); overflow-x: auto; overflow-y: auto; max-height: 400px; margin: 0; font-size: 0.85rem;"></pre>
-    </details>
-  </div>
 
-  <div class="painter-container">
-    <h2 style="margin-top: 0;">Texture Painter</h2>
-    <p class="hint">Paint the 64x64 skin for the selected mob.</p>
-    <div class="painter-layout">
-      <div class="painter-canvas-wrapper">
-        <canvas id="pixel-canvas" width="384" height="384"></canvas>
-      </div>
-      <div class="painter-tools">
-        <div class="field">
-          <label>Color</label>
-          <input type="color" id="painter-color" value="#ff0000" style="width: 100%; height: 46px; padding: 0; border: none; border-radius: 8px;">
+    <!-- RIGHT: Texture Painter -->
+    <div class="painter-container" style="margin-top: 0;">
+      <h2 style="margin-top: 0;">Texture Painter</h2>
+      <p class="hint">Paint the 64x64 skin for the selected mob.</p>
+      <div class="painter-layout">
+        <div class="painter-canvas-wrapper">
+          <canvas id="pixel-canvas" width="384" height="384"></canvas>
         </div>
-        <div class="tool-row">
-          <button type="button" class="secondary" id="painter-pencil">✏️ Pencil</button>
-          <button type="button" class="secondary" id="painter-eraser">🧽 Eraser</button>
-          <button type="button" class="secondary" id="painter-clear">🗑 Clear</button>
-        </div>
-        <div class="tool-row">
-          <button type="button" class="secondary" id="painter-load">📥 Load Current</button>
-          <button type="button" class="primary" id="painter-save">💾 Save Texture</button>
-        </div>
-        <div class="field">
-          <label>Import Image</label>
-          <input type="file" id="painter-import" accept="image/png">
+        <div class="painter-tools">
+          <div class="field">
+            <label>Color</label>
+            <input type="color" id="painter-color" value="#ff0000" style="width: 100%; height: 46px; padding: 0; border: none; border-radius: 8px;">
+          </div>
+          <div class="tool-row">
+            <button type="button" class="secondary" id="painter-pencil">✏️ Pencil</button>
+            <button type="button" class="secondary" id="painter-eraser">🧽 Eraser</button>
+            <button type="button" class="secondary" id="painter-clear">🗑 Clear</button>
+          </div>
+          <div class="tool-row">
+            <button type="button" class="secondary" id="painter-load">📥 Load Current</button>
+            <button type="button" class="primary" id="painter-save">💾 Save Texture</button>
+          </div>
+          <div class="field">
+            <label>Import Image</label>
+            <input type="file" id="painter-import" accept="image/png">
+          </div>
         </div>
       </div>
     </div>
