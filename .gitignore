@@ -1,6 +1,7 @@
 venv/
 __pycache__/
 *.pyc
+blockbench/
 
 # Local build artifacts
 # We keep .mcworld out of ignore if we want to use it as a template
