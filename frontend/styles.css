@@ -398,6 +398,83 @@ canvas#pixel-canvas {
 .build-options label { margin: 0; font-size: .95rem; }
 .build-options select { width: auto; min-width: 220px; }
 
+/* mini diff styling stuff */
+.diff-mini {
+  background: rgba(255,255,255,0.01);
+  border: 1px solid rgba(255,255,255,0.03);
+  border-radius: 8px;
+  display: flex;
+  overflow: hidden;
+  min-height: 56px;
+  max-height: 160px;
+}
+.diff-mini pre {
+  margin: 0;
+  padding: 6px 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.15;
+  white-space: pre-wrap;
+}
+.diff-mini pre:first-child {
+  width: 56px;
+  background: transparent;
+  color: var(--muted);
+  text-align: left;
+  overflow: auto;
+}
+.diff-mini pre:last-child { flex: 1; overflow: auto; }
+.diff-mini .added { color: #10b981; background: rgba(16,185,129,0.03); }
+.diff-mini .removed { color: #ef4444; background: rgba(239,68,68,0.03); }
+
+.diff-mini .context { color: var(--muted); }
+.diff-mini .collapsed { color: var(--muted); text-align: center; opacity: 0.8; }
+.diff-mini .gutter { color: var(--muted); }
+
+.llm-history-row {
+  display: grid;
+  grid-template-columns: 1fr 2fr;
+  column-gap: 12px;
+  align-items: stretch;
+  margin-bottom: 12px;
+}
+.llm-history-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0.6rem 0.8rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(255,255,255,0.01), transparent);
+  box-shadow: 0 6px 14px rgba(2,6,23,0.12);
+  position: relative;
+}
+.llm-history-card .llm-restore-btn {
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  font-size: 0.72rem;
+  padding: 0.2rem 0.45rem;
+  border-radius: 999px;
+  opacity: 0.95;
+  min-width: 44px;
+  text-transform: lowercase;
+}
+.llm-history-actions { display:flex; gap:0.4rem; margin-top:0.25rem; }
+
+.llm-mini-diff { width:100%; box-sizing:border-box; align-self:stretch; overflow:auto; }
+.llm-mini-diff .gutter { width:56px; }
+.diff-mini pre div { padding: 1px 0; }
+
+.diff-mini { border: 1px solid rgba(96,165,250,0.12); background: rgba(56,189,248,0.02); }
+.diff-mini .added { color: #16a34a; background: rgba(16,163,127,0.04); }
+.diff-mini .removed { color: #dc2626; background: rgba(220,38,38,0.04); }
+
+.diff-mini pre:first-child { text-align: left; }
+.diff-mini pre:last-child { padding-left: 6px; }
+
+.llm-history-wrap { position: relative; width: 100%; }
+
 details { margin-top: 1rem; }
 
 code { font-family: ui-monospace, SFMono-Regular, Consolas, Menlo, monospace; }

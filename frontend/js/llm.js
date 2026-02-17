@@ -36,6 +36,181 @@ function popToLlmIndex(user, index) {
   return newArr;
 }
 
+function computeMiniDiff(beforeSpec, afterSpec) {
+  function sortKeys(obj) {
+    if (obj === null || typeof obj !== 'object') return obj;
+    if (Array.isArray(obj)) return obj.map(sortKeys);
+    const out = {};
+    Object.keys(obj).sort().forEach(k => { out[k] = sortKeys(obj[k]); });
+    return out;
+  }
+  const DiffLib = (typeof Diff !== 'undefined') ? Diff : ((typeof diff !== 'undefined') ? diff : null);
+  const diffLines = DiffLib && DiffLib.diffLines ? DiffLib.diffLines : null;
+  const beforeStr = beforeSpec ? JSON.stringify(sortKeys(beforeSpec), null, 2) : '';
+  const afterStr = afterSpec ? JSON.stringify(sortKeys(afterSpec), null, 2) : '';
+  let raw = null;
+  if (diffLines) {
+    try { raw = diffLines(beforeStr, afterStr); } catch (e) { raw = null; }
+  }
+  if (!raw) {
+    const b = afterStr.split('\n');
+    raw = b.map(l => ({ value: l + '\n' }));
+  }
+
+  const out = [];
+  for (const chunk of raw) {
+    const lines = (chunk.value || '').split('\n');
+    if (lines.length && lines[lines.length-1] === '') lines.pop();
+    for (const l of lines) {
+      out.push({ text: l, added: !!chunk.added, removed: !!chunk.removed });
+    }
+  }
+  return out;
+}
+
+function escapeHtmlMini(text) {
+  const d = document.createElement('div');
+  d.textContent = String(text);
+  return d.innerHTML;
+}
+
+function renderMiniDiffEl(beforeSpec, afterSpec) {
+  const container = document.createElement('div');
+  container.className = 'diff-mini';
+  container.style.display = 'flex';
+  container.style.flexDirection = 'row';
+  container.style.alignItems = 'flex-start';
+  container.style.background = 'transparent';
+  container.style.borderRadius = '6px';
+  container.style.padding = '2px';
+
+  const gutter = document.createElement('pre');
+  gutter.style.margin = '0';
+  gutter.style.padding = '4px 6px';
+  gutter.style.width = '64px';
+  gutter.style.fontFamily = 'monospace';
+  gutter.style.fontSize = '0.72rem';
+  gutter.style.lineHeight = '1.1';
+  gutter.style.color = 'var(--muted)';
+  gutter.style.overflow = 'hidden';
+  gutter.style.whiteSpace = 'nowrap';
+  gutter.style.boxSizing = 'border-box';
+
+  const content = document.createElement('pre');
+  content.style.margin = '0';
+  content.style.padding = '4px 6px';
+  content.style.flex = '1';
+  content.style.fontFamily = 'monospace';
+  content.style.fontSize = '0.72rem';
+  content.style.lineHeight = '1.1';
+  content.style.overflow = 'auto';
+  content.style.whiteSpace = 'pre';
+
+  try {
+    function sortKeys(obj) {
+      if (obj === null || typeof obj !== 'object') return obj;
+      if (Array.isArray(obj)) return obj.map(sortKeys);
+      const out = {};
+      Object.keys(obj).sort().forEach(k => { out[k] = sortKeys(obj[k]); });
+      return out;
+    }
+    const DiffLib = (typeof Diff !== 'undefined') ? Diff : ((typeof diff !== 'undefined') ? diff : null);
+    const diffLines = DiffLib && DiffLib.diffLines ? DiffLib.diffLines : null;
+    const beforeStr = beforeSpec ? JSON.stringify(sortKeys(beforeSpec), null, 2) : '';
+    const afterStr = afterSpec ? JSON.stringify(sortKeys(afterSpec), null, 2) : '';
+    let raw = null;
+    if (diffLines) {
+      try { raw = diffLines(beforeStr, afterStr); } catch (e) { raw = null; }
+    }
+    // lcs-dp fallback for diff testing since diff library !working properly
+    if (!raw) {
+      function lcsMatrix(a, b) {
+        const n = a.length, m = b.length;
+        const dp = Array(n+1).fill(null).map(() => Array(m+1).fill(0));
+        for (let i = n-1; i >= 0; --i) {
+          for (let j = m-1; j >= 0; --j) {
+            if (a[i] === b[j]) dp[i][j] = dp[i+1][j+1] + 1;
+            else dp[i][j] = Math.max(dp[i+1][j], dp[i][j+1]);
+          }
+        }
+        return dp;
+      }
+      function buildChunks(a, b) {
+        const dp = lcsMatrix(a, b);
+        const chunks = [];
+        let i = 0, j = 0;
+        while (i < a.length || j < b.length) {
+          if (i < a.length && j < b.length && a[i] === b[j]) {
+            let val = a[i] + '\n';
+            i++; j++;
+            while (i < a.length && j < b.length && a[i] === b[j]) { val += a[i] + '\n'; i++; j++; }
+            chunks.push({ value: val });
+          } else if (j < b.length && (i === a.length || dp[i][j+1] >= dp[i+1][j])) {
+            let val = b[j] + '\n';
+            j++;
+            while (j < b.length && (i === a.length || dp[i][j+1] >= dp[i+1][j])) { val += b[j] + '\n'; j++; }
+            chunks.push({ value: val, added: true });
+          } else if (i < a.length) {
+            let val = a[i] + '\n';
+            i++;
+            while (i < a.length && (j === b.length || dp[i][j+1] < dp[i+1][j])) { val += a[i] + '\n'; i++; }
+            chunks.push({ value: val, removed: true });
+          }
+        }
+        return chunks;
+      }
+      const a = beforeStr ? beforeStr.split('\n') : [];
+      const b = afterStr ? afterStr.split('\n') : [];
+      raw = buildChunks(a, b);
+    }
+    gutter.style.whiteSpace = 'pre';
+    gutter.style.textAlign = 'right';
+
+    let oldLine = 1, newLine = 1;
+    const contentParts = [];
+    const gutterParts = [];
+    let addedCount = 0, removedCount = 0;
+    raw.forEach(chunk => {
+      const lines = (chunk.value || '').split('\n');
+      if (lines.length && lines[lines.length-1] === '') lines.pop();
+      lines.forEach(l => {
+        if (chunk.added) {
+          addedCount++;
+          contentParts.push(`<div class="diff-line added" style="white-space:pre; padding:2px 6px; background:rgba(16,185,129,0.06); color:#10b981;">+ ${escapeHtmlMini(l)}</div>`);
+          gutterParts.push(`<div class="gutter-line added" style="padding:2px 6px; color:#a7f3d0;">→ ${newLine}</div>`);
+          newLine++;
+        } else if (chunk.removed) {
+          removedCount++;
+          contentParts.push(`<div class="diff-line removed" style="white-space:pre; padding:2px 6px; background:rgba(239,68,68,0.06); color:#ef4444;">- ${escapeHtmlMini(l)}</div>`);
+          gutterParts.push(`<div class="gutter-line removed" style="padding:2px 6px; color:#fecaca;">${oldLine} →</div>`);
+          oldLine++;
+        } else {
+          contentParts.push(`<div class="diff-line context" style="white-space:pre; padding:2px 6px; color:var(--muted);">  ${escapeHtmlMini(l)}</div>`);
+          gutterParts.push(`<div class="gutter-line context" style="padding:2px 6px; color:var(--muted);">${oldLine} | ${newLine}</div>`);
+          oldLine++; newLine++;
+        }
+      });
+    });
+    gutter.innerHTML = gutterParts.join('');
+    content.innerHTML = contentParts.join('');
+    if (addedCount && removedCount) {
+      try {
+        console.groupCollapsed('[mini-diff] added+removed detected');
+        console.log('beforeStr:', beforeStr);
+        console.log('afterStr:', afterStr);
+        console.log('raw:', raw);
+        console.groupEnd();
+      } catch (e) { console.warn('mini-diff debug log failed', e); }
+    }
+  } catch (e) {
+    gutter.textContent = '';
+    content.textContent = '(diff error)';
+  }
+  container.appendChild(gutter);
+  container.appendChild(content);
+  return container;
+}
+
 async function requestLlm() {
   if (!llmPrompt) return;
   const instruction = llmPrompt.value.trim();
@@ -133,17 +308,10 @@ function renderLlmHistory() {
   llmHistoryList.innerHTML = '';
   hist.forEach((h, idx) => {
     const container = document.createElement('div');
-    container.style.display = 'flex';
-    container.style.gap = '0.5rem';
-    container.style.alignItems = 'stretch';
+    // two-column layout: card | mini-diff
+    container.className = 'llm-history-row';
     const card = document.createElement('div');
-    card.style.display = 'flex';
-    card.style.flexDirection = 'column';
-    card.style.border = '1px solid var(--border)';
-    card.style.padding = '0.6rem 0.8rem';
-    card.style.borderRadius = '8px';
-    card.style.position = 'relative';
-    card.style.flex = '1 1 auto';
+    card.className = 'llm-history-card';
 
     const time = new Date(h.ts).toLocaleTimeString();
     const title = document.createElement('div');
@@ -155,9 +323,7 @@ function renderLlmHistory() {
     p.style.color = 'var(--muted)';
     p.textContent = h.prompt.length > 120 ? h.prompt.slice(0,120)+'...' : h.prompt;
     const btnRow = document.createElement('div');
-    btnRow.style.display = 'flex';
-    btnRow.style.gap = '0.4rem';
-    btnRow.style.marginTop = '0.4rem';
+    btnRow.className = 'llm-history-actions';
     const reuse = document.createElement('button');
     reuse.className = 'secondary';
     reuse.textContent = 'Reuse';
@@ -173,15 +339,7 @@ function renderLlmHistory() {
       const restore = document.createElement('button');
       restore.className = 'ghost';
       restore.textContent = 'restore';
-      restore.style.position = 'absolute';
-      restore.style.right = '8px';
-      restore.style.top = '8px';
-      restore.style.fontSize = '0.72rem';
-      restore.style.padding = '0.2rem 0.45rem';
-      restore.style.borderRadius = '999px';
-      restore.style.opacity = '0.95';
-      restore.style.minWidth = '44px';
-      restore.style.textTransform = 'lowercase';
+      restore.className = 'llm-restore-btn';
       restore.onclick = () => { restoreHistoryEntry(idx, restore); };
       card.appendChild(restore);
     }
@@ -189,19 +347,39 @@ function renderLlmHistory() {
     card.appendChild(title); card.appendChild(p); card.appendChild(btnRow);
     let prevSpec = undefined;
     try {
-      if (idx < hist.length - 1) prevSpec = hist[idx + 1].spec;
-      else if (typeof currentMobName !== 'undefined' && currentMobName) prevSpec = getUserMob(currentMobName);
-      else prevSpec = {};
+      if (idx < hist.length - 1) {
+        prevSpec = hist[idx + 1].spec;
+      } else {
+        const user = getCurrentUser();
+        prevSpec = (typeof getOriginalSpec === 'function' && user && currentMobName) ? (getOriginalSpec(user, currentMobName) || {}) : (getUserMob(currentMobName) || {});
+      }
     } catch (e) {
       prevSpec = {};
     }
-    card.addEventListener('click', (e) => {
-      e.stopPropagation();
-      try { showDiff(prevSpec || {}, h.spec || {}); } catch (er) {}
-      try { if (typeof setSpecView === 'function') setSpecView('diff'); } catch (er) {}
-    });
-
     container.appendChild(card);
+    // try create mini diff element and add
+    try {
+      const mini = renderMiniDiffEl(prevSpec || {}, h.spec || {});
+      mini.classList.add('llm-mini-diff');
+      container.appendChild(mini);
+      setTimeout(() => {
+        try {
+          const contentEl = mini.querySelector('pre:nth-child(2)');
+          const gutterEl = mini.querySelector('pre:nth-child(1)');
+          const firstChange = mini.querySelector('.diff-line.added, .diff-line.removed');
+          if (firstChange && typeof firstChange.scrollIntoView === 'function') {
+            firstChange.scrollIntoView({ block: 'nearest' });
+            if (contentEl && gutterEl) gutterEl.scrollTop = contentEl.scrollTop;
+          }
+        } catch (e) {}
+      }, 0);
+    } catch (e) {
+      const fallback = document.createElement('div');
+      fallback.textContent = '(diff)';
+      fallback.style.padding = '6px';
+      container.appendChild(fallback);
+    }
+
     llmHistoryList.appendChild(container);
   });
   if (llmSessionCount) llmSessionCount.textContent = String(hist.length);
