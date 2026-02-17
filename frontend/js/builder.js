@@ -59,8 +59,13 @@ async function fetchTemplateTexture(templateId) {
 }
 
 // Fetch mob geometry JSON from server endpoint
-async function fetchAndDisplayGeometry(mobName) {
-  if (!mobName) return;
+// textureMobName is the actual mob name for loading textures (e.g., "orange_cow")
+// geometryMobName is the vanilla mob name for fetching geometry (e.g., "cow")
+async function fetchAndDisplayGeometry(geometryMobName, textureMobName = null) {
+  if (!geometryMobName) return;
+  
+  // Use textureMobName if provided, otherwise fall back to geometryMobName
+  const mobNameForTexture = textureMobName || geometryMobName;
   
   const geometryContainer = document.getElementById("geometry-container");
   const geometryViewer = document.getElementById("geometry-viewer");
@@ -71,12 +76,21 @@ async function fetchAndDisplayGeometry(mobName) {
   
   try {
     // Call our backend endpoint that fetches from bedrock-samples
-    const res = await fetch(`/api/geometry/${encodeURIComponent(mobName)}`);
+    const res = await fetch(`/api/geometry/${encodeURIComponent(geometryMobName)}`);
     
     if (!res.ok) {
       const error = await res.json().catch(() => ({}));
-      console.warn(`[GEOMETRY] Failed to fetch geometry for ${mobName}:`, error.detail || res.statusText);
-      geometryContainer.style.display = "none";
+      console.warn(`[GEOMETRY] Failed to fetch geometry for ${geometryMobName}:`, error.detail || res.statusText);
+      // Show container with placeholder instead of hiding it (to maintain layout)
+      geometryViewer.textContent = `// No geometry available for "${geometryMobName}"\n// The mob may be using a custom or undefined geometry.`;
+      geometryUrl.href = "#";
+      geometryUrl.textContent = "No source available";
+      geometryContainer.style.display = "block";
+      // Clear any previous 3D model
+      if (viewer3D && viewer3D.mesh) {
+        viewer3D.scene.remove(viewer3D.mesh);
+        viewer3D.mesh = null;
+      }
       return;
     }
     
@@ -90,19 +104,28 @@ async function fetchAndDisplayGeometry(mobName) {
     // Display the geometry
     geometryViewer.textContent = formattedJson;
     geometryUrl.href = url;
-    geometryUrl.textContent = `View on GitHub: ${mobName}.geo.json`;
+    geometryUrl.textContent = `View on GitHub: ${geometryMobName}.geo.json`;
     geometryContainer.style.display = "block";
     
     // Store formatted JSON for copy functionality
     geometryCopy.dataset.json = formattedJson;
     
-    // Render the 3D model
-    render3DGeometry(geometryData, mobName);
+    // Render the 3D model with texture (use mobNameForTexture to load the correct texture)
+    render3DGeometry(geometryData, mobNameForTexture);
     
-    console.log(`[GEOMETRY] Successfully loaded geometry for ${mobName}`);
+    console.log(`[GEOMETRY] Successfully loaded geometry for ${geometryMobName}`);
   } catch (err) {
-    console.warn(`[GEOMETRY] Error fetching geometry for ${mobName}:`, err);
-    geometryContainer.style.display = "none";
+    console.warn(`[GEOMETRY] Error fetching geometry for ${geometryMobName}:`, err);
+    // Show container with placeholder instead of hiding it (to maintain layout)
+    geometryViewer.textContent = `// Error loading geometry for "${geometryMobName}"\n// ${err.message || 'Unknown error'}`;
+    geometryUrl.href = "#";
+    geometryUrl.textContent = "No source available";
+    geometryContainer.style.display = "block";
+    // Clear any previous 3D model
+    if (viewer3D && viewer3D.mesh) {
+      viewer3D.scene.remove(viewer3D.mesh);
+      viewer3D.mesh = null;
+    }
   }
 }
 

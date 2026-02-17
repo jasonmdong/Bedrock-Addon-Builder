@@ -140,7 +140,7 @@ def patch_resource_pack(res_root: Path, specs: list[dict], textures_dir: Path = 
         
         # Fallback: try server-side SPECS_DIR
         if not png_path.exists():
-            from core import SPECS_DIR
+            from backend.core.core import SPECS_DIR
             persistent_png = SPECS_DIR / f"{spec['short_name']}.png"
             if persistent_png.exists():
                 shutil.copyfile(persistent_png, png_path)

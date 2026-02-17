@@ -531,3 +531,82 @@ code { font-family: ui-monospace, SFMono-Regular, Consolas, Menlo, monospace; }
   border-radius: 6px;
   margin-top: 0.5rem;
 }
+
+/* Animation Timeline Styles (Blockbench-inspired) */
+.animation-timeline {
+  background: #1e1e1f;
+  border: 1px solid #3e3e42;
+  border-radius: 8px;
+  margin-top: 1rem;
+  padding: 0.75rem;
+}
+
+.timeline-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+  color: #e0e0e0;
+}
+
+.timeline-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.timeline-time {
+  font-family: monospace;
+  font-size: 0.85rem;
+  color: #8bc34a;
+}
+
+.timeline-controls {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.timeline-controls button {
+  padding: 0.4rem 0.8rem;
+  font-size: 0.85rem;
+  background: #3e3e42;
+  border: 1px solid #5a5a5e;
+  color: #e0e0e0;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.timeline-controls button:hover {
+  background: #4e4e52;
+}
+
+.timeline-slider {
+  flex: 1;
+  height: 6px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: #3e3e42;
+  border-radius: 3px;
+  outline: none;
+  cursor: pointer;
+}
+
+.timeline-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  background: #4CAF50;
+  border-radius: 50%;
+  cursor: grab;
+}
+
+.timeline-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  background: #4CAF50;
+  border-radius: 50%;
+  cursor: grab;
+  border: none;
+}

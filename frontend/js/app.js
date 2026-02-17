@@ -101,6 +101,7 @@ function initApp() {
   initPainter();
   initViewportControls();
   initGeometryCopy();
+  initGeometryGenerator();
   initLlmHandlers();
   initFileUploadLabels();
   initTemplateSelect();
