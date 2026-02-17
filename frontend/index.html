@@ -230,11 +230,55 @@
       <div style="margin-bottom: 1.5rem;">
         <h3 style="margin-top: 0; margin-bottom: 0.75rem; font-size: 0.95rem;">3D Model Preview</h3>
         <div id="viewport-3d" class="viewport-3d"></div>
+        <!-- 3D Editor Toolbar -->
+        <div class="editor-toolbar" style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem; flex-wrap: wrap; align-items: center;">
+          <!-- View Controls -->
+          <div class="toolbar-group" style="display: flex; gap: 0.25rem; border-right: 1px solid var(--border); padding-right: 0.5rem;">
+            <button type="button" class="secondary editor-tool-btn" data-tool="select" id="tool-select" onclick="setEditorTool('select')" title="Select (Q)">🔍</button>
+            <button type="button" class="secondary editor-tool-btn" data-tool="move" id="tool-move" onclick="setEditorTool('move')" title="Move (W)">↔️</button>
+            <button type="button" class="secondary editor-tool-btn" data-tool="rotate" id="tool-rotate" onclick="setEditorTool('rotate')" title="Rotate (E)">🔄</button>
+            <button type="button" class="secondary editor-tool-btn" data-tool="scale" id="tool-scale" onclick="setEditorTool('scale')" title="Scale (R)">📐</button>
+          </div>
+          
+          <!-- Mode Controls -->
+          <div class="toolbar-group" style="display: flex; gap: 0.25rem; border-right: 1px solid var(--border); padding-right: 0.5rem;">
+            <button type="button" class="secondary editor-mode-btn active" data-mode="object" id="mode-object" onclick="setEditorMode('object')" title="Object Mode">📦</button>
+            <button type="button" class="secondary editor-mode-btn" data-mode="face" id="mode-face" onclick="setEditorMode('face')" title="Face Mode">🔲</button>
+            <button type="button" class="secondary editor-mode-btn" data-mode="edge" id="mode-edge" onclick="setEditorMode('edge')" title="Edge Mode">📏</button>
+            <button type="button" class="secondary editor-mode-btn" data-mode="vertex" id="mode-vertex" onclick="setEditorMode('vertex')" title="Vertex Mode">•</button>
+          </div>
+          
+          <!-- Paint Tools -->
+          <div class="toolbar-group" style="display: flex; gap: 0.25rem; border-right: 1px solid var(--border); padding-right: 0.5rem;">
+            <button type="button" class="secondary editor-tool-btn" data-tool="paint" id="tool-paint" onclick="setEditorTool('paint')" title="Paint (P)">🎨</button>
+            <input type="color" id="editor-paint-color" value="#ff0000" onchange="if(window.editor3DState) window.editor3DState.paintColor = this.value" style="width: 32px; height: 32px; border: none; border-radius: 4px; cursor: pointer;" title="Paint Color">
+            <button type="button" class="secondary editor-tool-btn" data-tool="erase" id="tool-erase" onclick="setEditorTool('erase')" title="Erase (X)">🧽</button>
+          </div>
+          
+          <!-- Object Tools -->
+          <div class="toolbar-group" style="display: flex; gap: 0.25rem; border-right: 1px solid var(--border); padding-right: 0.5rem;">
+            <button type="button" class="secondary" id="editor-add-cube" onclick="addCube([0,8,0],[8,8,8])" title="Add Cube (Shift+A)">➕ Cube</button>
+            <button type="button" class="secondary" id="editor-duplicate" onclick="duplicateSelected()" title="Duplicate (Shift+D)">📋</button>
+            <button type="button" class="secondary" id="editor-delete" onclick="deleteSelected()" title="Delete (Del)">🗑️</button>
+          </div>
+          
+          <!-- View Options -->
+          <div class="toolbar-group" style="display: flex; gap: 0.25rem; border-right: 1px solid var(--border); padding-right: 0.5rem;">
+            <button type="button" class="secondary" id="editor-grid" onclick="toggleGrid()" title="Toggle Grid (G)">#️⃣ Grid</button>
+            <button type="button" class="secondary" id="editor-wireframe" onclick="toggleWireframe()" title="Toggle Wireframe (Z)">🔲 Wire</button>
+          </div>
+          
+          <!-- Background Color -->
+          <div class="toolbar-group" style="display: flex; gap: 0.25rem; align-items: center;">
+            <label style="font-size: 0.8rem; color: var(--muted);">BG:</label>
+            <input type="color" id="editor-bg-color" value="#1e1e1f" onchange="setBackgroundColor(this.value)" style="width: 32px; height: 32px; border: none; border-radius: 4px; cursor: pointer;" title="Background Color">
+          </div>
+        </div>
+        
         <div class="viewport-controls">
           <button type="button" class="secondary" id="viewport-reset" title="Reset view">Reset View</button>
-          <button type="button" class="secondary" id="viewport-wireframe" title="Toggle wireframe">Wireframe</button>
           <div class="viewport-info">
-            <span>Drag: rotate | Shift+drag/Right-click: pan | Scroll: zoom</span>
+            <span>Drag: rotate | Shift+drag/Right-click: pan | Scroll: zoom | Click: select/paint</span>
           </div>
         </div>
         

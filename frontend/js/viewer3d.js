@@ -453,6 +453,8 @@ function render3DGeometry(geometryData, mobName) {
   
   if (!viewer3D) {
     viewer3D = initializeViewer3D();
+    // Initialize editor features after viewer is created
+    setupRaycasting();
   }
   
   if (!viewer3D) return;
@@ -843,6 +845,155 @@ function initViewportControls() {
   playBtn?.addEventListener("click", togglePlayback);
   resetBtn?.addEventListener("click", resetAnimation);
   slider?.addEventListener("input", (e) => seekAnimation(parseFloat(e.target.value)));
+  
+  // 3D Editor controls
+  init3DEditorControls();
+}
+
+// Initialize 3D Editor control buttons
+function init3DEditorControls() {
+  console.log('[3D Editor] Initializing controls...');
+  
+  // Check if buttons exist
+  const toolBtns = document.querySelectorAll('.editor-tool-btn');
+  const modeBtns = document.querySelectorAll('.editor-mode-btn');
+  
+  console.log(`[3D Editor] Found ${toolBtns.length} tool buttons, ${modeBtns.length} mode buttons`);
+  
+  if (toolBtns.length === 0) {
+    console.warn('[3D Editor] No tool buttons found - DOM may not be ready');
+    return;
+  }
+  
+  // Tool buttons
+  toolBtns.forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const tool = btn.dataset.tool;
+      console.log(`[3D Editor] Tool clicked: ${tool}`);
+      setEditorTool(tool);
+    });
+  });
+  
+  // Mode buttons
+  modeBtns.forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const mode = btn.dataset.mode;
+      console.log(`[3D Editor] Mode clicked: ${mode}`);
+      setEditorMode(mode);
+    });
+  });
+  
+  // Paint color
+  const paintColorInput = document.getElementById('editor-paint-color');
+  if (paintColorInput) {
+    paintColorInput.addEventListener('input', (e) => {
+      editor3DState.paintColor = e.target.value;
+      console.log(`[3D Editor] Paint color: ${e.target.value}`);
+    });
+  }
+  
+  // Background color
+  const bgColorInput = document.getElementById('editor-bg-color');
+  if (bgColorInput) {
+    bgColorInput.addEventListener('input', (e) => {
+      console.log(`[3D Editor] Background color: ${e.target.value}`);
+      setBackgroundColor(e.target.value);
+    });
+  }
+  
+  // Grid toggle
+  const gridBtn = document.getElementById('editor-grid');
+  if (gridBtn) {
+    gridBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      console.log('[3D Editor] Grid toggle clicked');
+      toggleGrid();
+      gridBtn.classList.toggle('active', editor3DState.gridVisible);
+    });
+  }
+  
+  // Wireframe toggle
+  const wireBtn = document.getElementById('editor-wireframe');
+  if (wireBtn) {
+    wireBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      console.log('[3D Editor] Wireframe toggle clicked');
+      toggleWireframe();
+      wireBtn.classList.toggle('active', editor3DState.showWireframe);
+    });
+  }
+  
+  // Add cube
+  const addCubeBtn = document.getElementById('editor-add-cube');
+  if (addCubeBtn) {
+    addCubeBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      console.log('[3D Editor] Add cube clicked');
+      addCube([0, 8, 0], [8, 8, 8]);
+    });
+  }
+  
+  // Duplicate
+  const dupBtn = document.getElementById('editor-duplicate');
+  if (dupBtn) {
+    dupBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      console.log('[3D Editor] Duplicate clicked');
+      duplicateSelected();
+    });
+  }
+  
+  // Delete
+  const delBtn = document.getElementById('editor-delete');
+  if (delBtn) {
+    delBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      console.log('[3D Editor] Delete clicked');
+      deleteSelected();
+    });
+  }
+  
+  // Keyboard shortcuts
+  document.addEventListener('keydown', (e) => {
+    // Only handle if not typing in an input
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    
+    switch(e.key.toLowerCase()) {
+      case 'q': setEditorTool('select'); break;
+      case 'w': setEditorTool('move'); break;
+      case 'e': setEditorTool('rotate'); break;
+      case 'r': setEditorTool('scale'); break;
+      case 'p': setEditorTool('paint'); break;
+      case 'x': setEditorTool('erase'); break;
+      case 'g': 
+        e.preventDefault();
+        toggleGrid();
+        gridBtn?.classList.toggle('active', editor3DState.gridVisible);
+        break;
+      case 'z':
+        if (!e.ctrlKey && !e.metaKey) {
+          e.preventDefault();
+          toggleWireframe();
+          wireBtn?.classList.toggle('active', editor3DState.showWireframe);
+        }
+        break;
+      case 'delete':
+      case 'backspace':
+        deleteSelected();
+        break;
+    }
+  });
+  
+  console.log('[3D Editor] Controls initialized');
 }
 
 // Copy geometry JSON to clipboard
@@ -908,11 +1059,300 @@ function refresh3DTexture(mobName) {
   };
 }
 
+// =====================
+// BLOCKBENCH-STYLE 3D EDITOR FEATURES
+// =====================
+
+// Editor state
+const editor3DState = {
+  mode: 'object', // 'object', 'face', 'edge', 'vertex'
+  tool: 'select', // 'select', 'move', 'scale', 'rotate', 'paint', 'erase'
+  gridVisible: true,
+  backgroundColor: 0x1e1e1f,
+  selectedObject: null,
+  selectedFace: null,
+  hoverObject: null,
+  hoverFace: null,
+  paintColor: '#ff0000',
+  showWireframe: false,
+  snapToGrid: false,
+  gridSize: 16
+};
+
+// Toggle grid visibility
+function toggleGrid() {
+  if (!viewer3D) return;
+  editor3DState.gridVisible = !editor3DState.gridVisible;
+  
+  viewer3D.scene.traverse(child => {
+    if (child.type === 'GridHelper') {
+      child.visible = editor3DState.gridVisible;
+    }
+  });
+  
+  console.log(`[3D Editor] Grid ${editor3DState.gridVisible ? 'shown' : 'hidden'}`);
+}
+
+// Set background color
+function setBackgroundColor(color) {
+  if (!viewer3D) return;
+  editor3DState.backgroundColor = color;
+  viewer3D.scene.background = new THREE.Color(color);
+}
+
+// Toggle wireframe mode
+function toggleWireframe() {
+  if (!viewer3D || !viewer3D.mesh) return;
+  editor3DState.showWireframe = !editor3DState.showWireframe;
+  
+  viewer3D.mesh.traverse(child => {
+    if (child.isMesh) {
+      child.material.wireframe = editor3DState.showWireframe;
+    }
+  });
+  
+  console.log(`[3D Editor] Wireframe ${editor3DState.showWireframe ? 'on' : 'off'}`);
+}
+
+// Set editor mode (object, face, edge, vertex)
+function setEditorMode(mode) {
+  editor3DState.mode = mode;
+  console.log(`[3D Editor] Mode set to: ${mode}`);
+  
+  // Update UI
+  document.querySelectorAll('.editor-mode-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.mode === mode);
+  });
+}
+
+// Set editor tool (select, move, scale, rotate, paint)
+function setEditorTool(tool) {
+  editor3DState.tool = tool;
+  console.log(`[3D Editor] Tool set to: ${tool}`);
+  
+  // Update UI
+  document.querySelectorAll('.editor-tool-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.tool === tool);
+  });
+  
+  // Update cursor
+  const canvas = document.getElementById('viewport-3d');
+  if (canvas) {
+    canvas.style.cursor = tool === 'paint' ? 'crosshair' : 'default';
+  }
+}
+
+// Paint a face with a color
+function paintFace(mesh, faceIndex, color) {
+  if (!mesh || !mesh.isMesh) return;
+  
+  console.log(`[3D Editor] Painting mesh ${mesh.name || 'unnamed'}, face ${faceIndex}`);
+  
+  // For BoxGeometry, each face is made of 2 triangles (6 vertices)
+  // faceIndex from raycaster corresponds to the triangle index
+  // We need to convert to face index (0-5 for box faces)
+  const boxFaceIndex = Math.floor(faceIndex / 2);
+  
+  // Get the geometry
+  const geometry = mesh.geometry;
+  if (!geometry) return;
+  
+  // Check if we have vertex colors attribute
+  let colors = geometry.getAttribute('color');
+  if (!colors) {
+    // Initialize vertex colors (white by default)
+    const count = geometry.attributes.position.count;
+    colors = new THREE.Float32BufferAttribute(new Array(count * 3).fill(1), 3);
+    geometry.setAttribute('color', colors);
+    
+    // Enable vertex colors on material
+    if (mesh.material) {
+      mesh.material.vertexColors = true;
+      mesh.material.needsUpdate = true;
+    }
+  }
+  
+  // Convert hex color to RGB
+  const threeColor = new THREE.Color(color);
+  const r = threeColor.r;
+  const g = threeColor.g;
+  const b = threeColor.b;
+  
+  // BoxGeometry face vertex mapping (each face has 4 vertices, but we need to handle indexed geometry)
+  // For a standard BoxGeometry, vertices are arranged in groups of 4 per face
+  const verticesPerFace = 4;
+  const startVertex = boxFaceIndex * verticesPerFace;
+  
+  // Paint the 4 vertices of this face
+  for (let i = 0; i < verticesPerFace; i++) {
+    const vertexIndex = startVertex + i;
+    if (vertexIndex * 3 + 2 < colors.array.length) {
+      colors.array[vertexIndex * 3] = r;
+      colors.array[vertexIndex * 3 + 1] = g;
+      colors.array[vertexIndex * 3 + 2] = b;
+    }
+  }
+  
+  colors.needsUpdate = true;
+  
+  console.log(`[3D Editor] Painted face ${boxFaceIndex} (triangle ${faceIndex}) with color ${color}`);
+}
+
+// Raycasting for mouse interaction
+function setupRaycasting() {
+  if (!viewer3D) {
+    console.warn('[3D Editor] Cannot setup raycasting - viewer3D not initialized');
+    return;
+  }
+  
+  const raycaster = new THREE.Raycaster();
+  const mouse = new THREE.Vector2();
+  const canvas = document.getElementById('viewport-3d');
+  
+  if (!canvas) {
+    console.warn('[3D Editor] Cannot setup raycasting - canvas not found');
+    return;
+  }
+  
+  console.log('[3D Editor] Setting up raycasting...');
+  
+  // Track mouse position for raycasting
+  canvas.addEventListener('mousemove', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+    
+    raycaster.setFromCamera(mouse, viewer3D.camera);
+    
+    // Get all meshes from the scene
+    const meshes = [];
+    viewer3D.scene.traverse(child => {
+      if (child.isMesh && child.visible) {
+        meshes.push(child);
+      }
+    });
+    
+    if (meshes.length > 0) {
+      const intersects = raycaster.intersectObjects(meshes, false);
+      
+      if (intersects.length > 0) {
+        const intersect = intersects[0];
+        editor3DState.hoverObject = intersect.object;
+        editor3DState.hoverFace = intersect.face;
+        
+        // Highlight hover effect
+        if (editor3DState.tool === 'paint') {
+          canvas.style.cursor = 'crosshair';
+        }
+      } else {
+        editor3DState.hoverObject = null;
+        editor3DState.hoverFace = null;
+        canvas.style.cursor = editor3DState.tool === 'select' ? 'default' : 'crosshair';
+      }
+    }
+  });
+  
+  canvas.addEventListener('mousedown', (e) => {
+    // Only handle left click
+    if (e.button !== 0) return;
+    
+    // Don't paint if we're rotating the view (orbit controls handle this)
+    if (!editor3DState.hoverObject) return;
+    
+    const mesh = editor3DState.hoverObject;
+    
+    switch (editor3DState.tool) {
+      case 'select':
+        editor3DState.selectedObject = mesh;
+        console.log('[3D Editor] Selected:', mesh.name || 'unnamed');
+        break;
+        
+      case 'paint':
+        if (editor3DState.hoverFace) {
+          console.log(`[3D Editor] Painting face ${editor3DState.hoverFace.materialIndex} with color ${editor3DState.paintColor}`);
+          paintFace(mesh, editor3DState.hoverFace.materialIndex, editor3DState.paintColor);
+        }
+        break;
+        
+      case 'erase':
+        // Hide the mesh (don't delete to allow undo)
+        mesh.visible = false;
+        console.log('[3D Editor] Hidden:', mesh.name || 'unnamed');
+        break;
+    }
+  });
+  
+  console.log('[3D Editor] Raycasting setup complete');
+}
+
+// Add a new cube to the scene
+function addCube(position = [0, 0, 0], size = [8, 8, 8]) {
+  if (!viewer3D) return;
+  
+  const geometry = new THREE.BoxGeometry(size[0], size[1], size[2]);
+  const material = new THREE.MeshLambertMaterial({
+    color: 0x4CAF50,
+    side: THREE.DoubleSide
+  });
+  
+  const cube = new THREE.Mesh(geometry, material);
+  cube.position.set(position[0], position[1], position[2]);
+  cube.name = `cube_${Date.now()}`;
+  
+  viewer3D.scene.add(cube);
+  
+  console.log('[3D Editor] Added cube at:', position);
+  return cube;
+}
+
+// Delete selected object
+function deleteSelected() {
+  if (!viewer3D || !editor3DState.selectedObject) return;
+  
+  viewer3D.scene.remove(editor3DState.selectedObject);
+  editor3DState.selectedObject = null;
+  
+  console.log('[3D Editor] Deleted selected object');
+}
+
+// Duplicate selected object
+function duplicateSelected() {
+  if (!viewer3D || !editor3DState.selectedObject) return;
+  
+  const original = editor3DState.selectedObject;
+  const clone = original.clone();
+  clone.position.x += 10;
+  clone.name = `${original.name}_copy`;
+  
+  viewer3D.scene.add(clone);
+  editor3DState.selectedObject = clone;
+  
+  console.log('[3D Editor] Duplicated:', original.name);
+}
+
+// Initialize editor features
+function init3DEditor() {
+  setupRaycasting();
+  console.log('[3D Editor] Initialized');
+}
+
 // Export for external use
 window.render3DGeometry = render3DGeometry;
 window.loadAnimation = loadAnimation;
 window.viewer3D = viewer3D;
 window.refresh3DTexture = refresh3DTexture;
+window.editor3DState = editor3DState;
+window.toggleGrid = toggleGrid;
+window.setBackgroundColor = setBackgroundColor;
+window.toggleWireframe = toggleWireframe;
+window.setEditorMode = setEditorMode;
+window.setEditorTool = setEditorTool;
+window.addCube = addCube;
+window.deleteSelected = deleteSelected;
+window.duplicateSelected = duplicateSelected;
+window.init3DEditor = init3DEditor;
+window.setupRaycasting = setupRaycasting;
+window.paintFace = paintFace;
 
 // Geometry generation via LLM
 let currentGeometryData = null;

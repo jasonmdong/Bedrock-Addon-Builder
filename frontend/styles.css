@@ -610,3 +610,62 @@ code { font-family: ui-monospace, SFMono-Regular, Consolas, Menlo, monospace; }
   cursor: grab;
   border: none;
 }
+
+/* 3D Editor Toolbar Styles */
+.editor-toolbar {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.editor-toolbar button {
+  padding: 0.4rem 0.6rem;
+  font-size: 0.85rem;
+  min-width: 36px;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.editor-toolbar button.active {
+  background: var(--primary);
+  color: white;
+  border-color: var(--primary);
+}
+
+.editor-toolbar input[type="color"] {
+  padding: 0;
+  border: 2px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.editor-toolbar input[type="color"]::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.editor-toolbar input[type="color"]::-webkit-color-swatch {
+  border: none;
+  border-radius: 2px;
+}
+
+.toolbar-group {
+  display: flex;
+  align-items: center;
+}
+
+/* 3D Viewport cursor styles */
+#viewport-3d {
+  cursor: default;
+}
+
+#viewport-3d.cursor-paint {
+  cursor: crosshair;
+}
+
+#viewport-3d.cursor-move {
+  cursor: move;
+}
