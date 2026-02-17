@@ -21,6 +21,4 @@ ENV PYTHONUNBUFFERED=1
 
 # Add backend to Python path and start the server
 ENV PYTHONPATH="/app:$PYTHONPATH"
-ENV PORT=7860
-# Use single worker for Hugging Face Spaces (better startup detection)
-CMD gunicorn -w 1 -k uvicorn.workers.UvicornWorker backend.core.app:app --bind 0.0.0.0:7860 --timeout 120 --keep-alive 5
+CMD gunicorn -w 4 -k uvicorn.workers.UvicornWorker backend.core.app:app --bind 0.0.0.0:7860
