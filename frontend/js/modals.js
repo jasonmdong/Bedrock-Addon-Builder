@@ -6,14 +6,23 @@ function initResizer() {
   const resizer = document.getElementById("resizer");
   let isResizing = false;
 
+  if (!sidebar || !resizer) {
+    console.warn("[Resizer] sidebar or resizer element not found");
+    return;
+  }
+
   resizer.addEventListener("mousedown", (e) => {
+    // Don't resize while collapsed (it can also eat clicks near the toggle)
+    if (sidebar.classList.contains("collapsed")) return;
     isResizing = true;
     document.body.classList.add("resizing");
+    e.preventDefault();
   });
 
   window.addEventListener("mousemove", (e) => {
     if (!isResizing) return;
-    const newWidth = e.clientX;
+    const rect = sidebar.getBoundingClientRect();
+    const newWidth = e.clientX - rect.left;
     if (newWidth >= 350 && newWidth <= 600) {
       sidebar.style.width = newWidth + "px";
     }
