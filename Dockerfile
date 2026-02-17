@@ -21,4 +21,4 @@ ENV PYTHONUNBUFFERED=1
 
 # Add backend to Python path and start the server
 ENV PYTHONPATH="/app:$PYTHONPATH"
-CMD gunicorn -w 4 -k uvicorn.workers.UvicornWorker backend.core.app:app --bind 0.0.0.0:7860
+CMD gunicorn -w 4 -k uvicorn.workers.UvicornWorker backend.core.app:app --bind 127.0.0.1:7860
