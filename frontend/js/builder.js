@@ -273,4 +273,126 @@ function initBuildHandlers() {
   buildModeSelect?.addEventListener("change", () => {
     localStorage.setItem(BUILD_MODE_KEY, buildModeSelect.value);
   });
+
+  // --- One-Click Play (Test in Game) ---
+  initTestInGame();
+}
+
+// ---------------------------------------------------------------------------
+// Test in Game (One-Click Play)
+// ---------------------------------------------------------------------------
+const testInGameBtn = document.getElementById("test-in-game");
+const testSessionBar = document.getElementById("test-session-bar");
+const testSessionStatus = document.getElementById("test-session-status");
+const testSessionLog = document.getElementById("test-session-log");
+const testStopBtn = document.getElementById("test-stop-btn");
+let _testPollTimer = null;
+
+function _setTestStatus(text, color) {
+  if (testSessionStatus) {
+    testSessionStatus.textContent = text;
+    testSessionStatus.style.color = color || "var(--text)";
+  }
+}
+
+function _startTestPolling() {
+  if (_testPollTimer) return;
+  testSessionBar.style.display = "block";
+  _testPollTimer = setInterval(async () => {
+    try {
+      const res = await fetch("/api/launch-test/status");
+      const data = await res.json();
+      const statusMap = {
+        idle: ["Idle", "var(--hint)"],
+        starting: ["Starting server...", "#f59e0b"],
+        ready: ["Server ready! Minecraft launching...", "#10b981"],
+        error: ["Error: " + (data.error || "unknown"), "var(--danger)"],
+        stopped: ["Stopped", "var(--hint)"],
+      };
+      const [label, color] = statusMap[data.status] || ["Unknown", "var(--hint)"];
+      _setTestStatus(label, color);
+      if (testSessionLog && data.recent_logs) {
+        testSessionLog.textContent = data.recent_logs.join("\n");
+        testSessionLog.scrollTop = testSessionLog.scrollHeight;
+      }
+      if (!data.running && data.status !== "starting") {
+        _stopTestPolling();
+        testInGameBtn.disabled = false;
+        testInGameBtn.textContent = "🎮 Test in Game";
+      }
+    } catch (e) {
+      _setTestStatus("Poll error", "var(--danger)");
+    }
+  }, 1500);
+}
+
+function _stopTestPolling() {
+  if (_testPollTimer) {
+    clearInterval(_testPollTimer);
+    _testPollTimer = null;
+  }
+}
+
+function initTestInGame() {
+  testInGameBtn?.addEventListener("click", async (e) => {
+    e.preventDefault();
+    // Save current spec first
+    if (currentMobName) {
+      const saved = await saveSpec();
+      if (saved === null) return;
+    }
+
+    // Use only the currently active mob (the one being edited)
+    if (!currentMobName) {
+      setStatus("No mob selected. Click a mob in the sidebar first.", true);
+      return;
+    }
+    const activeMobSpec = getUserMob(currentMobName);
+    if (!activeMobSpec) {
+      setStatus("Could not load spec for " + currentMobName, true);
+      return;
+    }
+    const selectedSpecs = [activeMobSpec];
+
+    // Determine category from the spec (entity by default)
+    const category = "entity_logic_ai";
+
+    testInGameBtn.disabled = true;
+    testInGameBtn.textContent = "Launching...";
+    _setTestStatus("Sending to server...", "#f59e0b");
+    testSessionBar.style.display = "block";
+    if (testSessionLog) testSessionLog.textContent = "";
+
+    try {
+      const res = await fetch("/api/launch-test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ specs: selectedSpecs, category }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        _setTestStatus("Error: " + (data.detail || res.statusText), "var(--danger)");
+        testInGameBtn.disabled = false;
+        testInGameBtn.textContent = "🎮 Test in Game";
+        return;
+      }
+      _setTestStatus("Starting...", "#f59e0b");
+      _startTestPolling();
+    } catch (err) {
+      _setTestStatus("Network error: " + err.message, "var(--danger)");
+      testInGameBtn.disabled = false;
+      testInGameBtn.textContent = "🎮 Test in Game";
+    }
+  });
+
+  testStopBtn?.addEventListener("click", async () => {
+    _setTestStatus("Stopping...", "#f59e0b");
+    try {
+      await fetch("/api/launch-test/stop", { method: "POST" });
+    } catch (e) { /* ignore */ }
+    _stopTestPolling();
+    testInGameBtn.disabled = false;
+    testInGameBtn.textContent = "🎮 Test in Game";
+    setTimeout(() => _setTestStatus("Stopped", "var(--hint)"), 500);
+  });
 }
