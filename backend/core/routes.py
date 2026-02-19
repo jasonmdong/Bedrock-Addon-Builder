@@ -99,6 +99,35 @@ def get_templates():
     return {"mobs": {}}
 
 
+async def get_template_mob_from_database(mob_name: str):
+    """Load a template mob from the database.
+    
+    Searches for mobs in the database where the name contains the search term.
+    Returns the most recently updated mob; if multiple were updated the same day,
+    returns the one with the shortest name.
+    
+    This is used when users create a mob from a database template instead of GitHub.
+    """
+    if not mob_name:
+        raise HTTPException(status_code=400, detail="mob_name is required")
+    
+    try:
+        from backend.mob_management import get_template_mob_by_name
+        
+        template_mob = get_template_mob_by_name(mob_name)
+        
+        return {
+            "mob": template_mob,
+            "source": "database"
+        }
+    except ValueError as e:
+        # No mob found - return 404 with error message
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        print(f"[ERROR] Failed to load template mob from database: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to load template: {str(e)}")
+
+
 async def fetch_mob_geometry(mob_name: str):
     """Fetch mob geometry JSON from Mojang's bedrock-samples repository.
     
