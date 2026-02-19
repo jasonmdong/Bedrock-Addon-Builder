@@ -162,8 +162,29 @@ function initLoadTemplateModal() {
     await loadMobList();
     await selectMob(safeName);
     
-    // Fetch and display geometry from bedrock-samples
-    await fetchAndDisplayGeometry(templateId, safeName);  // Pass mob name for texture
+    // Try to load template mob from database first, fall back to GitHub
+    try {
+      const dbRes = await fetch(`/api/template/mob/${encodeURIComponent(templateId)}`);
+      if (dbRes.ok) {
+        const dbData = await dbRes.json();
+        console.log("[TEMPLATE] Loaded template from database:", dbData.mob);
+        alert(`✅ Successfully loaded template mob "${dbData.mob.mob_name}" from database!`);
+        // Successfully loaded from database
+        await fetchAndDisplayGeometry(templateId, safeName);
+      } else {
+        // Database returned an error
+        const errorData = await dbRes.json().catch(() => ({}));
+        alert(`⚠️ Could not find template in database: ${errorData.detail || 'Unknown error'}\nFalling back to GitHub...`);
+        console.warn("[TEMPLATE] Database template not found, falling back to GitHub");
+        await fetchAndDisplayGeometry(templateId, safeName);
+      }
+    } catch (err) {
+      // Network or other error
+      alert(`⚠️ Failed to load template from database: ${err.message}\nFalling back to GitHub...`);
+      console.warn("[TEMPLATE] Error loading from database, falling back to GitHub:", err);
+      // Fall back to GitHub geometry
+      await fetchAndDisplayGeometry(templateId, safeName);
+    }
     
     // Close modal
     loadTemplateModalOverlay.classList.add("hidden");
