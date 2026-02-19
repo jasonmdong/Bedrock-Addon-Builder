@@ -9,27 +9,107 @@ const buildBundleBtn = document.getElementById("build-bundle");
 const sidebarStatusEl = document.getElementById("sidebar-status");
 const templateSelect = document.getElementById("template-select");
 
-// Templates storage
-let vanillaTemplates = {};
+// Template storage - now database mob names instead of vanilla templates
+let databaseTemplateMobs = [];
 
-// Load templates from server
+// Load template mob names from database
 async function loadTemplates() {
   try {
-    const res = await fetch("/api/templates");
+    const res = await fetch("/api/template/mobs");
     const data = await res.json();
-    vanillaTemplates = data.mobs || {};
+    databaseTemplateMobs = data.mobs || [];
     
-    // Fill the dropdown
-    templateSelect.innerHTML = '<option value="">-- Load Template --</option>';
-    Object.keys(vanillaTemplates).sort().forEach(id => {
-      const opt = document.createElement("option");
-      opt.value = id;
-      opt.textContent = vanillaTemplates[id].display_name || id;
-      templateSelect.appendChild(opt);
+    // Convert dropdown to datalist-based search input
+    const searchContainer = templateSelect.parentElement;
+    
+    // Create search input if not exists
+    let searchInput = document.getElementById("template-search-input");
+    if (!searchInput) {
+      searchInput = document.createElement("input");
+      searchInput.id = "template-search-input";
+      searchInput.type = "text";
+      searchInput.placeholder = "Search mob templates...";
+      searchInput.style.padding = "8px";
+      searchInput.style.fontSize = "14px";
+      searchInput.style.width = "100%";
+      searchInput.style.boxSizing = "border-box";
+      
+      // Create datalist for autocomplete
+      let datalist = document.getElementById("template-mobs-datalist");
+      if (!datalist) {
+        datalist = document.createElement("datalist");
+        datalist.id = "template-mobs-datalist";
+        document.body.appendChild(datalist);
+      }
+      searchInput.setAttribute("list", "template-mobs-datalist");
+      
+      // Replace the select dropdown with the search input
+      searchContainer.replaceChild(searchInput, templateSelect);
+      
+      // Setup event listener for the search input (after it's created)
+      setupTemplateSearchInput(searchInput);
+    }
+    
+    // Populate datalist with mob names
+    const datalist = document.getElementById("template-mobs-datalist");
+    datalist.innerHTML = "";
+    databaseTemplateMobs.forEach(mobName => {
+      const option = document.createElement("option");
+      option.value = mobName;
+      datalist.appendChild(option);
     });
+    
+    console.log(`[TEMPLATES] Loaded ${databaseTemplateMobs.length} template mobs from database`);
   } catch (err) {
     console.error("Failed to load templates", err);
   }
+}
+
+// Setup event listener for template search input
+function setupTemplateSearchInput(searchInput) {
+  // Handle Enter key to create mob from selected template
+  searchInput.addEventListener("keypress", async (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    
+    const selectedMobName = searchInput.value.trim();
+    if (!selectedMobName) return;
+    
+    // Validate selected mob exists in database
+    if (!databaseTemplateMobs.includes(selectedMobName)) {
+      alert(`"${selectedMobName}" is not available in the database.`);
+      return;
+    }
+    
+    const user = getCurrentUser();
+    if (!user) {
+      alert("Please select or create a user first.");
+      searchInput.value = "";
+      return;
+    }
+    
+    // Open modal to confirm custom name for new mob
+    const loadTemplateModalOverlay = document.getElementById("load-template-modal-overlay");
+    const templateModalTitle = document.getElementById("template-modal-title");
+    const templateMobInput = document.getElementById("template-mob-input");
+    
+    templateModalTitle.textContent = `Create mob from template: "${selectedMobName}"`;
+    templateMobInput.value = `${selectedMobName}_custom`;
+    templateMobInput.placeholder = `Enter a custom name for your new mob...`;
+    templateMobInput.dataset.templateMob = selectedMobName; // Store template name
+    
+    // Load database mob names in case user wants to switch template
+    if (window.loadTemplateMobNamesFromDB) {
+      window.loadTemplateMobNamesFromDB();
+    }
+    
+    loadTemplateModalOverlay?.classList.remove("hidden");
+    templateMobInput?.focus();
+    templateMobInput?.select();
+    
+    // Reset search input
+    searchInput.value = "";
+  });
 }
 
 let selectedTemplateId = null;
@@ -227,37 +307,10 @@ function initFileUploadLabels() {
 }
 
 function initTemplateSelect() {
-  templateSelect?.addEventListener("change", async () => {
-    const templateId = templateSelect.value;
-    if (!templateId) return;
-    
-    const template = vanillaTemplates[templateId];
-    if (!template) return;
-    
-    const user = getCurrentUser();
-    if (!user) {
-      alert("Please select or create a user first.");
-      templateSelect.value = "";
-      return;
-    }
-    
-    // Store the selected template and show modal
-    selectedTemplateId = templateId;
-    const loadTemplateModalOverlay = document.getElementById("load-template-modal-overlay");
-    const templateModalTitle = document.getElementById("template-modal-title");
-    const templateMobInput = document.getElementById("template-mob-input");
-    
-    templateModalTitle.textContent = `Load ${template.display_name}`;
-    templateMobInput.value = template.short_name;
-    templateMobInput.placeholder = `Enter name for your ${template.display_name}...`;
-    loadTemplateModalOverlay?.classList.remove("hidden");
-    templateMobInput?.focus();
-    templateMobInput?.select();
-    
-    // Reset dropdown
-    templateSelect.value = "";
-  });
+  // Event listeners are now set up in loadTemplates() via setupTemplateSearchInput()
+  // This function kept for compatibility with app.js initialization sequence
 }
+
 
 function initBuildHandlers() {
   buildBundleBtn?.addEventListener("click", async (e) => {

@@ -83,7 +83,7 @@ def find_similar_mobs(
 
 def get_mob_by_name(mob_name: str) -> Optional[Dict[str, Any]]:
     """Get a specific mob from the database by exact name match."""
-    sql = "SELECT * FROM mob_geometries WHERE name = %s"
+    sql = "SELECT * FROM mob_geometries WHERE mob_name = %s"
     return fetch_one(sql, (mob_name,))
 
 
@@ -91,3 +91,17 @@ def get_all_mobs() -> List[Dict[str, Any]]:
     """Get all mobs from the database."""
     sql = "SELECT * FROM mob_geometries"
     return fetch_all(sql) or []
+
+
+def get_all_mob_names() -> List[str]:
+    """
+    Get all mob names from the database for dropdown selection.
+    
+    Returns:
+        List of mob names sorted alphabetically
+    """
+    sql = "SELECT mob_name FROM mob_geometries ORDER BY mob_name ASC"
+    results = fetch_all(sql)
+    if results:
+        return [row.get('mob_name') for row in results if row.get('mob_name')]
+    return []

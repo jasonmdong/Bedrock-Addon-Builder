@@ -128,6 +128,22 @@ async def get_template_mob_from_database(mob_name: str):
         raise HTTPException(status_code=500, detail=f"Failed to load template: {str(e)}")
 
 
+async def get_all_template_mob_names():
+    """Get all available mob names from the database for dropdown selection."""
+    try:
+        from backend.mob_management import get_all_mob_names
+        
+        mob_names = get_all_mob_names()
+        return {
+            "mobs": mob_names,
+            "source": "database",
+            "count": len(mob_names)
+        }
+    except Exception as e:
+        print(f"[ERROR] Failed to fetch template mob names: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch mobs: {str(e)}")
+
+
 async def fetch_mob_geometry(mob_name: str):
     """Fetch mob geometry JSON from Mojang's bedrock-samples repository.
     

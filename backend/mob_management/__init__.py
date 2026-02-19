@@ -19,6 +19,9 @@ def __getattr__(name):
     elif name == 'get_all_mobs':
         from .retriever import get_all_mobs
         return get_all_mobs
+    elif name == 'get_all_mob_names':
+        from .retriever import get_all_mob_names
+        return get_all_mob_names
     elif name == 'get_template_mob_by_name':
         from .retriever import get_template_mob_by_name
         return get_template_mob_by_name

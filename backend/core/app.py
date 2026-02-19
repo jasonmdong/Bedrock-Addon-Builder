@@ -33,6 +33,7 @@ from backend.core.routes import (
     download,
     get_templates,
     get_template_mob_from_database,
+    get_all_template_mob_names,
     fetch_mob_geometry,
 )
 
@@ -74,6 +75,7 @@ app.post("/build")(build_form)
 app.post("/api/build")(api_build)
 app.get("/download/{name}")(download)
 app.get("/api/templates")(get_templates)
+app.get("/api/template/mobs")(get_all_template_mob_names)
 app.get("/api/template/mob/{mob_name}")(get_template_mob_from_database)
 app.get("/api/geometry/{mob_name}")(fetch_mob_geometry)
 app.post("/api/geometry/generate")(llm_geometry_generate)
