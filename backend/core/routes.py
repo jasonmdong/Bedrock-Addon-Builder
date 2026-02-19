@@ -1,6 +1,9 @@
 """FastAPI route handlers for the web API."""
 import tempfile
 import uuid
+import threading
+import sys
+import os
 from pathlib import Path
 from typing import Optional
 import json
@@ -592,3 +595,232 @@ def download(name: str):
 
     print(f"[DEBUG] {name} not found")
     return PlainTextResponse("Not found", status_code=404)
+
+
+# ---------------------------------------------------------------------------
+# Server Test Session (One-Click Play)
+# ---------------------------------------------------------------------------
+
+# Add scripts/ to sys.path for launch_server_session imports
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "scripts"))
+
+# Global state for the running server session
+_server_session_lock = threading.Lock()
+_server_session = {
+    "running": False,
+    "thread": None,
+    "proc": None,
+    "status": "idle",       # idle | starting | ready | error | stopped
+    "logs": [],
+    "error": None,
+}
+
+
+def _run_server_session_thread(pack_dir: str, resource_pack_dir: str | None, category: str):
+    """Background thread that runs the full BDS lifecycle."""
+    from launch_server_session import (
+        setup_server, _read_server_output, _launch_client,
+        _kill_minecraft_client,
+        _detect_identifiers, _build_command, BDS_EXE, BDS_DIR,
+    )
+    import subprocess
+    import time
+
+    session = _server_session
+    session["logs"] = []
+    session["error"] = None
+
+    try:
+        # Setup
+        session["status"] = "starting"
+        session["logs"].append("[api] Setting up server...")
+        setup_server(pack_dir, resource_pack_path=resource_pack_dir)
+        session["logs"].append("[api] Server configured.")
+
+        # Detect all identifiers
+        pack_path = Path(pack_dir).resolve()
+        identifiers = _detect_identifiers(pack_path, category)
+        commands: list[str] = []
+        if identifiers:
+            for ident in identifiers:
+                cmd = _build_command(ident, category)
+                commands.append(cmd)
+                session["logs"].append(f"[api] Will run: /{cmd}")
+        else:
+            session["logs"].append("[api] No identifiers detected, skipping auto-give.")
+
+        # Launch BDS
+        event_server_ready = threading.Event()
+        event_player_spawned = threading.Event()
+        event_fatal_error = threading.Event()
+        event_no_targets = threading.Event()
+
+        proc = subprocess.Popen(
+            [str(BDS_EXE)],
+            cwd=str(BDS_DIR),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        session["proc"] = proc
+
+        reader = threading.Thread(
+            target=_read_server_output,
+            args=(proc, event_server_ready, event_player_spawned,
+                  event_fatal_error, event_no_targets, session["logs"]),
+            daemon=True,
+        )
+        reader.start()
+
+        # Wait for server ready (bail on fatal error)
+        while not event_server_ready.is_set():
+            if event_fatal_error.wait(timeout=1):
+                session["status"] = "error"
+                session["error"] = "BDS fatal: vanilla resource pack missing. Re-extract BDS zip."
+                proc.kill()
+                return
+            if event_server_ready.wait(timeout=1):
+                break
+            if proc.poll() is not None:
+                session["status"] = "error"
+                session["error"] = "BDS exited unexpectedly."
+                return
+
+        session["status"] = "ready"
+        session["logs"].append("[api] Server is READY on port 19132")
+
+        # Launch client (kill stale instances first)
+        _kill_minecraft_client()
+        time.sleep(3)
+        _launch_client()
+        session["logs"].append("[api] Minecraft client launched.")
+
+        # Wait for player spawn + magic
+        if commands:
+            session["logs"].append("[api] Waiting for player to spawn...")
+            if event_player_spawned.wait(timeout=120):
+                time.sleep(2)
+                for cmd in commands:
+                    event_no_targets.clear()
+                    proc.stdin.write(cmd + "\n")
+                    proc.stdin.flush()
+                    session["logs"].append(f"[api] Sent: /{cmd}")
+                    # Retry once if no targets
+                    if event_no_targets.wait(timeout=3):
+                        time.sleep(3)
+                        event_no_targets.clear()
+                        proc.stdin.write(cmd + "\n")
+                        proc.stdin.flush()
+                        session["logs"].append(f"[api] Retry sent: /{cmd}")
+                    time.sleep(1)  # small gap between multiple summons
+                session["logs"].append(f"[api] Magic complete! ({len(commands)} command(s))")
+
+        # Keep alive until stopped externally
+        proc.wait()
+
+    except Exception as exc:
+        session["status"] = "error"
+        session["error"] = str(exc)
+    finally:
+        session["running"] = False
+        if session["status"] not in ("error",):
+            session["status"] = "stopped"
+        if session.get("proc") and session["proc"].poll() is None:
+            session["proc"].kill()
+
+
+async def launch_test(payload: dict = Body(...)):
+    """POST /api/launch-test \u2014 Build the addon and start a BDS test session."""
+    with _server_session_lock:
+        if _server_session["running"]:
+            raise HTTPException(status_code=409, detail="A test session is already running. Stop it first.")
+
+    # Get specs from payload
+    specs_json = payload.get("specs", [])
+    category = payload.get("category", "entity_logic_ai")
+
+    if not specs_json:
+        raise HTTPException(status_code=400, detail="No specs provided.")
+
+    try:
+        specs = [validate_spec(s) for s in specs_json]
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid spec: {exc}")
+
+    # Build addon to get the behavior pack folder
+    out_dir = Path(tempfile.mkdtemp(prefix="test_session_"))
+    try:
+        artifacts = build_addon(specs, out_dir, None, None)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Build failed: {exc}")
+
+    # Find the behavior pack folder
+    beh_mcpack = artifacts.get("beh_mcpack")
+    if not beh_mcpack or not Path(beh_mcpack).exists():
+        raise HTTPException(status_code=500, detail="Build produced no behavior pack.")
+
+    # Extract the mcpack (it's a zip) to a folder for BDS
+    import zipfile
+    pack_dir = out_dir / "bds_bp"
+    pack_dir.mkdir(exist_ok=True)
+    with zipfile.ZipFile(beh_mcpack, "r") as zf:
+        zf.extractall(pack_dir)
+
+    # Extract the resource pack too (textures, models, etc.)
+    res_mcpack = artifacts.get("res_mcpack")
+    rp_dir = None
+    if res_mcpack and Path(res_mcpack).exists():
+        rp_dir = out_dir / "bds_rp"
+        rp_dir.mkdir(exist_ok=True)
+        with zipfile.ZipFile(res_mcpack, "r") as zf:
+            zf.extractall(rp_dir)
+
+    # Start the server session in a background thread
+    with _server_session_lock:
+        _server_session["running"] = True
+        _server_session["status"] = "starting"
+        _server_session["logs"] = []
+        _server_session["error"] = None
+        _server_session["proc"] = None
+
+        t = threading.Thread(
+            target=_run_server_session_thread,
+            args=(str(pack_dir), str(rp_dir) if rp_dir else None, category),
+            daemon=True,
+        )
+        _server_session["thread"] = t
+        t.start()
+
+    return {"status": "starting", "message": "Test session is launching..."}
+
+
+def launch_test_status():
+    """GET /api/launch-test/status \u2014 Poll the current test session state."""
+    return {
+        "running": _server_session["running"],
+        "status": _server_session["status"],
+        "error": _server_session["error"],
+        "log_count": len(_server_session["logs"]),
+        "recent_logs": _server_session["logs"][-20:],
+    }
+
+
+async def launch_test_stop():
+    """POST /api/launch-test/stop \u2014 Stop the running test session."""
+    proc = _server_session.get("proc")
+    if proc and proc.poll() is None:
+        try:
+            proc.stdin.write("stop\n")
+            proc.stdin.flush()
+            proc.wait(timeout=10)
+        except Exception:
+            proc.kill()
+        _server_session["status"] = "stopped"
+        _server_session["running"] = False
+        return {"status": "stopped", "message": "Server stopped."}
+    else:
+        _server_session["status"] = "idle"
+        _server_session["running"] = False
+        return {"status": "idle", "message": "No server was running."}

@@ -1,0 +1,2278 @@
+{
+  "version": "2.0.0",
+  "schema_version": "2026-bedrock-1.21.130",
+  "last_updated": "2026-02-09",
+  "tests": [
+    {
+      "__divider__": "=================================================================",
+      "__category__": "Entity Logic & AI",
+      "__description__": "Tests for minecraft:behavior.* components, AI goals, and entity targeting"
+    },
+    {
+      "name": "wolf_hunts_creepers",
+      "category": "entity_logic_ai",
+      "difficulty": "medium",
+      "description": "Wolf that specifically targets and attacks creepers using filtered nearest_attackable_target",
+      "prompt": "Create a wolf variant that hunts and attacks creepers. It should ignore other mobs and players.",
+      "input_spec": {
+        "format_version": "1.21.0",
+        "minecraft:entity": {
+          "description": {
+            "identifier": "custom:creeper_hunter",
+            "is_spawnable": true,
+            "is_summonable": true
+          },
+          "components": {
+            "minecraft:health": {
+              "value": 20,
+              "max": 20
+            },
+            "minecraft:movement": {
+              "value": 0.3
+            },
+            "minecraft:navigation.walk": {},
+            "minecraft:movement.basic": {}
+          }
+        }
+      },
+      "required_components": [
+        "minecraft:behavior.nearest_attackable_target",
+        "minecraft:behavior.melee_attack",
+        "minecraft:attack"
+      ],
+      "required_fields": {
+        "minecraft:entity.components.minecraft:behavior.nearest_attackable_target.entity_types": {
+          "type": "array",
+          "min_length": 1
+        },
+        "minecraft:entity.components.minecraft:attack.damage": {
+          "min": 1
+        }
+      },
+      "must_contain_in_path": {
+        "minecraft:entity.components.minecraft:behavior.nearest_attackable_target.entity_types[*].filters": {
+          "contains_any": [
+            "minecraft:creeper",
+            "creeper"
+          ]
+        }
+      },
+      "forbidden_components": [
+        "minecraft:shooter",
+        "minecraft:behavior.ranged_attack"
+      ],
+      "should_not_change": [
+        "minecraft:entity.description.identifier"
+      ]
+    },
+    {
+      "name": "breedable_farm_animal",
+      "category": "entity_logic_ai",
+      "difficulty": "medium",
+      "description": "Farm animal that can breed with wheat and produces offspring",
+      "prompt": "Make this mob breedable. It should be attracted to wheat and produce a baby when two adults breed.",
+      "input_spec": {
+        "format_version": "1.21.0",
+        "minecraft:entity": {
+          "description": {
+            "identifier": "custom:farm_beast",
+            "is_spawnable": true,
+            "is_summonable": true
+          },
+          "components": {
+            "minecraft:health": {
+              "value": 10,
+              "max": 10
+            },
+            "minecraft:movement": {
+              "value": 0.25
+            },
+            "minecraft:navigation.walk": {},
+            "minecraft:movement.basic": {},
+            "minecraft:collision_box": {
+              "width": 0.9,
+              "height": 1.3
+            }
+          }
+        }
+      },
+      "required_components": [
+        "minecraft:breedable",
+        "minecraft:behavior.breed",
+        "minecraft:behavior.tempt"
+      ],
+      "required_fields": {
+        "minecraft:entity.components.minecraft:breedable.breed_items": {
+          "type": "array",
+          "min_length": 1
+        }
+      },
+      "forbidden_components": [
+        "minecraft:damage",
+        "minecraft:shooter",
+        "minecraft:behavior.melee_attack",
+        "minecraft:behavior.ranged_attack"
+      ],
+      "should_not_change": [
+        "minecraft:entity.description.identifier"
+      ]
+    },
+    {
+      "name": "guard_patrol_ai",
+      "category": "entity_logic_ai",
+      "difficulty": "medium",
+      "description": "Guard mob with patrol behavior and territory defense",
+      "prompt": "Create a guard that patrols between points and attacks any hostile mobs that enter its territory.",
+      "input_spec": {
+        "format_version": "1.21.0",
+        "minecraft:entity": {
+          "description": {
+            "identifier": "custom:village_guard",
+            "is_spawnable": true,
+            "is_summonable": true
+          },
+          "components": {
+            "minecraft:health": {
+              "value": 30,
+              "max": 30
+            },
+            "minecraft:movement": {
+              "value": 0.35
+            },
+            "minecraft:navigation.walk": {},
+            "minecraft:movement.basic": {}
+          }
+        }
+      },
+      "required_components": [
+        "minecraft:behavior.defend_village_target",
+        "minecraft:behavior.hurt_by_target",
+        "minecraft:behavior.melee_attack",
+        "minecraft:attack"
+      ],
+      "required_fields": {
+        "minecraft:entity.components.minecraft:attack.damage": {
+          "min": 3
+        }
+      },
+      "forbidden_components": [],
+      "should_not_change": [
+        "minecraft:entity.description.identifier"
+      ]
+    },
+    {
+      "name": "simple_passive_mob",
+      "category": "entity_logic_ai",
+      "difficulty": "simple",
+      "description": "Basic passive mob with random stroll and look behaviors",
+      "prompt": "Add basic passive AI to this mob. It should wander around randomly and look at nearby players.",
+      "input_spec": {
+        "format_version": "1.21.0",
+        "minecraft:entity": {
+          "description": {
+            "identifier": "custom:passive_critter",
+            "is_spawnable": true,
+            "is_summonable": true
+          },
+          "components": {
+            "minecraft:health": {
+              "value": 8,
+              "max": 8
+            },
+            "minecraft:movement": {
+              "value": 0.2
+            },
+            "minecraft:navigation.walk": {},
+            "minecraft:movement.basic": {}
+          }
+        }
+      },
+      "required_components": [
+        "minecraft:behavior.random_stroll",
+        "minecraft:behavior.look_at_player"
+      ],
+      "required_fields": {},
+      "forbidden_components": [
+        "minecraft:attack",
+        "minecraft:behavior.melee_attack",
+        "minecraft:behavior.nearest_attackable_target",
+        "minecraft:shooter"
+      ],
+      "should_not_change": [
+        "minecraft:entity.description.identifier"
+      ]
+    },
+    {
+      "name": "panic_on_hurt",
+      "category": "entity_logic_ai",
+      "difficulty": "simple",
+      "description": "Mob that panics and runs away when damaged",
+      "prompt": "Make this mob panic and run away quickly when it takes damage. It should run 50% faster than normal while panicking.",
+      "input_spec": {
+        "format_version": "1.21.0",
+        "minecraft:entity": {
+          "description": {
+            "identifier": "custom:scared_sheep",
+            "is_spawnable": true,
+            "is_summonable": true
+          },
+          "components": {
+            "minecraft:health": {
+              "value": 8,
+              "max": 8
+            },
+            "minecraft:movement": {
+              "value": 0.25
+            },
+            "minecraft:navigation.walk": {},
+            "minecraft:movement.basic": {}
+          }
+        }
+      },
+      "required_components": [
+        "minecraft:behavior.panic"
+      ],
+      "required_fields": {
+        "minecraft:entity.components.minecraft:behavior.panic.speed_multiplier": {
+          "min": 1.2
+        }
+      },
+      "forbidden_components": [
+        "minecraft:attack",
+        "minecraft:behavior.melee_attack",
+        "minecraft:shooter"
+      ],
+      "should_not_change": [
+        "minecraft:entity.description.identifier"
+      ]
+    },
+    {
+      "name": "tameable_pet",
+      "category": "entity_logic_ai",
+      "difficulty": "medium",
+      "description": "Mob that can be tamed by a player and follows them",
+      "prompt": "Make this mob tameable with bones. Once tamed, it should follow its owner and sit on command.",
+      "input_spec": {
+        "format_version": "1.21.0",
+        "minecraft:entity": {
+          "description": {
+            "identifier": "custom:pet_fox",
+            "is_spawnable": true,
+            "is_summonable": true
+          },
+          "components": {
+            "minecraft:health": {
+              "value": 12,
+              "max": 12
+            },
+            "minecraft:movement": {
+              "value": 0.3
+            },
+            "minecraft:navigation.walk": {},
+            "minecraft:movement.basic": {},
+            "minecraft:collision_box": {
+              "width": 0.6,
+              "height": 0.7
+            }
+          }
+        }
+      },
+      "required_components": [
+        "minecraft:tameable",
+        "minecraft:behavior.beg"
+      ],
+      "required_fields": {
+        "minecraft:entity.components.minecraft:tameable.tame_items": {
+          "type": "array",
+          "min_length": 1
+        }
+      },
+      "forbidden_components": [
+        "minecraft:damage",
+        "minecraft:durability",
+        "minecraft:shooter"
+      ],
+      "should_not_change": [
+        "minecraft:entity.description.identifier"
+      ]
+    },
+    {
+      "name": "skeleton_archer",
+      "category": "entity_logic_ai",
+      "difficulty": "complex",
+      "description": "Ranged mob that shoots arrows at players and avoids melee range",
+      "prompt": "Create a skeleton-style archer that shoots arrows at players from a distance. It should try to maintain distance and avoid getting close.",
+      "input_spec": {
+        "format_version": "1.21.0",
+        "minecraft:entity": {
+          "description": {
+            "identifier": "custom:elite_archer",
+            "is_spawnable": true,
+            "is_summonable": true
+          },
+          "components": {
+            "minecraft:health": {
+              "value": 20,
+              "max": 20
+            },
+            "minecraft:movement": {
+              "value": 0.25
+            },
+            "minecraft:navigation.walk": {},
+            "minecraft:movement.basic": {}
+          }
+        }
+      },
+      "required_components": [
+        "minecraft:shooter",
+        "minecraft:behavior.ranged_attack",
+        "minecraft:behavior.nearest_attackable_target"
+      ],
+      "required_fields": {
+        "minecraft:entity.components.minecraft:shooter.def": {
+          "type": "string"
+        },
+        "minecraft:entity.components.minecraft:behavior.ranged_attack.attack_interval_min": {
+          "min": 0
+        }
+      },
+      "forbidden_components": [
+        "minecraft:damage",
+        "minecraft:durability",
+        "minecraft:hand_equipped"
+      ],
+      "should_not_change": [
+        "minecraft:entity.description.identifier"
+      ]
+    },
+    {
+      "name": "creeper_exploder",
+      "category": "entity_logic_ai",
+      "difficulty": "complex",
+      "description": "Creeper-style mob with swell and explode behavior (tests component dependencies)",
+      "prompt": "Create a creeper-like mob that swells up and explodes when near a player. Explosion power should be 3.",
+      "input_spec": {
+        "format_version": "1.21.0",
+        "minecraft:entity": {
+          "description": {
+            "identifier": "custom:boom_bug",
+            "is_spawnable": true,
+            "is_summonable": true
+          },
+          "components": {
+            "minecraft:health": {
+              "value": 20,
+              "max": 20
+            },
+            "minecraft:movement": {
+              "value": 0.25
+            },
+            "minecraft:navigation.walk": {},
+            "minecraft:movement.basic": {}
+          }
+        }
+      },
+      "required_components": [
+        "minecraft:behavior.swell",
+        "minecraft:explode",
+        "minecraft:behavior.nearest_attackable_target"
+      ],
+      "required_fields": {
+        "minecraft:entity.components.minecraft:explode.fuse_length": {
+          "min": 0
+        },
+        "minecraft:entity.components.minecraft:explode.power": {
+          "equals": 3
+        }
+      },
+      "forbidden_components": [
+        "minecraft:damage",
+        "minecraft:durability",
+        "minecraft:hand_equipped"
+      ],
+      "should_not_change": [
+        "minecraft:entity.description.identifier"
+      ]
+    },
+    {
+      "name": "rideable_mount",
+      "category": "entity_logic_ai",
+      "difficulty": "complex",
+      "description": "Mob that can be ridden by a player with ground controls (tests rideable + input_ground_controlled)",
+      "prompt": "Make this mob rideable by a player. The player should be able to control its movement with WASD. Set the seat offset to 1.5 blocks above the ground.",
+      "input_spec": {
+        "format_version": "1.21.0",
+        "minecraft:entity": {
+          "description": {
+            "identifier": "custom:war_horse",
+            "is_spawnable": true,
+            "is_summonable": true
+          },
+          "components": {
+            "minecraft:health": {
+              "value": 30,
+              "max": 30
+            },
+            "minecraft:movement": {
+              "value": 0.35
+            },
+            "minecraft:navigation.walk": {},
+            "minecraft:movement.basic": {},
+            "minecraft:collision_box": {
+              "width": 1.4,
+              "height": 1.6
+            }
+          }
+        }
+      },
+      "required_components": [
+        "minecraft:rideable",
+        "minecraft:input_ground_controlled"
+      ],
+      "required_fields": {
+        "minecraft:entity.components.minecraft:rideable.seat_count": {
+          "min": 1
+        },
+        "minecraft:entity.components.minecraft:rideable.family_types": {
+          "type": "array",
+          "min_length": 1
+        }
+      },
+      "forbidden_components": [
+        "minecraft:damage",
+        "minecraft:durability",
+        "minecraft:hand_equipped"
+      ],
+      "should_not_change": [
+        "minecraft:entity.description.identifier"
+      ]
+    },
+    {
+      "name": "multi_behavior_boss",
+      "category": "entity_logic_ai",
+      "difficulty": "complex",
+      "description": "Boss mob with multiple attack types, knockback resistance, and high HP",
+      "prompt": "Create a boss mob with 100 HP, melee attack dealing 8 damage, knockback resistance of 0.5, and it should target players within 32 blocks.",
+      "input_spec": {
+        "format_version": "1.21.0",
+        "minecraft:entity": {
+          "description": {
+            "identifier": "custom:dungeon_boss",
+            "is_spawnable": true,
+            "is_summonable": true
+          },
+          "components": {
+            "minecraft:movement": {
+              "value": 0.3
+            },
+            "minecraft:navigation.walk": {},
+            "minecraft:movement.basic": {},
+            "minecraft:collision_box": {
+              "width": 1.8,
+              "height": 2.5
+            }
+          }
+        }
+      },
+      "required_components": [
+        "minecraft:health",
+        "minecraft:attack",
+        "minecraft:behavior.melee_attack",
+        "minecraft:behavior.nearest_attackable_target",
+        "minecraft:knockback_resistance"
+      ],
+      "required_fields": {
+        "minecraft:entity.components.minecraft:health.value": {
+          "equals": 100
+        },
+        "minecraft:entity.components.minecraft:attack.damage": {
+          "equals": 8
+        },
+        "minecraft:entity.components.minecraft:knockback_resistance.value": {
+          "equals": 0.5
+        }
+      },
+      "forbidden_components": [
+        "minecraft:damage",
+        "minecraft:durability"
+      ],
+      "should_not_change": [
+        "minecraft:entity.description.identifier"
+      ]
+    },
+    {
+      "__divider__": "=================================================================",
+      "__category__": "Items & Weaponry",
+      "__description__": "Tests for minecraft:item components. LLMs must NOT add entity-only components like health or AI."
+    },
+    {
+      "name": "diamond_greatsword",
+      "category": "items_weaponry",
+      "difficulty": "simple",
+      "description": "Custom sword with high damage and durability",
+      "prompt": "Create a diamond greatsword item with 12 base damage and 500 durability.",
+      "input_spec": {
+        "format_version": "1.21.0",
+        "minecraft:item": {
+          "description": {
+            "identifier": "custom:diamond_greatsword",
+            "category": "equipment"
+          },
+          "components": {}
+        }
+      },
+      "required_components": [
+        "minecraft:damage",
+        "minecraft:durability",
+        "minecraft:hand_equipped"
+      ],
+      "required_fields": {
+        "minecraft:item.components.minecraft:damage": {
+          "equals": 12
+        },
+        "minecraft:item.components.minecraft:durability.max_durability": {
+          "equals": 500
+        }
+      },
+      "forbidden_components": [
+        "minecraft:health",
+        "minecraft:entity_sensor",
+        "minecraft:behavior.melee_attack",
+        "minecraft:behavior.nearest_attackable_target",
+        "minecraft:navigation.walk",
+        "minecraft:attack"
+      ],
+      "should_not_change": [
+        "minecraft:item.description.identifier"
+      ]
+    },
+    {
+      "name": "explosive_crossbow",
+      "category": "items_weaponry",
+      "difficulty": "medium",
+      "description": "Crossbow that fires explosive projectiles",
+      "prompt": "Create a crossbow that shoots explosive arrows. It should have 300 durability.",
+      "input_spec": {
+        "format_version": "1.21.0",
+        "minecraft:item": {
+          "description": {
+            "identifier": "custom:explosive_crossbow",
+            "category": "equipment"
+          },
+          "components": {}
+        }
+      },
+      "required_components": [
+        "minecraft:shooter",
+        "minecraft:durability"
+      ],
+      "required_fields": {
+        "minecraft:item.components.minecraft:shooter.ammunition": {
+          "type": "array",
+          "min_length": 1
+        },
+        "minecraft:item.components.minecraft:durability.max_durability": {
+          "equals": 300
+        }
+      },
+      "forbidden_components": [
+        "minecraft:health",
+        "minecraft:entity_sensor",
+        "minecraft:behavior.ranged_attack",
+        "minecraft:navigation.walk",
+        "minecraft:navigation.fly"
+      ],
+      "should_not_change": [
+        "minecraft:item.description.identifier"
+      ]
+    },
+    {
+      "name": "fortune_pickaxe",
+      "category": "items_weaponry",
+      "difficulty": "medium",
+      "description": "Pickaxe with mining speed modifiers and destroy_speeds array",
+      "prompt": "Create an enchanted pickaxe that mines stone-type blocks 2x faster than normal. It should have 1000 durability.",
+      "input_spec": {
+        "format_version": "1.21.0",
+        "minecraft:item": {
+          "description": {
+            "identifier": "custom:fortune_pick",
+            "category": "equipment"
+          },
+          "components": {}
+        }
+      },
+      "required_components": [
+        "minecraft:digger",
+        "minecraft:durability",
+        "minecraft:hand_equipped"
+      ],
+      "required_fields": {
+        "minecraft:item.components.minecraft:digger.destroy_speeds": {
+          "type": "array",
+          "min_length": 1
+        },
+        "minecraft:item.components.minecraft:durability.max_durability": {
+          "equals": 1000
+        }
+      },
+      "forbidden_components": [
+        "minecraft:health",
+        "minecraft:entity_sensor",
+        "minecraft:behavior.dig",
+        "minecraft:navigation.walk"
+      ],
+      "should_not_change": [
+        "minecraft:item.description.identifier"
+      ]
+    },
+    {
+      "name": "simple_stick_weapon",
+      "category": "items_weaponry",
+      "difficulty": "simple",
+      "description": "Basic weapon with just damage, no durability",
+      "prompt": "Create a simple wooden club item that deals 4 damage.",
+      "input_spec": {
+        "format_version": "1.21.0",
+        "minecraft:item": {
+          "description": {
+            "identifier": "custom:wooden_club",
+            "category": "equipment"
+          },
+          "components": {}
+        }
+      },
+      "required_components": [
+        "minecraft:damage",
+        "minecraft:hand_equipped"
+      ],
+      "required_fields": {
+        "minecraft:item.components.minecraft:damage": {
+          "equals": 4
+        }
+      },
+      "forbidden_components": [
+        "minecraft:health",
+        "minecraft:behavior.melee_attack",
+        "minecraft:navigation.walk",
+        "minecraft:attack"
+      ],
+      "should_not_change": [
+        "minecraft:item.description.identifier"
+      ]
+    },
+    {
+      "name": "food_item",
+      "category": "items_weaponry",
+      "difficulty": "simple",
+      "description": "Consumable food item with nutrition and saturation",
+      "prompt": "Create a cooked steak food item that restores 8 hunger points and has a saturation modifier of 0.8.",
+      "input_spec": {
+        "format_version": "1.21.0",
+        "minecraft:item": {
+          "description": {
+            "identifier": "custom:gourmet_steak",
+            "category": "nature"
+          },
+          "components": {}
+        }
+      },
+      "required_components": [
+        "minecraft:food"
+      ],
+      "required_fields": {
+        "minecraft:item.components.minecraft:food.nutrition": {
+          "equals": 8
+        },
+        "minecraft:item.components.minecraft:food.saturation_modifier": {
+          "min": 0.5
+        }
+      },
+      "forbidden_components": [
+        "minecraft:health",
+        "minecraft:behavior.melee_attack",
+        "minecraft:navigation.walk",
+        "minecraft:attack",
+        "minecraft:entity_sensor"
+      ],
+      "should_not_change": [
+        "minecraft:item.description.identifier"
+      ]
+    },
+    {
+      "name": "throwable_item",
+      "category": "items_weaponry",
+      "difficulty": "medium",
+      "description": "Throwable projectile item like a snowball or ender pearl",
+      "prompt": "Create a throwable bomb item. It should use the projectile component and have 16 max stack size.",
+      "input_spec": {
+        "format_version": "1.21.0",
+        "minecraft:item": {
+          "description": {
+            "identifier": "custom:bomb",
+            "category": "equipment"
+          },
+          "components": {}
+        }
+      },
+      "required_components": [
+        "minecraft:projectile",
+        "minecraft:max_stack_size"
+      ],
+      "required_fields": {
+        "minecraft:item.components.minecraft:max_stack_size": {
+          "equals": 16
+        },
+        "minecraft:item.components.minecraft:projectile.minimum_critical_power": {
+          "min": 0
+        }
+      },
+      "forbidden_components": [
+        "minecraft:health",
+        "minecraft:behavior.ranged_attack",
+        "minecraft:navigation.walk",
+        "minecraft:entity_sensor"
+      ],
+      "should_not_change": [
+        "minecraft:item.description.identifier"
+      ]
+    },
+    {
+      "name": "armor_chestplate",
+      "category": "items_weaponry",
+      "difficulty": "medium",
+      "description": "Armor item with protection value and durability",
+      "prompt": "Create a diamond chestplate with 8 armor protection and 400 durability. It should be wearable.",
+      "input_spec": {
+        "format_version": "1.21.0",
+        "minecraft:item": {
+          "description": {
+            "identifier": "custom:diamond_chestplate",
+            "category": "equipment"
+          },
+          "components": {}
+        }
+      },
+      "required_components": [
+        "minecraft:armor",
+        "minecraft:durability",
+        "minecraft:wearable"
+      ],
+      "required_fields": {
+        "minecraft:item.components.minecraft:armor.protection": {
+          "equals": 8
+        },
+        "minecraft:item.components.minecraft:durability.max_durability": {
+          "equals": 400
+        }
+      },
+      "forbidden_components": [
+        "minecraft:health",
+        "minecraft:behavior.melee_attack",
+        "minecraft:navigation.walk",
+        "minecraft:attack",
+        "minecraft:entity_sensor"
+      ],
+      "should_not_change": [
+        "minecraft:item.description.identifier"
+      ]
+    },
+    {
+      "name": "cooldown_ability_item",
+      "category": "items_weaponry",
+      "difficulty": "complex",
+      "description": "Item with cooldown and use_duration for ability-style usage",
+      "prompt": "Create a magic wand item with 5 damage, 200 durability, and a 3-second cooldown between uses. The cooldown category should be 'magic_wand'.",
+      "input_spec": {
+        "format_version": "1.21.0",
+        "minecraft:item": {
+          "description": {
+            "identifier": "custom:magic_wand",
+            "category": "equipment"
+          },
+          "components": {}
+        }
+      },
+      "required_components": [
+        "minecraft:damage",
+        "minecraft:durability",
+        "minecraft:cooldown",
+        "minecraft:hand_equipped"
+      ],
+      "required_fields": {
+        "minecraft:item.components.minecraft:damage": {
+          "equals": 5
+        },
+        "minecraft:item.components.minecraft:durability.max_durability": {
+          "equals": 200
+        },
+        "minecraft:item.components.minecraft:cooldown.duration": {
+          "equals": 3
+        },
+        "minecraft:item.components.minecraft:cooldown.category": {
+          "equals": "magic_wand"
+        }
+      },
+      "forbidden_components": [
+        "minecraft:health",
+        "minecraft:behavior.melee_attack",
+        "minecraft:navigation.walk",
+        "minecraft:attack",
+        "minecraft:entity_sensor"
+      ],
+      "should_not_change": [
+        "minecraft:item.description.identifier"
+      ]
+    },
+    {
+      "name": "multi_component_tool",
+      "category": "items_weaponry",
+      "difficulty": "complex",
+      "description": "Tool with digger, damage, durability, and repair components",
+      "prompt": "Create a multi-tool that deals 6 damage, has 800 durability, mines wood-type blocks faster, and can be repaired with iron ingots.",
+      "input_spec": {
+        "format_version": "1.21.0",
+        "minecraft:item": {
+          "description": {
+            "identifier": "custom:multi_tool",
+            "category": "equipment"
+          },
+          "components": {}
+        }
+      },
+      "required_components": [
+        "minecraft:damage",
+        "minecraft:durability",
+        "minecraft:digger",
+        "minecraft:repairable",
+        "minecraft:hand_equipped"
+      ],
+      "required_fields": {
+        "minecraft:item.components.minecraft:damage": {
+          "equals": 6
+        },
+        "minecraft:item.components.minecraft:durability.max_durability": {
+          "equals": 800
+        },
+        "minecraft:item.components.minecraft:digger.destroy_speeds": {
+          "type": "array",
+          "min_length": 1
+        },
+        "minecraft:item.components.minecraft:repairable.repair_items": {
+          "type": "array",
+          "min_length": 1
+        }
+      },
+      "forbidden_components": [
+        "minecraft:health",
+        "minecraft:behavior.melee_attack",
+        "minecraft:navigation.walk",
+        "minecraft:attack",
+        "minecraft:entity_sensor"
+      ],
+      "should_not_change": [
+        "minecraft:item.description.identifier"
+      ]
+    },
+    {
+      "name": "shield_item",
+      "category": "items_weaponry",
+      "difficulty": "simple",
+      "description": "Basic shield item with durability and wearable",
+      "prompt": "Create a wooden shield item with 250 durability. It should be wearable in the offhand.",
+      "input_spec": {
+        "format_version": "1.21.0",
+        "minecraft:item": {
+          "description": {
+            "identifier": "custom:wooden_shield",
+            "category": "equipment"
+          },
+          "components": {}
+        }
+      },
+      "required_components": [
+        "minecraft:durability",
+        "minecraft:wearable"
+      ],
+      "required_fields": {
+        "minecraft:item.components.minecraft:durability.max_durability": {
+          "equals": 250
+        }
+      },
+      "forbidden_components": [
+        "minecraft:health",
+        "minecraft:behavior.melee_attack",
+        "minecraft:navigation.walk",
+        "minecraft:attack",
+        "minecraft:entity_sensor"
+      ],
+      "should_not_change": [
+        "minecraft:item.description.identifier"
+      ]
+    },
+    {
+      "__divider__": "=================================================================",
+      "__category__": "Blocks & Furniture",
+      "__description__": "Tests for custom block geometry. origin/size must be [x,y,z] arrays."
+    },
+    {
+      "name": "wooden_chair",
+      "category": "blocks_furniture",
+      "difficulty": "medium",
+      "description": "Chair block with custom geometry and collision box",
+      "prompt": "Create a wooden chair block with a seat height of 8 pixels. Use custom geometry.",
+      "input_spec": {
+        "format_version": "1.21.0",
+        "minecraft:block": {
+          "description": {
+            "identifier": "custom:wooden_chair",
+            "menu_category": {
+              "category": "construction"
+            }
+          },
+          "components": {}
+        }
+      },
+      "required_components": [
+        "minecraft:geometry",
+        "minecraft:collision_box"
+      ],
+      "required_fields": {
+        "minecraft:block.components.minecraft:geometry": {
+          "type": "string",
+          "pattern": "^geometry\\."
+        },
+        "minecraft:block.components.minecraft:collision_box.origin": {
+          "type": "array",
+          "exact_length": 3,
+          "items_type": "number"
+        },
+        "minecraft:block.components.minecraft:collision_box.size": {
+          "type": "array",
+          "exact_length": 3,
+          "items_type": "number",
+          "items_max": 16
+        }
+      },
+      "forbidden_components": [
+        "minecraft:health",
+        "minecraft:behavior.sit",
+        "minecraft:navigation.walk"
+      ],
+      "should_not_change": [
+        "minecraft:block.description.identifier"
+      ]
+    },
+    {
+      "name": "glowing_lamp",
+      "category": "blocks_furniture",
+      "difficulty": "medium",
+      "description": "Lamp block that emits light level 15 with selection box",
+      "prompt": "Create a decorative lamp block that emits maximum light (level 15) and has a small selection box.",
+      "input_spec": {
+        "format_version": "1.21.0",
+        "minecraft:block": {
+          "description": {
+            "identifier": "custom:glowing_lamp",
+            "menu_category": {
+              "category": "items"
+            }
+          },
+          "components": {}
+        }
+      },
+      "required_components": [
+        "minecraft:light_emission",
+        "minecraft:geometry",
+        "minecraft:selection_box"
+      ],
+      "required_fields": {
+        "minecraft:block.components.minecraft:light_emission": {
+          "min": 0,
+          "max": 15,
+          "equals": 15
+        },
+        "minecraft:block.components.minecraft:selection_box.origin": {
+          "type": "array",
+          "exact_length": 3,
+          "items_type": "number"
+        },
+        "minecraft:block.components.minecraft:selection_box.size": {
+          "type": "array",
+          "exact_length": 3,
+          "items_type": "number"
+        }
+      },
+      "forbidden_components": [
+        "minecraft:health",
+        "minecraft:entity_sensor"
+      ],
+      "should_not_change": [
+        "minecraft:block.description.identifier"
+      ]
+    },
+    {
+      "name": "glass_table",
+      "category": "blocks_furniture",
+      "difficulty": "complex",
+      "description": "Transparent table with alpha_test material and collision/selection boxes",
+      "prompt": "Create a glass table block. It should be transparent and have a collision box only for the top surface.",
+      "input_spec": {
+        "format_version": "1.21.0",
+        "minecraft:block": {
+          "description": {
+            "identifier": "custom:glass_table",
+            "menu_category": {
+              "category": "construction"
+            }
+          },
+          "components": {}
+        }
+      },
+      "required_components": [
+        "minecraft:geometry",
+        "minecraft:material_instances",
+        "minecraft:collision_box",
+        "minecraft:selection_box"
+      ],
+      "required_fields": {
+        "minecraft:block.components.minecraft:material_instances.*": {
+          "has_key": "render_method",
+          "contains_any": [
+            "alpha_test",
+            "blend"
+          ]
+        },
+        "minecraft:block.components.minecraft:collision_box.origin": {
+          "type": "array",
+          "exact_length": 3,
+          "items_type": "number"
+        },
+        "minecraft:block.components.minecraft:collision_box.size": {
+          "type": "array",
+          "exact_length": 3,
+          "items_type": "number"
+        },
+        "minecraft:block.components.minecraft:selection_box.origin": {
+          "type": "array",
+          "exact_length": 3,
+          "items_type": "number"
+        },
+        "minecraft:block.components.minecraft:selection_box.size": {
+          "type": "array",
+          "exact_length": 3,
+          "items_type": "number"
+        }
+      },
+      "forbidden_components": [
+        "minecraft:health",
+        "minecraft:behavior.random_stroll"
+      ],
+      "should_not_change": [
+        "minecraft:block.description.identifier"
+      ]
+    },
+    {
+      "name": "simple_slab",
+      "category": "blocks_furniture",
+      "difficulty": "simple",
+      "description": "Basic half-slab block with geometry and collision box",
+      "prompt": "Create a stone slab block that is half the height of a normal block. Use custom geometry.",
+      "input_spec": {
+        "format_version": "1.21.0",
+        "minecraft:block": {
+          "description": {
+            "identifier": "custom:stone_slab",
+            "menu_category": {
+              "category": "construction"
+            }
+          },
+          "components": {}
+        }
+      },
+      "required_components": [
+        "minecraft:geometry",
+        "minecraft:collision_box"
+      ],
+      "required_fields": {
+        "minecraft:block.components.minecraft:geometry": {
+          "type": "string",
+          "pattern": "^geometry\\."
+        },
+        "minecraft:block.components.minecraft:collision_box.origin": {
+          "type": "array",
+          "exact_length": 3,
+          "items_type": "number"
+        },
+        "minecraft:block.components.minecraft:collision_box.size": {
+          "type": "array",
+          "exact_length": 3,
+          "items_type": "number"
+        }
+      },
+      "forbidden_components": [
+        "minecraft:health",
+        "minecraft:navigation.walk"
+      ],
+      "should_not_change": [
+        "minecraft:block.description.identifier"
+      ]
+    },
+    {
+      "name": "basic_decorative_block",
+      "category": "blocks_furniture",
+      "difficulty": "simple",
+      "description": "Simple decorative block with just geometry",
+      "prompt": "Create a decorative pillar block using custom geometry.",
+      "input_spec": {
+        "format_version": "1.21.0",
+        "minecraft:block": {
+          "description": {
+            "identifier": "custom:stone_pillar",
+            "menu_category": {
+              "category": "construction"
+            }
+          },
+          "components": {}
+        }
+      },
+      "required_components": [
+        "minecraft:geometry"
+      ],
+      "required_fields": {
+        "minecraft:block.components.minecraft:geometry": {
+          "type": "string",
+          "pattern": "^geometry\\."
+        }
+      },
+      "forbidden_components": [
+        "minecraft:health",
+        "minecraft:behavior.random_stroll",
+        "minecraft:navigation.walk"
+      ],
+      "should_not_change": [
+        "minecraft:block.description.identifier"
+      ]
+    },
+    {
+      "name": "light_dimmer_block",
+      "category": "blocks_furniture",
+      "difficulty": "simple",
+      "description": "Block with specific light emission level",
+      "prompt": "Create a dim torch block that emits light level 7.",
+      "input_spec": {
+        "format_version": "1.21.0",
+        "minecraft:block": {
+          "description": {
+            "identifier": "custom:dim_torch",
+            "menu_category": {
+              "category": "items"
+            }
+          },
+          "components": {}
+        }
+      },
+      "required_components": [
+        "minecraft:light_emission",
+        "minecraft:geometry"
+      ],
+      "required_fields": {
+        "minecraft:block.components.minecraft:light_emission": {
+          "equals": 7
+        },
+        "minecraft:block.components.minecraft:geometry": {
+          "type": "string",
+          "pattern": "^geometry\\."
+        }
+      },
+      "forbidden_components": [
+        "minecraft:health",
+        "minecraft:entity_sensor"
+      ],
+      "should_not_change": [
+        "minecraft:block.description.identifier"
+      ]
+    },
+    {
+      "name": "destructible_block",
+      "category": "blocks_furniture",
+      "difficulty": "medium",
+      "description": "Block with specific destroy time and explosion resistance",
+      "prompt": "Create a reinforced crate block with custom geometry. It should take 5 seconds to mine and have an explosion resistance of 10.",
+      "input_spec": {
+        "format_version": "1.21.0",
+        "minecraft:block": {
+          "description": {
+            "identifier": "custom:reinforced_crate",
+            "menu_category": {
+              "category": "construction"
+            }
+          },
+          "components": {}
+        }
+      },
+      "required_components": [
+        "minecraft:geometry",
+        "minecraft:destructible_by_mining",
+        "minecraft:destructible_by_explosion"
+      ],
+      "required_fields": {
+        "minecraft:block.components.minecraft:geometry": {
+          "type": "string",
+          "pattern": "^geometry\\."
+        },
+        "minecraft:block.components.minecraft:destructible_by_mining.seconds_to_destroy": {
+          "equals": 5
+        },
+        "minecraft:block.components.minecraft:destructible_by_explosion.explosion_resistance": {
+          "equals": 10
+        }
+      },
+      "forbidden_components": [
+        "minecraft:health",
+        "minecraft:navigation.walk"
+      ],
+      "should_not_change": [
+        "minecraft:block.description.identifier"
+      ]
+    },
+    {
+      "name": "rotatable_furniture",
+      "category": "blocks_furniture",
+      "difficulty": "medium",
+      "description": "Block with rotation trait and custom geometry",
+      "prompt": "Create a bookshelf block with custom geometry that can be rotated in 4 directions when placed.",
+      "input_spec": {
+        "format_version": "1.21.0",
+        "minecraft:block": {
+          "description": {
+            "identifier": "custom:bookshelf",
+            "menu_category": {
+              "category": "construction"
+            },
+            "traits": {}
+          },
+          "components": {}
+        }
+      },
+      "required_components": [
+        "minecraft:geometry",
+        "minecraft:collision_box"
+      ],
+      "required_fields": {
+        "minecraft:block.components.minecraft:geometry": {
+          "type": "string",
+          "pattern": "^geometry\\."
+        },
+        "minecraft:block.description.traits": {
+          "type": "object"
+        }
+      },
+      "forbidden_components": [
+        "minecraft:health",
+        "minecraft:navigation.walk"
+      ],
+      "should_not_change": [
+        "minecraft:block.description.identifier"
+      ]
+    },
+    {
+      "name": "crafting_station_block",
+      "category": "blocks_furniture",
+      "difficulty": "complex",
+      "description": "Block with crafting table functionality, geometry, and material instances",
+      "prompt": "Create a custom crafting station block with custom geometry, a unique texture via material_instances, collision and selection boxes, and a crafting_table component.",
+      "input_spec": {
+        "format_version": "1.21.0",
+        "minecraft:block": {
+          "description": {
+            "identifier": "custom:crafting_station",
+            "menu_category": {
+              "category": "construction"
+            }
+          },
+          "components": {}
+        }
+      },
+      "required_components": [
+        "minecraft:geometry",
+        "minecraft:material_instances",
+        "minecraft:collision_box",
+        "minecraft:selection_box",
+        "minecraft:crafting_table"
+      ],
+      "required_fields": {
+        "minecraft:block.components.minecraft:geometry": {
+          "type": "string",
+          "pattern": "^geometry\\."
+        },
+        "minecraft:block.components.minecraft:crafting_table.crafting_tags": {
+          "type": "array",
+          "min_length": 1
+        },
+        "minecraft:block.components.minecraft:crafting_table.table_name": {
+          "type": "string"
+        },
+        "minecraft:block.components.minecraft:collision_box.origin": {
+          "type": "array",
+          "exact_length": 3,
+          "items_type": "number"
+        },
+        "minecraft:block.components.minecraft:collision_box.size": {
+          "type": "array",
+          "exact_length": 3,
+          "items_type": "number"
+        }
+      },
+      "forbidden_components": [
+        "minecraft:health",
+        "minecraft:navigation.walk"
+      ],
+      "should_not_change": [
+        "minecraft:block.description.identifier"
+      ]
+    },
+    {
+      "name": "multi_face_textured_block",
+      "category": "blocks_furniture",
+      "difficulty": "complex",
+      "description": "Block with different textures on different faces via material_instances",
+      "prompt": "Create a display case block with custom geometry. The top face should use a glass texture with alpha_test rendering, and all other faces should use a wood texture with opaque rendering.",
+      "input_spec": {
+        "format_version": "1.21.0",
+        "minecraft:block": {
+          "description": {
+            "identifier": "custom:display_case",
+            "menu_category": {
+              "category": "construction"
+            }
+          },
+          "components": {}
+        }
+      },
+      "required_components": [
+        "minecraft:geometry",
+        "minecraft:material_instances",
+        "minecraft:collision_box",
+        "minecraft:selection_box"
+      ],
+      "required_fields": {
+        "minecraft:block.components.minecraft:geometry": {
+          "type": "string",
+          "pattern": "^geometry\\."
+        },
+        "minecraft:block.components.minecraft:material_instances.*": {
+          "has_key": "render_method"
+        },
+        "minecraft:block.components.minecraft:collision_box.origin": {
+          "type": "array",
+          "exact_length": 3,
+          "items_type": "number"
+        },
+        "minecraft:block.components.minecraft:collision_box.size": {
+          "type": "array",
+          "exact_length": 3,
+          "items_type": "number"
+        }
+      },
+      "forbidden_components": [
+        "minecraft:health",
+        "minecraft:navigation.walk"
+      ],
+      "should_not_change": [
+        "minecraft:block.description.identifier"
+      ]
+    },
+    {
+      "__divider__": "=================================================================",
+      "__category__": "Loot Tables & Recipes",
+      "__description__": "Tests for loot pool structure and shaped/shapeless recipes."
+    },
+    {
+      "name": "shaped_sword_recipe",
+      "category": "loot_recipes",
+      "difficulty": "medium",
+      "description": "3x3 shaped recipe where 'key' is an Object with character keys",
+      "prompt": "Create a shaped crafting recipe for a diamond sword: 1 diamond on top, 1 diamond in middle, 1 stick at bottom (vertical pattern).",
+      "input_spec": {
+        "format_version": "1.21.0",
+        "minecraft:recipe_shaped": {
+          "description": {
+            "identifier": "custom:diamond_sword_recipe"
+          }
+        }
+      },
+      "required_components": [],
+      "required_fields": {
+        "minecraft:recipe_shaped.pattern": {
+          "type": "array",
+          "min_length": 1,
+          "max_length": 3,
+          "items_type": "string"
+        },
+        "minecraft:recipe_shaped.key": {
+          "type": "object"
+        },
+        "minecraft:recipe_shaped.key.*": {
+          "has_key": "item",
+          "value_type": "string"
+        },
+        "minecraft:recipe_shaped.result": {
+          "has_key": "item"
+        }
+      },
+      "forbidden_components": [],
+      "should_not_change": [
+        "minecraft:recipe_shaped.description.identifier"
+      ]
+    },
+    {
+      "name": "zombie_loot_table",
+      "category": "loot_recipes",
+      "difficulty": "medium",
+      "description": "Loot table with multiple pools, rolls, and weighted entries",
+      "prompt": "Create a loot table for a zombie. It should always drop 0-2 rotten flesh, and have a 10% chance to drop an iron ingot.",
+      "input_spec": {
+        "format_version": "1.21.0",
+        "pools": []
+      },
+      "required_components": [],
+      "required_fields": {
+        "pools": {
+          "type": "array",
+          "min_length": 2
+        },
+        "pools[0].rolls": {
+          "type_any": [
+            "integer",
+            "object"
+          ]
+        },
+        "pools[0].entries": {
+          "type": "array",
+          "min_length": 1
+        },
+        "pools[*].entries[*].type": {
+          "equals": "item"
+        },
+        "pools[*].entries[*].name": {
+          "type": "string",
+          "pattern": "^minecraft:"
+        }
+      },
+      "forbidden_components": [],
+      "should_not_change": []
+    },
+    {
+      "name": "nested_treasure_loot",
+      "category": "loot_recipes",
+      "difficulty": "complex",
+      "description": "Complex loot table with conditions, functions, and weighted entries",
+      "prompt": "Create a treasure chest loot table with: 1) A pool that gives 2-4 gold ingots, 2) A pool with 50% chance for diamond OR emerald (weighted 1:2), 3) Apply 'set_count' function.",
+      "input_spec": {
+        "format_version": "1.21.0",
+        "pools": []
+      },
+      "required_components": [],
+      "required_fields": {
+        "pools": {
+          "type": "array",
+          "min_length": 2
+        },
+        "pools[*].entries": {
+          "type": "array",
+          "min_length": 1
+        },
+        "pools[*].entries[*].weight": {
+          "type": "integer",
+          "min": 1
+        }
+      },
+      "forbidden_components": [],
+      "should_not_change": []
+    },
+    {
+      "name": "simple_single_drop",
+      "category": "loot_recipes",
+      "difficulty": "simple",
+      "description": "Simplest possible loot table with one pool and one entry",
+      "prompt": "Create a loot table that always drops exactly 1 apple.",
+      "input_spec": {
+        "format_version": "1.21.0",
+        "pools": []
+      },
+      "required_components": [],
+      "required_fields": {
+        "pools": {
+          "type": "array",
+          "min_length": 1
+        },
+        "pools[0].rolls": {
+          "type_any": [
+            "integer",
+            "object"
+          ]
+        },
+        "pools[0].entries": {
+          "type": "array",
+          "min_length": 1
+        },
+        "pools[0].entries[0].type": {
+          "equals": "item"
+        }
+      },
+      "forbidden_components": [],
+      "should_not_change": []
+    },
+    {
+      "name": "simple_shapeless_recipe",
+      "category": "loot_recipes",
+      "difficulty": "simple",
+      "description": "Shapeless recipe with ingredients array",
+      "prompt": "Create a shapeless recipe that combines 1 red dye and 1 yellow dye to produce 2 orange dye.",
+      "input_spec": {
+        "format_version": "1.21.0",
+        "minecraft:recipe_shapeless": {
+          "description": {
+            "identifier": "custom:orange_dye_recipe"
+          }
+        }
+      },
+      "required_components": [],
+      "required_fields": {
+        "minecraft:recipe_shapeless.ingredients": {
+          "type": "array",
+          "min_length": 2
+        },
+        "minecraft:recipe_shapeless.result": {
+          "has_key": "item"
+        },
+        "minecraft:recipe_shapeless.result.count": {
+          "equals": 2
+        }
+      },
+      "forbidden_components": [],
+      "should_not_change": [
+        "minecraft:recipe_shapeless.description.identifier"
+      ]
+    },
+    {
+      "name": "furnace_recipe",
+      "category": "loot_recipes",
+      "difficulty": "simple",
+      "description": "Furnace/smelting recipe",
+      "prompt": "Create a furnace recipe that smelts custom:raw_silver into custom:silver_ingot.",
+      "input_spec": {
+        "format_version": "1.21.0",
+        "minecraft:recipe_furnace": {
+          "description": {
+            "identifier": "custom:smelt_silver"
+          }
+        }
+      },
+      "required_components": [],
+      "required_fields": {
+        "minecraft:recipe_furnace.input": {
+          "type": "string"
+        },
+        "minecraft:recipe_furnace.output": {
+          "type": "string"
+        }
+      },
+      "forbidden_components": [],
+      "should_not_change": [
+        "minecraft:recipe_furnace.description.identifier"
+      ]
+    },
+    {
+      "name": "weighted_mob_loot",
+      "category": "loot_recipes",
+      "difficulty": "medium",
+      "description": "Loot table with weighted entries in a single pool",
+      "prompt": "Create a loot table for a skeleton. It should drop either bones (weight 3) or arrows (weight 2) from a single pool with 1-3 rolls.",
+      "input_spec": {
+        "format_version": "1.21.0",
+        "pools": []
+      },
+      "required_components": [],
+      "required_fields": {
+        "pools": {
+          "type": "array",
+          "min_length": 1
+        },
+        "pools[0].entries": {
+          "type": "array",
+          "min_length": 2
+        },
+        "pools[0].entries[*].type": {
+          "equals": "item"
+        },
+        "pools[0].entries[*].weight": {
+          "type": "integer",
+          "min": 1
+        }
+      },
+      "forbidden_components": [],
+      "should_not_change": []
+    },
+    {
+      "name": "shaped_armor_recipe",
+      "category": "loot_recipes",
+      "difficulty": "medium",
+      "description": "Shaped recipe for armor with 3x3 pattern",
+      "prompt": "Create a shaped crafting recipe for an iron chestplate. The pattern should use 'I' for iron ingots arranged in the standard chestplate pattern.",
+      "input_spec": {
+        "format_version": "1.21.0",
+        "minecraft:recipe_shaped": {
+          "description": {
+            "identifier": "custom:iron_chestplate_recipe"
+          }
+        }
+      },
+      "required_components": [],
+      "required_fields": {
+        "minecraft:recipe_shaped.pattern": {
+          "type": "array",
+          "min_length": 3,
+          "max_length": 3,
+          "items_type": "string"
+        },
+        "minecraft:recipe_shaped.key": {
+          "type": "object"
+        },
+        "minecraft:recipe_shaped.result": {
+          "has_key": "item"
+        }
+      },
+      "forbidden_components": [],
+      "should_not_change": [
+        "minecraft:recipe_shaped.description.identifier"
+      ]
+    },
+    {
+      "name": "enchanted_loot_functions",
+      "category": "loot_recipes",
+      "difficulty": "complex",
+      "description": "Loot table using enchant_randomly and set_count functions",
+      "prompt": "Create a dungeon chest loot table with: 1) A pool giving 1-3 iron swords with random enchantments, 2) A pool giving 4-8 arrows, 3) A pool with 25% chance for a diamond.",
+      "input_spec": {
+        "format_version": "1.21.0",
+        "pools": []
+      },
+      "required_components": [],
+      "required_fields": {
+        "pools": {
+          "type": "array",
+          "min_length": 3
+        },
+        "pools[*].entries": {
+          "type": "array",
+          "min_length": 1
+        },
+        "pools[*].entries[*].type": {
+          "equals": "item"
+        }
+      },
+      "forbidden_components": [],
+      "should_not_change": []
+    },
+    {
+      "name": "conditional_player_kill_loot",
+      "category": "loot_recipes",
+      "difficulty": "complex",
+      "description": "Loot table with killed_by_player condition",
+      "prompt": "Create a loot table for a wither skeleton. It should always drop 0-2 bones, and only drop a wither skeleton skull (2.5% chance) if killed by a player.",
+      "input_spec": {
+        "format_version": "1.21.0",
+        "pools": []
+      },
+      "required_components": [],
+      "required_fields": {
+        "pools": {
+          "type": "array",
+          "min_length": 2
+        },
+        "pools[*].entries": {
+          "type": "array",
+          "min_length": 1
+        },
+        "pools[*].entries[*].type": {
+          "equals": "item"
+        }
+      },
+      "forbidden_components": [],
+      "should_not_change": []
+    },
+    {
+      "__divider__": "=================================================================",
+      "__category__": "Scripting & Custom Components",
+      "__description__": "Tests for manifest.json structure. Validate UUID v4 format and 'type': 'script' in modules."
+    },
+    {
+      "name": "script_manifest_basic",
+      "category": "scripting_components",
+      "difficulty": "medium",
+      "description": "Manifest with valid UUID v4 and script module type",
+      "prompt": "Create a manifest.json for a behavior pack with scripting enabled. Include @minecraft/server as a dependency.",
+      "input_spec": {
+        "format_version": 2,
+        "header": {
+          "name": "Custom Script Pack",
+          "description": "A pack with scripts",
+          "uuid": "",
+          "version": [
+            1,
+            0,
+            0
+          ],
+          "min_engine_version": [
+            1,
+            21,
+            0
+          ]
+        },
+        "modules": [],
+        "dependencies": []
+      },
+      "required_components": [],
+      "required_fields": {
+        "header.uuid": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "pattern_name": "UUID v4"
+        },
+        "modules": {
+          "type": "array",
+          "min_length": 1
+        },
+        "modules[*].type": {
+          "equals": "script"
+        },
+        "modules[*].uuid": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "pattern_name": "UUID v4"
+        },
+        "dependencies": {
+          "type": "array",
+          "min_length": 1
+        }
+      },
+      "must_contain_in_path": {
+        "dependencies[*].module_name": {
+          "contains_any": [
+            "@minecraft/server"
+          ]
+        }
+      },
+      "forbidden_components": [],
+      "should_not_change": [
+        "header.name"
+      ]
+    },
+    {
+      "name": "custom_component_def",
+      "category": "scripting_components",
+      "difficulty": "medium",
+      "description": "Script module with entry point and valid UUID v4",
+      "prompt": "Create a manifest for a custom component pack. The script entry point should be 'scripts/main.js'.",
+      "input_spec": {
+        "format_version": 2,
+        "header": {
+          "name": "Custom Component Pack",
+          "description": "Pack with custom components",
+          "uuid": "",
+          "version": [
+            1,
+            0,
+            0
+          ],
+          "min_engine_version": [
+            1,
+            21,
+            0
+          ]
+        },
+        "modules": [],
+        "dependencies": []
+      },
+      "required_components": [],
+      "required_fields": {
+        "header.uuid": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "pattern_name": "UUID v4"
+        },
+        "modules": {
+          "type": "array",
+          "min_length": 1
+        },
+        "modules[*].type": {
+          "equals": "script"
+        },
+        "modules[*].entry": {
+          "type": "string",
+          "pattern": "^scripts/.*\\.js$"
+        },
+        "modules[*].uuid": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "pattern_name": "UUID v4"
+        }
+      },
+      "forbidden_components": [],
+      "should_not_change": [
+        "header.name"
+      ]
+    },
+    {
+      "name": "gametest_module",
+      "category": "scripting_components",
+      "difficulty": "complex",
+      "description": "GameTest framework manifest with proper dependencies and UUID validation",
+      "prompt": "Create a manifest for a GameTest behavior pack. Include both @minecraft/server and @minecraft/server-gametest dependencies.",
+      "input_spec": {
+        "format_version": 2,
+        "header": {
+          "name": "GameTest Pack",
+          "description": "Pack for game testing",
+          "uuid": "",
+          "version": [
+            1,
+            0,
+            0
+          ],
+          "min_engine_version": [
+            1,
+            21,
+            0
+          ]
+        },
+        "modules": [],
+        "dependencies": []
+      },
+      "required_components": [],
+      "required_fields": {
+        "header.uuid": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "pattern_name": "UUID v4"
+        },
+        "modules": {
+          "type": "array",
+          "min_length": 1
+        },
+        "modules[*].type": {
+          "equals": "script"
+        },
+        "modules[*].uuid": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "pattern_name": "UUID v4"
+        },
+        "dependencies": {
+          "type": "array",
+          "min_length": 2
+        }
+      },
+      "must_contain_in_path": {
+        "dependencies[*].module_name": {
+          "contains_all": [
+            "@minecraft/server",
+            "@minecraft/server-gametest"
+          ]
+        }
+      },
+      "forbidden_components": [],
+      "should_not_change": [
+        "header.name"
+      ]
+    },
+    {
+      "name": "simple_data_module",
+      "category": "scripting_components",
+      "difficulty": "simple",
+      "description": "Basic manifest with data module (not script)",
+      "prompt": "Create a basic manifest.json for a behavior pack with a single data module. No scripting needed.",
+      "input_spec": {
+        "format_version": 2,
+        "header": {
+          "name": "Data Pack",
+          "description": "A basic data pack",
+          "uuid": "",
+          "version": [
+            1,
+            0,
+            0
+          ],
+          "min_engine_version": [
+            1,
+            21,
+            0
+          ]
+        },
+        "modules": []
+      },
+      "required_components": [],
+      "required_fields": {
+        "header.uuid": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "pattern_name": "UUID v4"
+        },
+        "modules": {
+          "type": "array",
+          "min_length": 1
+        },
+        "modules[*].type": {
+          "equals": "data"
+        },
+        "modules[*].uuid": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "pattern_name": "UUID v4"
+        }
+      },
+      "forbidden_components": [],
+      "should_not_change": [
+        "header.name"
+      ]
+    },
+    {
+      "name": "resource_pack_manifest",
+      "category": "scripting_components",
+      "difficulty": "simple",
+      "description": "Resource pack manifest with resources module",
+      "prompt": "Create a manifest.json for a resource pack. The module type should be 'resources'.",
+      "input_spec": {
+        "format_version": 2,
+        "header": {
+          "name": "Texture Pack",
+          "description": "Custom textures",
+          "uuid": "",
+          "version": [
+            1,
+            0,
+            0
+          ],
+          "min_engine_version": [
+            1,
+            21,
+            0
+          ]
+        },
+        "modules": []
+      },
+      "required_components": [],
+      "required_fields": {
+        "header.uuid": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "pattern_name": "UUID v4"
+        },
+        "modules": {
+          "type": "array",
+          "min_length": 1
+        },
+        "modules[*].type": {
+          "equals": "resources"
+        },
+        "modules[*].uuid": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "pattern_name": "UUID v4"
+        }
+      },
+      "forbidden_components": [],
+      "should_not_change": [
+        "header.name"
+      ]
+    },
+    {
+      "name": "versioned_manifest",
+      "category": "scripting_components",
+      "difficulty": "simple",
+      "description": "Manifest with specific version numbers",
+      "prompt": "Create a manifest.json for a behavior pack version 2.1.0 with min engine version 1.21.50. Include a data module.",
+      "input_spec": {
+        "format_version": 2,
+        "header": {
+          "name": "Versioned Pack",
+          "description": "A versioned pack",
+          "uuid": "",
+          "version": [
+            1,
+            0,
+            0
+          ],
+          "min_engine_version": [
+            1,
+            21,
+            0
+          ]
+        },
+        "modules": []
+      },
+      "required_components": [],
+      "required_fields": {
+        "header.uuid": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "pattern_name": "UUID v4"
+        },
+        "header.version": {
+          "type": "array",
+          "exact_length": 3
+        },
+        "modules": {
+          "type": "array",
+          "min_length": 1
+        },
+        "modules[*].uuid": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "pattern_name": "UUID v4"
+        }
+      },
+      "forbidden_components": [],
+      "should_not_change": [
+        "header.name"
+      ]
+    },
+    {
+      "name": "script_with_ui",
+      "category": "scripting_components",
+      "difficulty": "medium",
+      "description": "Script manifest with server-ui dependency",
+      "prompt": "Create a manifest for a script pack that uses the server UI API. Include @minecraft/server and @minecraft/server-ui as dependencies. Entry point is 'scripts/ui_handler.js'.",
+      "input_spec": {
+        "format_version": 2,
+        "header": {
+          "name": "UI Script Pack",
+          "description": "Pack with UI scripts",
+          "uuid": "",
+          "version": [
+            1,
+            0,
+            0
+          ],
+          "min_engine_version": [
+            1,
+            21,
+            0
+          ]
+        },
+        "modules": [],
+        "dependencies": []
+      },
+      "required_components": [],
+      "required_fields": {
+        "header.uuid": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "pattern_name": "UUID v4"
+        },
+        "modules": {
+          "type": "array",
+          "min_length": 1
+        },
+        "modules[*].type": {
+          "equals": "script"
+        },
+        "modules[*].entry": {
+          "type": "string",
+          "pattern": "^scripts/.*\\.js$"
+        },
+        "modules[*].uuid": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "pattern_name": "UUID v4"
+        },
+        "dependencies": {
+          "type": "array",
+          "min_length": 2
+        }
+      },
+      "must_contain_in_path": {
+        "dependencies[*].module_name": {
+          "contains_all": [
+            "@minecraft/server",
+            "@minecraft/server-ui"
+          ]
+        }
+      },
+      "forbidden_components": [],
+      "should_not_change": [
+        "header.name"
+      ]
+    },
+    {
+      "name": "multi_module_manifest",
+      "category": "scripting_components",
+      "difficulty": "complex",
+      "description": "Manifest with both script and data modules",
+      "prompt": "Create a manifest with two modules: a 'data' module and a 'script' module with entry 'scripts/main.js'. Include @minecraft/server dependency.",
+      "input_spec": {
+        "format_version": 2,
+        "header": {
+          "name": "Multi Module Pack",
+          "description": "Pack with data and scripts",
+          "uuid": "",
+          "version": [
+            1,
+            0,
+            0
+          ],
+          "min_engine_version": [
+            1,
+            21,
+            0
+          ]
+        },
+        "modules": [],
+        "dependencies": []
+      },
+      "required_components": [],
+      "required_fields": {
+        "header.uuid": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "pattern_name": "UUID v4"
+        },
+        "modules": {
+          "type": "array",
+          "min_length": 2
+        },
+        "dependencies": {
+          "type": "array",
+          "min_length": 1
+        }
+      },
+      "must_contain_in_path": {
+        "dependencies[*].module_name": {
+          "contains_any": [
+            "@minecraft/server"
+          ]
+        }
+      },
+      "forbidden_components": [],
+      "should_not_change": [
+        "header.name"
+      ]
+    },
+    {
+      "name": "full_addon_manifest",
+      "category": "scripting_components",
+      "difficulty": "complex",
+      "description": "Complete addon manifest with script module, multiple dependencies, and metadata",
+      "prompt": "Create a complete manifest for an addon with scripting. Include @minecraft/server (1.12.0), @minecraft/server-ui (1.2.0), and @minecraft/server-gametest (1.0.0) as dependencies. Script entry is 'scripts/addon.js'. Add metadata with 'authors' array containing 'TestAuthor'.",
+      "input_spec": {
+        "format_version": 2,
+        "header": {
+          "name": "Full Addon",
+          "description": "Complete addon pack",
+          "uuid": "",
+          "version": [
+            1,
+            0,
+            0
+          ],
+          "min_engine_version": [
+            1,
+            21,
+            0
+          ]
+        },
+        "modules": [],
+        "dependencies": []
+      },
+      "required_components": [],
+      "required_fields": {
+        "header.uuid": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "pattern_name": "UUID v4"
+        },
+        "modules": {
+          "type": "array",
+          "min_length": 1
+        },
+        "modules[*].type": {
+          "equals": "script"
+        },
+        "modules[*].uuid": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "pattern_name": "UUID v4"
+        },
+        "dependencies": {
+          "type": "array",
+          "min_length": 3
+        }
+      },
+      "must_contain_in_path": {
+        "dependencies[*].module_name": {
+          "contains_all": [
+            "@minecraft/server",
+            "@minecraft/server-ui",
+            "@minecraft/server-gametest"
+          ]
+        }
+      },
+      "forbidden_components": [],
+      "should_not_change": [
+        "header.name"
+      ]
+    },
+    {
+      "name": "world_template_manifest",
+      "category": "scripting_components",
+      "difficulty": "medium",
+      "description": "World template manifest with world_template module type",
+      "prompt": "Create a manifest.json for a world template. The module type should be 'world_template'. Include a lock_template_options field set to true in the header.",
+      "input_spec": {
+        "format_version": 2,
+        "header": {
+          "name": "Adventure World",
+          "description": "An adventure map",
+          "uuid": "",
+          "version": [
+            1,
+            0,
+            0
+          ],
+          "min_engine_version": [
+            1,
+            21,
+            0
+          ]
+        },
+        "modules": []
+      },
+      "required_components": [],
+      "required_fields": {
+        "header.uuid": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "pattern_name": "UUID v4"
+        },
+        "modules": {
+          "type": "array",
+          "min_length": 1
+        },
+        "modules[*].type": {
+          "equals": "world_template"
+        },
+        "modules[*].uuid": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "pattern_name": "UUID v4"
+        }
+      },
+      "forbidden_components": [],
+      "should_not_change": [
+        "header.name"
+      ]
+    }
+  ]
+}

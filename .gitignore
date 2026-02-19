@@ -1,7 +1,6 @@
 venv/
 __pycache__/
 *.pyc
-blockbench/
 
 # Local build artifacts
 # We keep .mcworld out of ignore if we want to use it as a template
@@ -11,6 +10,9 @@ blockbench/
 
 # Environment variables
 .env
+
+# Bedrock Dedicated Server (too large for GitHub)
+bedrock_server/
 
 # Local documentation (not for git)
 USER_MANAGEMENT_DOCS.md

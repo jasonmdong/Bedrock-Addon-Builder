@@ -35,6 +35,9 @@ from backend.core.routes import (
     get_template_mob_from_database,
     get_all_template_mob_names,
     fetch_mob_geometry,
+    launch_test,
+    launch_test_status,
+    launch_test_stop,
 )
 
 
@@ -80,6 +83,11 @@ app.get("/api/template/mob/{mob_name}")(get_template_mob_from_database)
 app.get("/api/geometry/{mob_name}")(fetch_mob_geometry)
 app.post("/api/geometry/generate")(llm_geometry_generate)
 app.post("/api/spec/llm_mock")(llm_spec_mock)
+
+# One-Click Play routes
+app.post("/api/launch-test")(launch_test)
+app.get("/api/launch-test/status")(launch_test_status)
+app.post("/api/launch-test/stop")(launch_test_stop)
 
 # Static routes
 app.get("/")(index)

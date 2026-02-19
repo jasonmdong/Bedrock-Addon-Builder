@@ -31,6 +31,14 @@ async function loadMobList() {
   const mobs = getCurrentUserMobs();
   const mobNames = Object.keys(mobs);
   
+  // Preserve existing checkbox states before rebuilding
+  const prevChecked = {};
+  mobListEl.querySelectorAll(".mob-item").forEach(item => {
+    const n = item.querySelector(".mob-name")?.textContent;
+    const c = item.querySelector("input[type='checkbox']");
+    if (n && c) prevChecked[n] = c.checked;
+  });
+
   mobListEl.innerHTML = "";
   mobNames.forEach(name => {
     const li = document.createElement("li");
@@ -38,7 +46,7 @@ async function loadMobList() {
     
     const cb = document.createElement("input");
     cb.type = "checkbox";
-    cb.checked = true; // Default to selected
+    cb.checked = (name in prevChecked) ? prevChecked[name] : true; // Preserve state, default new mobs to checked
     cb.onclick = (e) => e.stopPropagation();
     li.appendChild(cb);
     
