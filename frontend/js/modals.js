@@ -211,15 +211,29 @@ function initLoadTemplateModal() {
         identifier: `custom:${customSafeName}`
       };
       
+      // Remember the vanilla template name so geometry can be resolved on reload
+      newSpec._template_base = templateMobName;
+
+      // Fetch geometry from bedrock-samples and embed it into the spec
+      try {
+        const geoRes = await fetch(`/api/geometry/${encodeURIComponent(templateMobName)}`);
+        if (geoRes.ok) {
+          const geoData = await geoRes.json();
+          if (geoData.geometry && geoData.geometry["minecraft:geometry"]) {
+            newSpec.geometry_json = geoData.geometry;
+          }
+        }
+      } catch (e) {
+        console.warn(`[TEMPLATE] Could not fetch geometry for ${templateMobName}:`, e);
+      }
+
       // Save the custom mob
       saveUserMob(customSafeName, newSpec);
       currentMobName = customSafeName;
       await loadMobList();
       await selectMob(customSafeName);
       
-      // Try to load geometry from database template
       alert(`✅ Successfully created "${customName}" from "${templateMobName}"!`);
-      await fetchAndDisplayGeometry(templateMobName, customSafeName);
       
       // Close modal
       loadTemplateModalOverlay.classList.add("hidden");
