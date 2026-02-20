@@ -749,10 +749,28 @@ async def launch_test(payload: dict = Body(...)):
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Invalid spec: {exc}")
 
+    # Save textures from payload to temp directory for build process
+    import base64
+    textures_dir = None
+    textures_json = payload.get("textures", {})
+    if textures_json and isinstance(textures_json, dict):
+        tex_tmp = Path(tempfile.mkdtemp(prefix="test_tex_"))
+        textures_dir = tex_tmp
+        for mob_name, base64_data in textures_json.items():
+            try:
+                if isinstance(base64_data, str) and base64_data:
+                    if "," in base64_data:
+                        base64_data = base64_data.split(",", 1)[1]
+                    png_bytes = base64.b64decode(base64_data)
+                    tex_path = textures_dir / f"{mob_name}.png"
+                    tex_path.write_bytes(png_bytes)
+            except Exception as e:
+                print(f"[TEST] Warning: Failed to process texture for {mob_name}: {e}")
+
     # Build addon to get the behavior pack folder
     out_dir = Path(tempfile.mkdtemp(prefix="test_session_"))
     try:
-        artifacts = build_addon(specs, out_dir, None, None)
+        artifacts = build_addon(specs, out_dir, None, None, textures_dir=textures_dir)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Build failed: {exc}")
 

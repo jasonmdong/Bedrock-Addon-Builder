@@ -1,381 +1,750 @@
 <!doctype html>
+
 <html lang="en">
+
 <head>
+
   <meta charset="utf-8">
+
   <title>Bedrock Add-on Builder</title>
+
   <link rel="stylesheet" href="styles.css">
+
 </head>
+
 <body>
 
+
+
 <!-- User Selection Modal -->
+
 <div id="user-modal-overlay" class="user-modal-overlay hidden">
+
   <div class="user-modal">
+
     <h2>Select User</h2>
+
     <ul class="user-list" id="user-list">
+
       <!-- Users will be listed here -->
+
     </ul>
+
     <div class="new-user-form">
+
       <input type="text" id="new-user-input" placeholder="Enter new username...">
+
       <button type="button" class="primary" id="create-user-btn">Create</button>
+
     </div>
+
   </div>
+
 </div>
+
+
 
 <!-- Add Mob Modal -->
+
 <div id="add-mob-modal-overlay" class="user-modal-overlay hidden">
+
   <div class="user-modal">
+
     <h2>Create New Mob</h2>
+
     <div class="new-user-form">
+
       <input type="text" id="new-mob-input" placeholder="Enter mob name...">
+
       <button type="button" class="primary" id="create-mob-btn">Create</button>
+
     </div>
+
   </div>
+
 </div>
+
+
 
 <!-- Load Template Modal -->
+
 <div id="load-template-modal-overlay" class="user-modal-overlay hidden">
+
   <div class="user-modal">
+
     <h2 id="template-modal-title">Load Template</h2>
+
     <div class="new-user-form">
+
       <input type="text" id="template-mob-input" placeholder="Enter name for this mob...">
+
       <button type="button" class="primary" id="template-create-btn">Create</button>
+
     </div>
+
   </div>
+
 </div>
 
+
+
 <!-- Hidden file input for restore -->
+
 <input type="file" id="restore-file-input" accept=".json" style="display: none;">
 
+
+
 <aside id="sidebar">
+
   <!-- User Section -->
+
   <div class="user-section" id="user-section">
+
     <div class="current-user" id="current-user-display">Guest</div>
+
     <button type="button" class="ghost switch-user-btn" id="switch-user-btn">Switch User</button>
+
     <div class="data-buttons">
+
       <button type="button" class="secondary" id="backup-btn" title="Download backup of your workspace">⬇️ Backup</button>
+
       <button type="button" class="secondary" id="restore-btn" title="Restore workspace from backup file">⬆️ Restore</button>
+
     </div>
+
   </div>
+
   
+
   <div class="sidebar-header">
+
     <h2>Mobs</h2>
+
     <div style="display: flex; gap: 0.5rem;">
+
       <select id="template-select" style="width: auto; height: 36px; padding: 0 0.5rem; font-size: 0.85rem; border-radius: 8px;">
+
         <option value="">-- Load Template --</option>
+
       </select>
+
       <button type="button" class="primary" id="add-mob" style="padding: 0.5rem 0.75rem; font-size: 0.9rem;">+ New</button>
+
     </div>
+
   </div>
+
   <ul class="mob-list" id="mob-list">
+
     <!-- Mobs will be listed here -->
+
   </ul>
+
   <div class="sidebar-footer">
+
     <div>
+
       <label for="build-mode">Download Type</label>
+
       <select id="build-mode" style="width: 100%;">
+
         <option value="bundle">Bundle (.zip with mcaddon)</option>
+
         <option value="mcworld">World (.mcworld)</option>
+
       </select>
+
     </div>
+
     <button type="button" class="primary" id="build-bundle" style="width: 100%;">Build Bundle</button>
-    <button type="button" class="secondary" id="test-in-game" style="width: 100%; margin-top: 0.5rem; background: linear-gradient(135deg, #10b981, #059669); color: #fff; border: none;">
-      🎮 Test in Game
-    </button>
-    <div id="test-session-bar" style="display: none; margin-top: 0.5rem; padding: 0.6rem 0.8rem; border-radius: 8px; background: var(--bg); border: 1px solid var(--border); font-size: 0.82rem;">
-      <div style="display: flex; justify-content: space-between; align-items: center;">
-        <span id="test-session-status">Idle</span>
-        <button type="button" class="danger" id="test-stop-btn" style="padding: 0.25rem 0.6rem; font-size: 0.78rem; border-radius: 6px;">Stop</button>
-      </div>
-      <div id="test-session-log" style="margin-top: 0.4rem; max-height: 120px; overflow-y: auto; font-family: monospace; font-size: 0.75rem; line-height: 1.4; color: var(--hint); white-space: pre-wrap;"></div>
-    </div>
+
     <div id="sidebar-status" style="font-size: 0.85rem; padding: 0.5rem; border-radius: 8px; background: var(--bg); display: none; margin-top: 0.5rem; word-break: break-all;"></div>
-    <button type="button" class="ghost" id="theme-toggle" style="width: 100%;">🌙 Dark Mode</button>
-  </div>
-  
-  <!-- Collapse Toggle Button -->
-  <button type="button" id="sidebar-toggle" class="sidebar-toggle" title="Toggle Sidebar" style="position: absolute; right: 4px; top: 12px; z-index: 200;">◀</button>
-  <div id="resizer" class="resizer"></div>
-</aside>
-<main>
-  <h1>Bedrock Add-on Builder</h1>
-  <p class="hint">
-    Edit JSON specs individually. Select mobs in the sidebar to include them in the final bundle.
-  </p>
-  <pre id="status">Loading spec...</pre>
-  
-  <!-- Two-Column Widget Layout -->
-  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 2rem; min-height: calc(100vh - 300px);">
-    
-    <!-- LEFT WIDGET -->
-    <div style="display: flex; flex-direction: column; gap: 1rem; height: 100%;">
-      <!-- Generated Pack Structure -->
-      <div style="padding: 1rem; background: var(--card-bg); border-radius: 8px; border: 1px solid var(--border); flex: 1; display: flex; flex-direction: column; overflow: hidden;">
-        <h3 style="margin: 0 0 0.75rem 0; font-size: 1rem; font-weight: bold;">📁 Generated Pack Structure</h3>
-        <div id="file-tree" style="font-family: monospace; font-size: 0.85rem; line-height: 1.6; overflow-y: auto; flex: 1;"></div>
-      </div>
-      
-      <!-- LLM Assistant -->
-      <div class="llm-card" style="flex: 1; display: flex; flex-direction: column;">
-        <div>
-          <label style="font-size:1rem;">🤖 LLM Assistant Prompt</label>
-          <p class="hint" style="margin:.2rem 0 0;">Describe the change you want and let an LLM update the spec.</p>
-        </div>
-        <div class="llm-controls">
-          <div class="field">
-            <label>Provider</label>
-            <select id="llm-provider">
-              <option value="openai">OpenAI</option>
-              <option value="deepseek">DeepSeek</option>
-              <option value="gemini">Gemini</option>
-              <option value="claude">Claude</option>
-              <option value="mock">Local Mock (dev)</option>
-            </select>
-          </div>
-          <div class="field">
-            <label>API Key</label>
-            <input type="password" id="llm-key" placeholder="sk-..." autocomplete="off">
-          </div>
-        </div>
-        <textarea id="llm-prompt" placeholder="Describe how the mob should change (damage, hp, colors, geometry...)." style="flex: 1;"></textarea>
-        <div style="background: #1e293b; color: #f1f5f9; padding: 0.5rem; border-radius: 4px; margin-bottom: 0.5rem; font-size: 0.8rem; display: flex; align-items: center; gap: 0.5rem;">
-          <span>🔒</span>
-          <span><strong>Private:</strong> The API key is stored locally in your browser only. Never sent to our server.</span>
-        </div>
-          <div class="actions">
-          <button type="button" class="primary" id="llm-run">Ask LLM</button>
-        </div>
-      </div>
+
+    <button type="button" class="primary" id="test-in-game" style="width: 100%; margin-top: 0.5rem; background: #10b981;">🎮 Test in Game</button>
+
+    <div id="test-session-bar" style="display: none; margin-top: 0.5rem; font-size: 0.85rem; padding: 0.5rem; border-radius: 8px; background: var(--bg);">
+      <div id="test-session-status" style="margin-bottom: 0.25rem;">Idle</div>
+      <pre id="test-session-log" style="max-height: 120px; overflow-y: auto; font-size: 0.75rem; background: #111; color: #aaa; padding: 4px; border-radius: 4px; margin: 0;"></pre>
+      <button type="button" class="ghost" id="test-stop-btn" style="width: 100%; margin-top: 0.25rem; color: var(--danger);">Stop Server</button>
     </div>
+
+    <button type="button" class="ghost" id="theme-toggle" style="width: 100%;">🌙 Dark Mode</button>
+
+  </div>
+
+  
+
+  <!-- Collapse Toggle Button -->
+
+  <button type="button" id="sidebar-toggle" class="sidebar-toggle" title="Toggle Sidebar" style="position: absolute; right: 4px; top: 12px; z-index: 200;">◀</button>
+
+  <div id="resizer" class="resizer"></div>
+
+</aside>
+
+<main>
+
+  <h1>Bedrock Add-on Builder</h1>
+
+  <p class="hint">
+
+    Edit JSON specs individually. Select mobs in the sidebar to include them in the final bundle.
+
+  </p>
+
+  <pre id="status">Loading spec...</pre>
+
+  
+
+  <!-- Two-Column Widget Layout -->
+
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 2rem; min-height: calc(100vh - 300px);">
+
     
-    <!-- RIGHT WIDGET -->
+
+    <!-- LEFT WIDGET -->
+
     <div style="display: flex; flex-direction: column; gap: 1rem; height: 100%;">
-      <!-- Mob Spec JSON Editor -->
-      <div style="display: flex; flex-direction: column; flex: 1; overflow: hidden;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-          <label>📝 Mob Spec JSON</label>
-          <div style="display:flex; align-items:center; gap:0.5rem;">
-            <span id="validation-badge" style="font-size: 0.85rem; padding: 0.25rem 0.75rem; border-radius: 12px; display: none;"></span>
-            <div id="spec-view-toggle" class="spec-view-toggle" style="position:relative; display:inline-flex; gap:0.25rem; border:1px solid var(--border); padding:2px; border-radius:6px; background:var(--card-bg);">
-              <div id="spec-toggle-slider" style="position:absolute; top:2px; left:2px; width:56px; height:calc(100% - 4px); border-radius:4px; background:rgba(255,255,255,0.08); transition:left 200ms ease, width 200ms ease;"></div>
-              <button id="spec-view-editor-btn" style="position:relative; padding:4px 8px; border-radius:4px; border:none; background:transparent; cursor:pointer; color:#ffffff;">Editor</button>
-              <button id="spec-view-diff-btn" style="position:relative; padding:4px 8px; border-radius:4px; border:none; background:transparent; cursor:pointer; color:#ffffff;">Diff</button>
-            </div>
-          </div>
+
+      <!-- Generated Pack Structure -->
+
+      <div style="padding: 1rem; background: var(--card-bg); border-radius: 8px; border: 1px solid var(--border); flex: 1; display: flex; flex-direction: column; overflow: hidden;">
+
+        <h3 style="margin: 0 0 0.75rem 0; font-size: 1rem; font-weight: bold;">📁 Generated Pack Structure</h3>
+
+        <div id="file-tree" style="font-family: monospace; font-size: 0.85rem; line-height: 1.6; overflow-y: auto; flex: 1;"></div>
+
+      </div>
+
+      
+
+      <!-- LLM Assistant -->
+
+      <div class="llm-card" style="flex: 1; display: flex; flex-direction: column;">
+
+        <div>
+
+          <label style="font-size:1rem;">🤖 LLM Assistant Prompt</label>
+
+          <p class="hint" style="margin:.2rem 0 0;">Describe the change you want and let an LLM update the spec.</p>
+
         </div>
+
+        <div class="llm-controls">
+
+          <div class="field">
+
+            <label>Provider</label>
+
+            <select id="llm-provider">
+
+              <option value="openai">OpenAI</option>
+
+              <option value="deepseek">DeepSeek</option>
+
+              <option value="gemini">Gemini</option>
+
+              <option value="claude">Claude</option>
+
+              <option value="mock">Local Mock (dev)</option>
+
+            </select>
+
+          </div>
+
+          <div class="field">
+
+            <label>API Key</label>
+
+            <input type="password" id="llm-key" placeholder="sk-..." autocomplete="off">
+
+          </div>
+
+        </div>
+
+        <textarea id="llm-prompt" placeholder="Describe how the mob should change (damage, hp, colors, geometry...)." style="flex: 1;"></textarea>
+
+        <div style="background: #1e293b; color: #f1f5f9; padding: 0.5rem; border-radius: 4px; margin-bottom: 0.5rem; font-size: 0.8rem; display: flex; align-items: center; gap: 0.5rem;">
+
+          <span>🔒</span>
+
+          <span><strong>Private:</strong> The API key is stored locally in your browser only. Never sent to our server.</span>
+
+        </div>
+
+          <div class="actions">
+
+          <button type="button" class="primary" id="llm-run">Ask LLM</button>
+
+        </div>
+
+      </div>
+
+    </div>
+
+    
+
+    <!-- RIGHT WIDGET -->
+
+    <div style="display: flex; flex-direction: column; gap: 1rem; height: 100%;">
+
+      <!-- Mob Spec JSON Editor -->
+
+      <div style="display: flex; flex-direction: column; flex: 1; overflow: hidden;">
+
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+
+          <label>📝 Mob Spec JSON</label>
+
+          <div style="display:flex; align-items:center; gap:0.5rem;">
+
+            <span id="validation-badge" style="font-size: 0.85rem; padding: 0.25rem 0.75rem; border-radius: 12px; display: none;"></span>
+
+            <div id="spec-view-toggle" class="spec-view-toggle" style="position:relative; display:inline-flex; gap:0.25rem; border:1px solid var(--border); padding:2px; border-radius:6px; background:var(--card-bg);">
+
+              <div id="spec-toggle-slider" style="position:absolute; top:2px; left:2px; width:56px; height:calc(100% - 4px); border-radius:4px; background:rgba(255,255,255,0.08); transition:left 200ms ease, width 200ms ease;"></div>
+
+              <button id="spec-view-editor-btn" style="position:relative; padding:4px 8px; border-radius:4px; border:none; background:transparent; cursor:pointer; color:#ffffff;">Editor</button>
+
+              <button id="spec-view-diff-btn" style="position:relative; padding:4px 8px; border-radius:4px; border:none; background:transparent; cursor:pointer; color:#ffffff;">Diff</button>
+
+            </div>
+
+          </div>
+
+        </div>
+
+
 
         <!-- editor view -->
+
         <div id="spec-editor-container" style="flex: 1; display:flex; flex-direction:column; overflow: hidden;">
+
           <textarea id="spec-editor" spellcheck="false" autocomplete="off" style="flex: 1; resize: none; font-family: monospace; font-size:0.85rem; line-height:1.35; padding:8px; background:var(--editor-bg); color:var(--editor-text); border:none; outline:none;"></textarea>
+
           <div class="actions" style="margin-top: 0.75rem;">
+
             <button type="button" class="secondary" id="reset">Reset</button>
+
             <button type="button" class="danger" id="save">Save Spec</button>
+
           </div>
+
         </div>
+
+
 
         <!-- diff view -->
+
         <div id="spec-diff-container" style="flex: 1; display: none; flex-direction:column; overflow: hidden;">
+
           <div id="diff-scroll" style="flex:1; display:flex; overflow:auto; border-radius:6px;">
+
             <pre id="line-gutter" style="width:64px; margin:0; padding:8px; font-family: monospace; font-size:0.85rem; color:var(--muted); background:transparent; border-right:1px solid rgba(255,255,255,0.02); text-align:right; line-height:1.35;"></pre>
+
             <pre id="spec-pre" style="flex:1; margin:0; padding:8px; font-family: monospace; font-size:0.85rem; white-space:pre; color:var(--editor-text); line-height:1.35; background:transparent;"></pre>
+
           </div>
+
         </div>
+
       </div>
+
       
+
       <!-- LLM Changes Diff (Always Visible) -->
+
       <div style="padding: 1rem; background: var(--card-bg); border-radius: 8px; border: 1px solid var(--border); flex: 1; display: flex; flex-direction: column; overflow: hidden;">
+
         <h3 style="margin: 0 0 0.75rem 0; font-size: 1rem; font-weight: bold;">🔄 LLM Changes</h3>
+
         <div style="display:flex; gap:1rem; height:100%;">
+
           <div id="llm-history" style="flex:1; background: var(--status-bg); color: var(--status-text); border-radius:8px; padding:0.5rem; overflow:auto;">
+
             <div style="font-weight:700; margin-bottom:0.5rem;">LLM History</div>
+
             <div id="llm-history-list" style="font-size:0.85rem; display:flex; flex-direction:column; gap:0.5rem;">
+
               <div style="color: var(--muted); font-style: italic; text-align:center;">No history yet</div>
+
             </div>
+
             <div style="margin-top:0.5rem; display:flex; gap:0.5rem;">
+
               <button id="clear-llm-history" class="ghost" style="flex:1;">Clear</button>
+
             </div>
+
             <div style="margin-top:0.5rem; font-size:0.8rem; color:var(--muted);">Session: <span id="llm-session-count">0</span> iterations</div>
+
           </div>
+
         </div>
+
       </div>
+
     </div>
+
     
+
   </div>
+
   
+
   <!-- Bottom Section: Resource Packs & Texture Painter -->
+
   <div class="row" style="margin-top: 2rem;">
+
     <div class="field">
+
       <label>📦 Resource Pack (.zip/.mcpack)</label>
+
       <div style="position: relative;">
+
         <input type="file" id="resource" style="display: none;" accept=".zip,.mcpack">
+
         <button type="button" class="secondary" onclick="document.getElementById('resource').click()" style="width: 100%; text-align: left; display: flex; align-items: center; gap: 0.5rem;">
+
           <span style="font-size: 1.25rem;">📂</span>
+
           <span id="resource-file-name" style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Choose file...</span>
+
         </button>
+
       </div>
+
     </div>
+
     <div class="field">
+
       <label>⚙️ Behavior Pack (.zip/.mcpack)</label>
+
       <div style="position: relative;">
+
         <input type="file" id="behavior" style="display: none;" accept=".zip,.mcpack">
+
         <button type="button" class="secondary" onclick="document.getElementById('behavior').click()" style="width: 100%; text-align: left; display: flex; align-items: center; gap: 0.5rem;">
+
           <span style="font-size: 1.25rem;">📂</span>
+
           <span id="behavior-file-name" style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Choose file...</span>
+
         </button>
+
       </div>
+
     </div>
+
   </div>
+
   
+
   <!-- Side by Side: Mob Geometry (Left) and Texture Painter (Right) -->
+
   <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-top: 2rem; margin-bottom: 2rem;">
+
     
+
     <!-- LEFT: Mob Geometry -->
+
     <div class="painter-container" id="geometry-container" style="display: none; margin-top: 0;">
+
       <h2 style="margin-top: 0;">📐 Mob Geometry</h2>
+
       <p class="hint">Geometry file from Mojang's bedrock-samples repository.</p>
+
       <div style="position: relative; margin-bottom: 1rem;">
+
         <div style="display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;">
+
           <a id="geometry-url" href="#" target="_blank" rel="noopener" style="color: var(--primary); text-decoration: underline; font-size: 0.9rem;"></a>
+
           <button type="button" class="secondary" id="geometry-copy" style="padding: 0.5rem 1rem; font-size: 0.9rem;">📋 Copy JSON</button>
+
         </div>
+
       </div>
+
       
+
       <!-- 3D Viewport (Blockbench-style) -->
+
       <div style="margin-bottom: 1.5rem;">
+
         <h3 style="margin-top: 0; margin-bottom: 0.75rem; font-size: 0.95rem;">3D Model Preview</h3>
+
         <div id="viewport-3d" class="viewport-3d"></div>
+
         <!-- 3D Editor Toolbar -->
+
         <div class="editor-toolbar" style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem; flex-wrap: wrap; align-items: center;">
+
           <!-- View Controls -->
+
           <div class="toolbar-group" style="display: flex; gap: 0.25rem; border-right: 1px solid var(--border); padding-right: 0.5rem;">
+
             <button type="button" class="secondary editor-tool-btn" data-tool="select" id="tool-select" onclick="setEditorTool('select')" title="Select (Q)">🔍</button>
+
             <button type="button" class="secondary editor-tool-btn" data-tool="move" id="tool-move" onclick="setEditorTool('move')" title="Move (W)">↔️</button>
+
             <button type="button" class="secondary editor-tool-btn" data-tool="rotate" id="tool-rotate" onclick="setEditorTool('rotate')" title="Rotate (E)">🔄</button>
+
             <button type="button" class="secondary editor-tool-btn" data-tool="scale" id="tool-scale" onclick="setEditorTool('scale')" title="Scale (R)">📐</button>
+
           </div>
+
           
+
           <!-- Mode Controls -->
+
           <div class="toolbar-group" style="display: flex; gap: 0.25rem; border-right: 1px solid var(--border); padding-right: 0.5rem;">
+
             <button type="button" class="secondary editor-mode-btn active" data-mode="object" id="mode-object" onclick="setEditorMode('object')" title="Object Mode">📦</button>
+
             <button type="button" class="secondary editor-mode-btn" data-mode="face" id="mode-face" onclick="setEditorMode('face')" title="Face Mode">🔲</button>
+
             <button type="button" class="secondary editor-mode-btn" data-mode="edge" id="mode-edge" onclick="setEditorMode('edge')" title="Edge Mode">📏</button>
+
             <button type="button" class="secondary editor-mode-btn" data-mode="vertex" id="mode-vertex" onclick="setEditorMode('vertex')" title="Vertex Mode">•</button>
+
           </div>
+
           
+
           <!-- Paint Tools -->
+
           <div class="toolbar-group" style="display: flex; gap: 0.25rem; border-right: 1px solid var(--border); padding-right: 0.5rem;">
+
             <button type="button" class="secondary editor-tool-btn" data-tool="paint" id="tool-paint" onclick="setEditorTool('paint')" title="Paint (P)">🎨</button>
+
             <input type="color" id="editor-paint-color" value="#ff0000" onchange="if(window.editor3DState) window.editor3DState.paintColor = this.value" style="width: 32px; height: 32px; border: none; border-radius: 4px; cursor: pointer;" title="Paint Color">
+
             <button type="button" class="secondary editor-tool-btn" data-tool="erase" id="tool-erase" onclick="setEditorTool('erase')" title="Erase (X)">🧽</button>
+
           </div>
+
           
+
           <!-- Object Tools -->
+
           <div class="toolbar-group" style="display: flex; gap: 0.25rem; border-right: 1px solid var(--border); padding-right: 0.5rem;">
+
             <button type="button" class="secondary" id="editor-add-cube" onclick="addCube([0,8,0],[8,8,8])" title="Add Cube (Shift+A)">➕ Cube</button>
+
             <button type="button" class="secondary" id="editor-duplicate" onclick="duplicateSelected()" title="Duplicate (Shift+D)">📋</button>
+
             <button type="button" class="secondary" id="editor-delete" onclick="deleteSelected()" title="Delete (Del)">🗑️</button>
+
           </div>
+
           
+
           <!-- View Options -->
+
           <div class="toolbar-group" style="display: flex; gap: 0.25rem; border-right: 1px solid var(--border); padding-right: 0.5rem;">
+
             <button type="button" class="secondary" id="editor-grid" onclick="toggleGrid()" title="Toggle Grid (G)">#️⃣ Grid</button>
+
             <button type="button" class="secondary" id="editor-wireframe" onclick="toggleWireframe()" title="Toggle Wireframe (Z)">🔲 Wire</button>
+
           </div>
+
           
+
           <!-- Background Color -->
+
           <div class="toolbar-group" style="display: flex; gap: 0.25rem; align-items: center;">
+
             <label style="font-size: 0.8rem; color: var(--muted);">BG:</label>
+
             <input type="color" id="editor-bg-color" value="#1e1e1f" onchange="setBackgroundColor(this.value)" style="width: 32px; height: 32px; border: none; border-radius: 4px; cursor: pointer;" title="Background Color">
+
           </div>
+
         </div>
+
         
+
         <div class="viewport-controls">
+
           <button type="button" class="secondary" id="viewport-reset" title="Reset view">Reset View</button>
+
           <div class="viewport-info">
+
             <span>Drag: rotate | Shift+drag/Right-click: pan | Scroll: zoom | Click: select/paint</span>
+
           </div>
+
         </div>
+
         
+
         <!-- Animation Timeline -->
+
         <div id="animation-timeline" class="animation-timeline" style="display: none;">
+
           <div class="timeline-header">
+
             <span class="timeline-title">Animation</span>
+
             <span id="anim-time" class="timeline-time">0.00s / 0.00s</span>
+
           </div>
+
           <div class="timeline-controls">
+
             <button type="button" class="secondary" id="anim-play">Play</button>
+
             <button type="button" class="secondary" id="anim-reset">Reset</button>
+
             <input type="range" id="anim-slider" min="0" max="100" value="0" class="timeline-slider">
+
           </div>
+
         </div>
+
         
+
         <!-- LLM Geometry Generation (Hidden for now) -->
+
         <div class="geometry-generator" style="display: none; margin-top: 1rem; padding: 1rem; background: #1e1e1f; border: 1px solid #3e3e42; border-radius: 8px;">
+
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+
             <span style="font-weight: 600; color: #e0e0e0; font-size: 0.9rem;">AI Geometry Generator</span>
+
           </div>
+
           <textarea id="geometry-prompt" placeholder="Describe the geometry you want to create or modify... (e.g., 'Create a simple humanoid with large head' or 'Add wings to the body')" style="width: 100%; height: 60px; resize: vertical; background: #2d2d30; border: 1px solid #3e3e42; border-radius: 4px; color: #e0e0e0; padding: 0.5rem; font-size: 0.85rem;"></textarea>
+
           <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem;">
+
             <button type="button" class="primary" id="geometry-generate" style="flex: 1;">Generate Geometry</button>
+
             <button type="button" class="secondary" id="geometry-modify" style="flex: 1;">Modify Current</button>
+
           </div>
+
         </div>
+
       </div>
+
       
+
       <!-- JSON Viewer -->
+
       <details style="margin-top: 1.5rem;">
+
         <summary style="cursor: pointer; font-weight: bold; margin-bottom: 0.75rem;">View JSON Source</summary>
+
         <pre id="geometry-viewer" style="background: var(--editor-bg); color: var(--editor-text); padding: 1rem; border-radius: 12px; border: 1px solid var(--border); overflow-x: auto; overflow-y: auto; max-height: 400px; margin: 0; font-size: 0.85rem;"></pre>
+
       </details>
+
     </div>
+
+
 
     <!-- RIGHT: Texture Painter -->
+
     <div class="painter-container" style="margin-top: 0;">
+
       <h2 style="margin-top: 0;">Texture Painter</h2>
+
       <p class="hint">Paint the 64x64 skin for the selected mob.</p>
+
       <div class="painter-layout">
+
         <div class="painter-canvas-wrapper">
+
           <canvas id="pixel-canvas" width="384" height="384"></canvas>
+
         </div>
+
         <div class="painter-tools">
+
           <div class="field">
+
             <label>Color</label>
+
             <input type="color" id="painter-color" value="#ff0000" style="width: 100%; height: 46px; padding: 0; border: none; border-radius: 8px;">
+
           </div>
+
           <div class="tool-row">
+
             <button type="button" class="secondary" id="painter-pencil">✏️ Pencil</button>
+
             <button type="button" class="secondary" id="painter-eraser">🧽 Eraser</button>
+
             <button type="button" class="secondary" id="painter-clear">🗑 Clear</button>
+
           </div>
+
           <div class="tool-row">
+
             <button type="button" class="secondary" id="painter-load">📥 Load Current</button>
+
             <button type="button" class="primary" id="painter-save">💾 Save Texture</button>
+
           </div>
+
           <div class="field">
+
             <label>Import Image</label>
+
             <input type="file" id="painter-import" accept="image/png">
+
           </div>
+
         </div>
+
       </div>
+
     </div>
+
   </div>
 
+
+
   <details>
+
     <summary>View schema (for LLM prompts)</summary>
+
     <pre id="schema-view" style="background:var(--status-bg);color:var(--status-text);padding:1rem;border-radius:12px;overflow:auto;max-height:240px;"></pre>
+
   </details>
+
 </main>
 
+
+
 <!-- External Scripts -->
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/diff/5.1.0/diff.min.js"></script>
-<script src="js/user.js?v=2"></script>
-<script src="js/modals.js?v=2"></script>
-<script src="js/viewer3d.js?v=2"></script>
-<script src="js/painter.js?v=2"></script>
-<script src="js/editor.js?v=2"></script>
-<script src="js/llm.js?v=2"></script>
-<script src="js/builder.js?v=2"></script>
-<script src="js/app.js?v=2"></script>
+
+<script src="js/user.js?v=3"></script>
+
+<script src="js/modals.js?v=3"></script>
+
+<script src="js/viewer3d.js?v=3"></script>
+
+<script src="js/painter.js?v=3"></script>
+
+<script src="js/editor.js?v=3"></script>
+
+<script src="js/llm.js?v=3"></script>
+
+<script src="js/builder.js?v=3"></script>
+
+<script src="js/app.js?v=3"></script>
+
+
 
 </body>
+
 </html>
+

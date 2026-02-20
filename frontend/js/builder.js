@@ -192,7 +192,19 @@ async function fetchAndDisplayGeometry(geometryMobName, textureMobName = null) {
     
     // Render the 3D model with texture (use mobNameForTexture to load the correct texture)
     render3DGeometry(geometryData, mobNameForTexture);
-    
+
+    // Persistently save geometry into the mob spec (like behavior modifications)
+    // This ensures it's available for BDS builds and survives page reloads
+    if (currentMobName) {
+      const spec = getUserMob(currentMobName);
+      if (spec && (!spec.geometry_json || !spec.geometry_json["minecraft:geometry"])) {
+        spec.geometry_json = geometryData;
+        if (!spec._template_base) spec._template_base = geometryMobName;
+        saveUserMob(currentMobName, spec);
+        console.log(`[GEOMETRY] Persisted geometry_json into spec for ${currentMobName}`);
+      }
+    }
+
     console.log(`[GEOMETRY] Successfully loaded geometry for ${geometryMobName}`);
   } catch (err) {
     console.warn(`[GEOMETRY] Error fetching geometry for ${geometryMobName}:`, err);
@@ -405,7 +417,29 @@ function initTestInGame() {
       setStatus("Could not load spec for " + currentMobName, true);
       return;
     }
-    const selectedSpecs = [activeMobSpec];
+
+    // Build a copy of the spec for the test payload (don't mutate localStorage)
+    const specForTest = JSON.parse(JSON.stringify(activeMobSpec));
+
+    // Inject the geometry JSON from the 3D viewer if the spec doesn't already have it
+    const geoCopyEl = document.getElementById("geometry-copy");
+    if (geoCopyEl && geoCopyEl.dataset.json) {
+      try {
+        const viewerGeo = JSON.parse(geoCopyEl.dataset.json);
+        if (viewerGeo && viewerGeo["minecraft:geometry"]) {
+          if (!specForTest.geometry_json || !specForTest.geometry_json["minecraft:geometry"]) {
+            specForTest.geometry_json = viewerGeo;
+          }
+        }
+      } catch (e) { /* ignore parse errors */ }
+    }
+
+    const selectedSpecs = [specForTest];
+
+    // Gather texture so BDS renders the correct skin
+    const textures = {};
+    const tex = getUserMobTexture(currentMobName);
+    if (tex) textures[currentMobName] = tex;
 
     // Determine category from the spec (entity by default)
     const category = "entity_logic_ai";
@@ -420,7 +454,7 @@ function initTestInGame() {
       const res = await fetch("/api/launch-test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ specs: selectedSpecs, category }),
+        body: JSON.stringify({ specs: selectedSpecs, category, textures }),
       });
       const data = await res.json();
       if (!res.ok) {

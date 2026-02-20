@@ -103,8 +103,34 @@ async function selectMob(name) {
   loadTextureIntoPainter(name);
   
   // Sync geometry viewer with the mob's base geometry
-  const geometryName = spec.geometry ? spec.geometry.replace('geometry.', '') : name;
-  await fetchAndDisplayGeometry(geometryName, name);  // Pass mob name for texture loading
+  // If geometry_json is already embedded, render it directly instead of fetching
+  if (spec.geometry_json && spec.geometry_json["minecraft:geometry"]) {
+    const geometryContainer = document.getElementById("geometry-container");
+    const geometryViewer = document.getElementById("geometry-viewer");
+    const geometryCopy = document.getElementById("geometry-copy");
+    const geometryUrl = document.getElementById("geometry-url");
+    if (geometryContainer && geometryViewer) {
+      const formattedJson = JSON.stringify(spec.geometry_json, null, 2);
+      geometryViewer.textContent = formattedJson;
+      if (geometryCopy) geometryCopy.dataset.json = formattedJson;
+      const baseName = spec._template_base || spec.geometry.replace('geometry.', '');
+      if (geometryUrl) {
+        geometryUrl.href = `https://github.com/Mojang/bedrock-samples/tree/main/resource_pack/models/entity`;
+        geometryUrl.textContent = `View on GitHub: ${baseName}.geo.json`;
+      }
+      geometryContainer.style.display = "block";
+      render3DGeometry(spec.geometry_json, name);
+    }
+  } else {
+    // Use _template_base (vanilla mob name) if available, otherwise derive from geometry field
+    // For legacy mobs without _template_base, try stripping _custom suffix from short_name
+    let geometryName = spec._template_base;
+    if (!geometryName) {
+      const stripped = (spec.short_name || name).replace(/_custom$/, '');
+      geometryName = stripped !== (spec.short_name || name) ? stripped : (spec.geometry ? spec.geometry.replace('geometry.', '') : name);
+    }
+    await fetchAndDisplayGeometry(geometryName, name);
+  }
   
   // Update file tree preview
   updateFileTree(spec);
