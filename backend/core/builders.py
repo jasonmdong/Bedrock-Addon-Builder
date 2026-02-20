@@ -321,6 +321,25 @@ def patch_behavior_pack(beh_root: Path, specs: list[dict]):
     if lang_lines:
         lang_file.write_text("\n".join(lang_lines), encoding="utf-8")
 
+    # Add tick function so entities auto-spawn when pack is used (mcpack, mcaddon, or mcworld).
+    # Delay 40 ticks (2s) then spawn right on the player (~ ~ ~).
+    functions_dir = beh_root / "functions"
+    functions_dir.mkdir(parents=True, exist_ok=True)
+    spawn_lines = [
+        "scoreboard objectives add addon_spawn dummy",
+        "scoreboard players add @a[tag=!mob_spawned] addon_spawn 1",
+    ]
+    for i, spec in enumerate(specs):
+        spawn_lines.append(
+            f'execute as @a[tag=!mob_spawned,scores={{addon_spawn=40..}},c=1] at @s run '
+            f'summon {spec["identifier"]} ~ ~ ~'
+        )
+    spawn_lines.append("tag @a[scores={addon_spawn=40..}] add mob_spawned")
+    (functions_dir / "spawn_mobs.mcfunction").write_text("\n".join(spawn_lines), encoding="utf-8")
+    (functions_dir / "tick.json").write_text(
+        json.dumps({"values": ["spawn_mobs"]}, indent=2), encoding="utf-8"
+    )
+
     main_spec = specs[0] if specs else validate_spec(default_spec())
     man = beh_root / "manifest.json"
     if man.exists():

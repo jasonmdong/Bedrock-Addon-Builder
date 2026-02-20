@@ -339,67 +339,26 @@ function initBuildHandlers() {
     localStorage.setItem(BUILD_MODE_KEY, buildModeSelect.value);
   });
 
-  // --- One-Click Play (Test in Game) ---
-  initTestInGame();
+  // --- One-Click Play (.mcworld) ---
+  initPlayWorld();
 }
 
 // ---------------------------------------------------------------------------
-// Test in Game (One-Click Play)
+// Play World (One-Click .mcworld)
 // ---------------------------------------------------------------------------
-const testInGameBtn = document.getElementById("test-in-game");
-const testSessionBar = document.getElementById("test-session-bar");
-const testSessionStatus = document.getElementById("test-session-status");
-const testSessionLog = document.getElementById("test-session-log");
-const testStopBtn = document.getElementById("test-stop-btn");
-let _testPollTimer = null;
+const playWorldBtn = document.getElementById("play-world-btn");
+const playWorldStatus = document.getElementById("play-world-status");
 
-function _setTestStatus(text, color) {
-  if (testSessionStatus) {
-    testSessionStatus.textContent = text;
-    testSessionStatus.style.color = color || "var(--text)";
+function _setPlayStatus(text, color) {
+  if (playWorldStatus) {
+    playWorldStatus.style.display = text ? "block" : "none";
+    playWorldStatus.textContent = text;
+    playWorldStatus.style.color = color || "var(--text)";
   }
 }
 
-function _startTestPolling() {
-  if (_testPollTimer) return;
-  testSessionBar.style.display = "block";
-  _testPollTimer = setInterval(async () => {
-    try {
-      const res = await fetch("/api/launch-test/status");
-      const data = await res.json();
-      const statusMap = {
-        idle: ["Idle", "var(--hint)"],
-        starting: ["Starting server...", "#f59e0b"],
-        ready: ["Server ready! Minecraft launching...", "#10b981"],
-        error: ["Error: " + (data.error || "unknown"), "var(--danger)"],
-        stopped: ["Stopped", "var(--hint)"],
-      };
-      const [label, color] = statusMap[data.status] || ["Unknown", "var(--hint)"];
-      _setTestStatus(label, color);
-      if (testSessionLog && data.recent_logs) {
-        testSessionLog.textContent = data.recent_logs.join("\n");
-        testSessionLog.scrollTop = testSessionLog.scrollHeight;
-      }
-      if (!data.running && data.status !== "starting") {
-        _stopTestPolling();
-        testInGameBtn.disabled = false;
-        testInGameBtn.textContent = "🎮 Test in Game";
-      }
-    } catch (e) {
-      _setTestStatus("Poll error", "var(--danger)");
-    }
-  }, 1500);
-}
-
-function _stopTestPolling() {
-  if (_testPollTimer) {
-    clearInterval(_testPollTimer);
-    _testPollTimer = null;
-  }
-}
-
-function initTestInGame() {
-  testInGameBtn?.addEventListener("click", async (e) => {
+function initPlayWorld() {
+  playWorldBtn?.addEventListener("click", async (e) => {
     e.preventDefault();
     // Save current spec first
     if (currentMobName) {
@@ -407,79 +366,75 @@ function initTestInGame() {
       if (saved === null) return;
     }
 
-    // Use only the currently active mob (the one being edited)
+    // Use only the currently selected mob
     if (!currentMobName) {
-      setStatus("No mob selected. Click a mob in the sidebar first.", true);
+      _setPlayStatus("No mob selected. Click a mob in the sidebar first.", "var(--danger)");
       return;
     }
     const activeMobSpec = getUserMob(currentMobName);
     if (!activeMobSpec) {
-      setStatus("Could not load spec for " + currentMobName, true);
+      _setPlayStatus("Could not load spec for " + currentMobName, "var(--danger)");
       return;
     }
 
-    // Build a copy of the spec for the test payload (don't mutate localStorage)
-    const specForTest = JSON.parse(JSON.stringify(activeMobSpec));
-
-    // Inject the geometry JSON from the 3D viewer if the spec doesn't already have it
-    const geoCopyEl = document.getElementById("geometry-copy");
-    if (geoCopyEl && geoCopyEl.dataset.json) {
-      try {
-        const viewerGeo = JSON.parse(geoCopyEl.dataset.json);
-        if (viewerGeo && viewerGeo["minecraft:geometry"]) {
-          if (!specForTest.geometry_json || !specForTest.geometry_json["minecraft:geometry"]) {
-            specForTest.geometry_json = viewerGeo;
+    // Build a copy with geometry injected
+    const copy = JSON.parse(JSON.stringify(activeMobSpec));
+    if (!copy.geometry_json || !copy.geometry_json["minecraft:geometry"]) {
+      const geoCopyEl = document.getElementById("geometry-copy");
+      if (geoCopyEl && geoCopyEl.dataset.json) {
+        try {
+          const viewerGeo = JSON.parse(geoCopyEl.dataset.json);
+          if (viewerGeo && viewerGeo["minecraft:geometry"]) {
+            copy.geometry_json = viewerGeo;
           }
-        }
-      } catch (e) { /* ignore parse errors */ }
+        } catch (e) { /* ignore */ }
+      }
     }
+    const selectedSpecs = [copy];
 
-    const selectedSpecs = [specForTest];
-
-    // Gather texture so BDS renders the correct skin
+    // Gather texture for this mob
     const textures = {};
     const tex = getUserMobTexture(currentMobName);
     if (tex) textures[currentMobName] = tex;
 
-    // Determine category from the spec (entity by default)
-    const category = "entity_logic_ai";
-
-    testInGameBtn.disabled = true;
-    testInGameBtn.textContent = "Launching...";
-    _setTestStatus("Sending to server...", "#f59e0b");
-    testSessionBar.style.display = "block";
-    if (testSessionLog) testSessionLog.textContent = "";
+    playWorldBtn.disabled = true;
+    playWorldBtn.textContent = "Building...";
+    _setPlayStatus("Building .mcworld...", "#f59e0b");
 
     try {
-      const res = await fetch("/api/launch-test", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ specs: selectedSpecs, category, textures }),
-      });
-      const data = await res.json();
+      const formData = new FormData();
+      formData.append("build_mode", "mcworld");
+      formData.append("specs_json", JSON.stringify(selectedSpecs));
+      formData.append("textures_json", JSON.stringify(textures));
+
+      const res = await fetch("/api/build", { method: "POST", body: formData });
+      const data = await res.json().catch(() => ({}));
+
       if (!res.ok) {
-        _setTestStatus("Error: " + (data.detail || res.statusText), "var(--danger)");
-        testInGameBtn.disabled = false;
-        testInGameBtn.textContent = "🎮 Test in Game";
+        _setPlayStatus("Build failed: " + (data.detail || res.statusText), "var(--danger)");
+        playWorldBtn.disabled = false;
+        playWorldBtn.textContent = "▶ Play World";
         return;
       }
-      _setTestStatus("Starting...", "#f59e0b");
-      _startTestPolling();
-    } catch (err) {
-      _setTestStatus("Network error: " + err.message, "var(--danger)");
-      testInGameBtn.disabled = false;
-      testInGameBtn.textContent = "🎮 Test in Game";
-    }
-  });
 
-  testStopBtn?.addEventListener("click", async () => {
-    _setTestStatus("Stopping...", "#f59e0b");
-    try {
-      await fetch("/api/launch-test/stop", { method: "POST" });
-    } catch (e) { /* ignore */ }
-    _stopTestPolling();
-    testInGameBtn.disabled = false;
-    testInGameBtn.textContent = "🎮 Test in Game";
-    setTimeout(() => _setTestStatus("Stopped", "var(--hint)"), 500);
+      // Auto-download the .mcworld file
+      const mcworldUrl = data.downloads?.mcworld || data.artifact;
+      if (mcworldUrl) {
+        const a = document.createElement("a");
+        a.href = mcworldUrl;
+        a.download = "";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        _setPlayStatus("Downloaded! Double-click the .mcworld file to play.", "#10b981");
+      } else {
+        _setPlayStatus("Build succeeded but no .mcworld was produced.", "var(--danger)");
+      }
+    } catch (err) {
+      _setPlayStatus("Network error: " + err.message, "var(--danger)");
+    } finally {
+      playWorldBtn.disabled = false;
+      playWorldBtn.textContent = "▶ Play World";
+    }
   });
 }

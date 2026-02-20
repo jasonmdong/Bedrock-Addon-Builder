@@ -563,7 +563,7 @@ async def api_build(resource: Optional[UploadFile] = File(None),
 
         downloads = {
             "bundle": f"/download/{Path(artifacts['bundle_zip']).name}",
-            "mcworld": f"/download/{Path(artifacts['mcworld']).name}",
+            "mcworld": f"/download/{Path(artifacts['mcworld']).name}" if artifacts.get('mcworld') else "",
             "mcaddon": f"/download/{Path(artifacts['mcaddon']).name}",
             "res_mcpack": f"/download/{Path(artifacts['res_mcpack']).name}",
             "beh_mcpack": f"/download/{Path(artifacts['beh_mcpack']).name}",
