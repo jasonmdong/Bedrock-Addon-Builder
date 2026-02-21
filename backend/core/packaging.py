@@ -2,6 +2,7 @@
 import io
 import json
 import shutil
+import struct
 import tempfile
 import zipfile
 from pathlib import Path
@@ -137,6 +138,12 @@ def create_mcworld(out_dir: Path,
     if icon_src.exists():
         shutil.copyfile(icon_src, world_root / "world_icon.png")
 
+    # Enable cheats so tick.json commands (summon) actually work
+    _enable_cheats_in_world(world_root)
+
+    # Spawn entities in the world
+    _spawn_entities_in_world(world_root, specs)
+
     mcworld = out_dir / f"{main_spec['short_name']}.mcworld"
     with zipfile.ZipFile(mcworld, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         all_files = []
@@ -227,3 +234,98 @@ def build_addon(specs: list[dict], out_dir: Path, res_src: Optional[Path], beh_s
         }
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+def _enable_cheats_in_world(world_root: Path):
+    """Patch level.dat to enable cheats/commands so tick.json summon works.
+
+    Bedrock level.dat format: 8-byte header (4-byte version LE + 4-byte
+    payload length LE) followed by little-endian NBT compound.
+    """
+    level_dat = world_root / "level.dat"
+    if not level_dat.exists():
+        print("[WORLD] No level.dat found, cannot enable cheats")
+        return
+
+    try:
+        import nbtlib
+
+        raw = level_dat.read_bytes()
+        if len(raw) < 8:
+            print("[WORLD] level.dat too small")
+            return
+
+        # Parse the 8-byte Bedrock header
+        header_version, payload_len = struct.unpack_from("<II", raw, 0)
+        nbt_bytes = raw[8:]
+
+        # Write NBT payload to a temp file so nbtlib can load it
+        tmp_nbt = level_dat.parent / "_level_nbt.tmp"
+        tmp_nbt.write_bytes(nbt_bytes)
+
+        nbt_file = nbtlib.load(tmp_nbt, byteorder="little")
+        tmp_nbt.unlink(missing_ok=True)
+
+        # Enable cheats and commands
+        root = nbt_file
+        if "" in root:
+            root = root[""]
+
+        root["commandsEnabled"] = nbtlib.Byte(1)
+        root["commandblocksenabled"] = nbtlib.Byte(1)
+        root["cheatsEnabled"] = nbtlib.Byte(1)
+        root["commandblockoutput"] = nbtlib.Byte(0)
+
+        # Write modified NBT to temp file
+        nbt_file.save(tmp_nbt, byteorder="little")
+        new_nbt = tmp_nbt.read_bytes()
+        tmp_nbt.unlink(missing_ok=True)
+
+        # Rebuild level.dat with Bedrock header
+        new_header = struct.pack("<II", header_version, len(new_nbt))
+        level_dat.write_bytes(new_header + new_nbt)
+        print("[WORLD] Enabled cheats/commands in level.dat")
+
+    except ImportError:
+        print("[WORLD] nbtlib not available, cannot enable cheats")
+    except Exception as e:
+        print(f"[WORLD] Failed to patch level.dat: {e}")
+
+
+def _spawn_entities_in_world(world_root: Path, specs: list[dict]):
+    """Auto-spawn entities by adding tick functions to the behavior pack.
+
+    Uses a 40-tick (2s) delay then summons right on the player (~ ~ ~).
+    """
+    beh_pack = world_root / "behavior_packs" / "custom_addon_beh"
+    if not beh_pack.exists():
+        print("[WORLD] No behavior pack found in world, cannot spawn entities")
+        return
+
+    functions_dir = beh_pack / "functions"
+    functions_dir.mkdir(parents=True, exist_ok=True)
+
+    # --- spawn_mobs.mcfunction ---
+    # Delay 40 ticks (2s) then spawn right on the player (~ ~ ~).
+    lines = [
+        "scoreboard objectives add addon_spawn dummy",
+        "scoreboard players add @a[tag=!mob_spawned] addon_spawn 1",
+    ]
+    for i, spec in enumerate(specs):
+        lines.append(
+            f'execute as @a[tag=!mob_spawned,scores={{addon_spawn=40..}},c=1] at @s run '
+            f'summon {spec["identifier"]} ~ ~ ~'
+        )
+    lines.append("tag @a[scores={addon_spawn=40..}] add mob_spawned")
+
+    spawn_fn = functions_dir / "spawn_mobs.mcfunction"
+    spawn_fn.write_text("\n".join(lines), encoding="utf-8")
+
+    # --- tick.json ---
+    tick_json = {"values": ["spawn_mobs"]}
+    (functions_dir / "tick.json").write_text(
+        json.dumps(tick_json, indent=2), encoding="utf-8"
+    )
+
+    for spec in specs:
+        print(f"[WORLD] Will auto-spawn {spec['identifier']} near player on world load")
