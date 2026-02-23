@@ -11,25 +11,33 @@ const llmSessionCount = document.getElementById("llm-session-count");
 const clearLlmHistoryBtn = document.getElementById("clear-llm-history");
 
 // LLM history stack -> newest first
-function llmStackKey(user) { return `llm_stack_${user}`; }
+function llmStackKey(user, mob) {
+  if (!user) return null;
+  const m = mob || 'global';
+  return `llm_stack_${user}_${m}`;
+}
 const LLM_STACK_MAX = 50;
 
-function readLlmStack(user) {
-  const raw = localStorage.getItem(llmStackKey(user));
+function readLlmStack(user, mob) {
+  const key = llmStackKey(user, mob);
+  if (!key) return [];
+  const raw = localStorage.getItem(key);
   return raw ? JSON.parse(raw) : [];
 }
 
-function pushLlmStack(user, entry) {
-  const key = llmStackKey(user);
-  const arr = readLlmStack(user);
+function pushLlmStack(user, mob, entry) {
+  const key = llmStackKey(user, mob);
+  if (!key) return;
+  const arr = readLlmStack(user, mob);
   arr.unshift(entry);
   arr.splice(LLM_STACK_MAX);
   localStorage.setItem(key, JSON.stringify(arr));
 }
 
-function popToLlmIndex(user, index) {
-  const key = llmStackKey(user);
-  const arr = readLlmStack(user);
+function popToLlmIndex(user, mob, index) {
+  const key = llmStackKey(user, mob);
+  if (!key) return [];
+  const arr = readLlmStack(user, mob);
   if (index < 0 || index >= arr.length) return arr;
   const newArr = arr.slice(index);
   localStorage.setItem(key, JSON.stringify(newArr));
@@ -282,11 +290,12 @@ async function requestLlm() {
   
   setStatus(`${provider} updated the spec at ${new Date().toLocaleTimeString()}.`);
 
-  try {
+    try {
     const user = getCurrentUser();
+    const mob = currentMobName || null;
     if (user) {
       const entry = { ts: new Date().toISOString(), prompt: instruction, spec: payload.spec };
-      pushLlmStack(user, entry);
+      pushLlmStack(user, mob, entry);
       renderLlmHistory();
     }
   } catch (e) {
@@ -296,10 +305,15 @@ async function requestLlm() {
 
 function renderLlmHistory() {
   const user = getCurrentUser();
+  const mob = currentMobName || null;
   if (!user || !llmHistoryList) {
-  }
     try { renderGlobalDiff(); } catch (e) {}
-  const hist = readLlmStack(user);
+    return;
+  }
+  try { 
+    renderGlobalDiff();
+  } catch (e) {}
+  const hist = readLlmStack(user, mob);
   if (!hist.length) {
     llmHistoryList.innerHTML = '<div style="color: var(--muted); font-style:italic; text-align:center;">No history yet</div>';
     if (llmSessionCount) llmSessionCount.textContent = '0';
@@ -348,11 +362,11 @@ function renderLlmHistory() {
     let prevSpec = undefined;
     try {
       if (idx < hist.length - 1) {
-        prevSpec = hist[idx + 1].spec;
-      } else {
-        const user = getCurrentUser();
-        prevSpec = (typeof getOriginalSpec === 'function' && user && currentMobName) ? (getOriginalSpec(user, currentMobName) || {}) : (getUserMob(currentMobName) || {});
-      }
+          prevSpec = hist[idx + 1].spec;
+        } else {
+          const user = getCurrentUser();
+          prevSpec = (typeof getOriginalSpec === 'function' && user && currentMobName) ? (getOriginalSpec(user, currentMobName) || {}) : (getUserMob(currentMobName) || {});
+        }
     } catch (e) {
       prevSpec = {};
     }
@@ -388,7 +402,7 @@ function renderLlmHistory() {
 function restoreHistoryEntry(index, btnEl) {
     const user = getCurrentUser();
     if (!user) return;
-    const hist = readLlmStack(user);
+  const hist = readLlmStack(user, currentMobName || null);
     if (!hist || index < 0 || index >= hist.length) return;
     const entry = hist[index];
     if (!entry || !entry.spec) return;
@@ -409,7 +423,7 @@ function restoreHistoryEntry(index, btnEl) {
           updateFileTree(entry.spec);
         }
         setStatus(`restored spec from ${new Date(entry.ts).toLocaleString()}`);
-        popToLlmIndex(user, index);
+        popToLlmIndex(user, currentMobName || null, index);
         renderLlmHistory();
         try { showDiff(prior || {}, entry.spec || {}); if (typeof setSpecView === 'function') setSpecView('diff'); } catch (er) {}
       } catch (e) {
@@ -435,9 +449,11 @@ function restoreHistoryEntry(index, btnEl) {
 function initLlmHandlers() {
   clearLlmHistoryBtn?.addEventListener('click', () => {
     const user = getCurrentUser();
+    const mob = currentMobName || null;
     if (!user) return;
-    if (!confirm('Clear LLM history for user ' + user + '?')) return;
-    localStorage.removeItem(`llm_stack_${user}`);
+    if (!confirm('Clear LLM history for User: ' + user + (mob ? (' | Mob: ' + mob) : '') + '?')) return;
+    const key = llmStackKey(user, mob);
+    if (key) localStorage.removeItem(key);
     renderLlmHistory();
   });
 
