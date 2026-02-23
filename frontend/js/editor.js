@@ -142,6 +142,7 @@ async function selectMob(name) {
     if (!orig) setOriginalSpec(user, name, spec);
   } catch (e) {}
   renderGlobalDiff();
+  try { if (typeof renderLlmHistory === 'function') renderLlmHistory(); } catch (e) {}
 }
 
 async function loadSpec() {
@@ -385,7 +386,7 @@ function renderGlobalDiff() {
 
 let currentSpecView = 'editor';
 const specEditorContainerEl = document.getElementById('spec-editor-container');
-const specDiffContainerEl = document.getElementById('spec-diff-container');
+const specDiffContainerEl = document.getElementById('spec-diff-overlay');
 const diffScroll = document.getElementById('diff-scroll');
 
 editor?.addEventListener && editor.addEventListener('input', () => {
@@ -408,13 +409,13 @@ function moveToggleSlider(toBtn) {
 function setSpecView(mode) {
   currentSpecView = mode;
   if (mode === 'diff') {
-    try { specEditorContainerEl.style.display = 'none'; } catch (e) {}
-    try { specDiffContainerEl.style.display = 'flex'; } catch (e) {}
+    try { editor.style.display = 'none'; } catch (e) {}
+    try { specDiffContainerEl.style.display = 'block'; } catch (e) {}
     moveToggleSlider(specViewDiffBtn);
     try { renderGlobalDiff(); } catch (e) { console.warn('renderGlobalDiff error', e); }
     try { if (diffScroll) diffScroll.scrollTop = 0; } catch (e) {}
   } else {
-    try { specEditorContainerEl.style.display = 'flex'; } catch (e) {}
+    try { editor.style.display = 'block'; } catch (e) {}
     try { specDiffContainerEl.style.display = 'none'; } catch (e) {}
     moveToggleSlider(specViewEditorBtn);
     try { editor.focus(); } catch (e) {}

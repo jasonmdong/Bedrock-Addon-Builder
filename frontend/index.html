@@ -311,34 +311,24 @@
 
 
 
-        <!-- editor view -->
+        <!-- editor+diff view -->
 
         <div id="spec-editor-container" style="flex: 1; display:flex; flex-direction:column; overflow: hidden;">
 
-          <textarea id="spec-editor" spellcheck="false" autocomplete="off" style="flex: 1; resize: none; font-family: monospace; font-size:0.85rem; line-height:1.35; padding:8px; background:var(--editor-bg); color:var(--editor-text); border:none; outline:none;"></textarea>
+          <div id="spec-editor-box" style="position:relative; flex:1; overflow:hidden;">
+            <textarea id="spec-editor" spellcheck="false" autocomplete="off" style="position:absolute; inset:0; width:100%; height:100%; box-sizing:border-box; resize:none; font-family: monospace; font-size:0.85rem; line-height:1.35; padding:8px; background:var(--editor-bg); color:var(--editor-text); border:none; outline:none;"></textarea>
 
-          <div class="actions" style="margin-top: 0.75rem;">
-
-            <button type="button" class="secondary" id="reset">Reset</button>
-
-            <button type="button" class="danger" id="save">Save Spec</button>
-
+            <div id="spec-diff-overlay" style="position:absolute; inset:0; display:none;">
+              <div id="diff-scroll" style="height:100%; display:flex; overflow:auto; border-radius:6px;">
+                <pre id="line-gutter" style="width:64px; margin:0; padding:8px; font-family: monospace; font-size:0.85rem; color:var(--muted); background:transparent; border-right:1px solid rgba(255,255,255,0.02); text-align:right; line-height:1.35;"></pre>
+                <pre id="spec-pre" style="flex:1; margin:0; padding:8px; font-family: monospace; font-size:0.85rem; white-space:pre; color:var(--editor-text); line-height:1.35; background:transparent;"></pre>
+              </div>
+            </div>
           </div>
 
-        </div>
-
-
-
-        <!-- diff view -->
-
-        <div id="spec-diff-container" style="flex: 1; display: none; flex-direction:column; overflow: hidden;">
-
-          <div id="diff-scroll" style="flex:1; display:flex; overflow:auto; border-radius:6px;">
-
-            <pre id="line-gutter" style="width:64px; margin:0; padding:8px; font-family: monospace; font-size:0.85rem; color:var(--muted); background:transparent; border-right:1px solid rgba(255,255,255,0.02); text-align:right; line-height:1.35;"></pre>
-
-            <pre id="spec-pre" style="flex:1; margin:0; padding:8px; font-family: monospace; font-size:0.85rem; white-space:pre; color:var(--editor-text); line-height:1.35; background:transparent;"></pre>
-
+          <div class="actions" style="margin-top: 0.75rem;">
+            <button type="button" class="secondary" id="reset">Reset</button>
+            <button type="button" class="danger" id="save">Save Spec</button>
           </div>
 
         </div>
