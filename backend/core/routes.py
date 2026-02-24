@@ -24,6 +24,10 @@ from backend.core.builders import make_png_rgba
 
 from backend.core.core import BACKEND_DIR, COLOR_WORDS, SPECS_DIR, FRONTEND_DIR, LOCAL_LLM_DEV
 
+# In-memory cache for geometry fetched from GitHub (avoids burning rate limit)
+_geometry_cache: dict[str, dict] = {}
+_github_file_list_cache: list[dict] | None = None
+
 
 def _save_upload(tmpdir: Path, uf: Optional[UploadFile]) -> Optional[Path]:
     """Save an uploaded file to a temporary directory."""
@@ -540,7 +544,8 @@ async def fetch_mob_geometry(mob_name: str):
     """Fetch mob geometry JSON from Mojang's bedrock-samples repository.
     
     Searches for all .geo.json files containing the mob_name (with version numbers/descriptors),
-    and fetches the most recently updated one.
+    and fetches the most recently updated one. Results are cached locally to avoid
+    burning through the GitHub API rate limit (60 req/hr unauthenticated).
     """
     if not mob_name:
         raise HTTPException(status_code=400, detail="mob_name is required")
@@ -548,89 +553,84 @@ async def fetch_mob_geometry(mob_name: str):
     # Sanitize mob_name to prevent directory traversal
     safe_name = mob_name.strip().replace("..", "").replace("/", "")
     safe_name_lower = safe_name.lower()
+
+    # Check in-memory cache first
+    if safe_name_lower in _geometry_cache:
+        print(f"[GEOMETRY] Cache hit for '{mob_name}'")
+        return _geometry_cache[safe_name_lower]
     
+    # Use raw.githubusercontent.com directly — NO API rate limit!
+    # Try common filename patterns for Bedrock geometry files
+    base_url = "https://raw.githubusercontent.com/Mojang/bedrock-samples/main/resource_pack/models/entity"
+    candidates = [
+        f"{safe_name_lower}.geo.json",
+        f"{safe_name_lower}_v2.geo.json",
+        f"{safe_name_lower}_v1.geo.json",
+    ]
+
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            # Query GitHub API to list files in entity folder
-            api_url = "https://api.github.com/repos/Mojang/bedrock-samples/contents/resource_pack/models/entity"
-            response = await client.get(api_url)
-            
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            for filename in candidates:
+                raw_url = f"{base_url}/{filename}"
+                response = await client.get(raw_url)
+                if response.status_code == 200:
+                    try:
+                        geometry_data = response.json()
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+
+                    result = {
+                        "geometry": geometry_data,
+                        "url": raw_url,
+                        "filename": filename,
+                        "matches_found": 1
+                    }
+                    _geometry_cache[safe_name_lower] = result
+                    print(f"[GEOMETRY] Fetched and cached '{filename}' for '{mob_name}'")
+                    return result
+
+            # None of the direct URLs worked — fall back to GitHub API for directory listing
+            # (only costs 1 API call, and the listing is cached for future lookups)
+            global _github_file_list_cache
+            if _github_file_list_cache is not None:
+                files = _github_file_list_cache
+            else:
+                api_url = "https://api.github.com/repos/Mojang/bedrock-samples/contents/resource_pack/models/entity"
+                api_response = await client.get(api_url)
+                if api_response.status_code != 200:
+                    raise HTTPException(
+                        status_code=api_response.status_code,
+                        detail=f"Failed to query GitHub API (status {api_response.status_code})"
+                    )
+                files = api_response.json()
+                if isinstance(files, list):
+                    _github_file_list_cache = files
+
+            matching = [
+                f.get("name", "") for f in files
+                if safe_name_lower in f.get("name", "").lower() and f.get("name", "").endswith(".geo.json")
+            ]
+            if not matching:
+                raise HTTPException(status_code=404, detail=f"No geometry files found for '{mob_name}'")
+
+            matching.sort(key=len)
+            chosen = matching[0]
+            raw_url = f"{base_url}/{chosen}"
+            response = await client.get(raw_url)
             if response.status_code != 200:
-                raise HTTPException(
-                    status_code=response.status_code,
-                    detail=f"Failed to query GitHub API (status {response.status_code})"
-                )
-            
-            files = response.json()
-            if not isinstance(files, list):
-                raise HTTPException(
-                    status_code=500,
-                    detail="Unexpected GitHub API response format"
-                )
-            
-            # Filter for .geo.json files that contain the mob name
-            matching_files = []
-            for file_info in files:
-                filename = file_info.get("name", "").lower()
-                # Check if filename contains mob name and ends with .geo.json
-                if safe_name_lower in filename and filename.endswith(".geo.json"):
-                    matching_files.append({
-                        "name": file_info.get("name", ""),
-                        "url": file_info.get("download_url", ""),
-                        "updated_at": file_info.get("sha", "")  # Using sha as a unique identifier
-                    })
-            
-            if not matching_files:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"No geometry files found for mob '{mob_name}' on bedrock-samples repository"
-                )
-            
-            # If multiple files found, fetch each one to get its git history timestamps
-            if len(matching_files) > 1:
-                # Get commit info for each file to determine which is most recently updated
-                for file_info in matching_files:
-                    commits_url = f"https://api.github.com/repos/Mojang/bedrock-samples/commits?path=resource_pack/models/entity/{file_info['name']}&per_page=1"
-                    commits_response = await client.get(commits_url)
-                    if commits_response.status_code == 200:
-                        commits = commits_response.json()
-                        if commits and isinstance(commits, list) and len(commits) > 0:
-                            file_info["last_updated"] = commits[0].get("commit", {}).get("committer", {}).get("date", "")
-                    if "last_updated" not in file_info:
-                        file_info["last_updated"] = ""
-                
-                # Sort by last_updated timestamp (descending) to get most recent
-                matching_files.sort(key=lambda x: x.get("last_updated", ""), reverse=True)
-            
-            # Use the first (most recent) file
-            selected_file = matching_files[0]
-            url = selected_file["url"]
-            
-            # Fetch the actual geometry file
-            geometry_response = await client.get(url)
-            
-            if geometry_response.status_code != 200:
-                raise HTTPException(
-                    status_code=geometry_response.status_code,
-                    detail=f"Failed to fetch geometry file from GitHub"
-                )
-            
-            # Parse the JSON to ensure it's valid
-            try:
-                geometry_data = geometry_response.json()
-            except json.JSONDecodeError:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Retrieved file is not valid JSON"
-                )
-            
-            return {
+                raise HTTPException(status_code=response.status_code, detail="Failed to fetch geometry file")
+
+            geometry_data = response.json()
+            result = {
                 "geometry": geometry_data,
-                "url": url,
-                "filename": selected_file["name"],
-                "matches_found": len(matching_files)
+                "url": raw_url,
+                "filename": chosen,
+                "matches_found": len(matching)
             }
-    
+            _geometry_cache[safe_name_lower] = result
+            print(f"[GEOMETRY] Fetched and cached '{chosen}' for '{mob_name}' (via API fallback)")
+            return result
+
     except httpx.HTTPError as e:
         raise HTTPException(
             status_code=500,
@@ -952,7 +952,7 @@ async def api_build(resource: Optional[UploadFile] = File(None),
 
         downloads = {
             "bundle": f"/download/{Path(artifacts['bundle_zip']).name}",
-            "mcworld": f"/download/{Path(artifacts['mcworld']).name}",
+            "mcworld": f"/download/{Path(artifacts['mcworld']).name}" if artifacts.get('mcworld') else "",
             "mcaddon": f"/download/{Path(artifacts['mcaddon']).name}",
             "res_mcpack": f"/download/{Path(artifacts['res_mcpack']).name}",
             "beh_mcpack": f"/download/{Path(artifacts['beh_mcpack']).name}",
@@ -1138,10 +1138,28 @@ async def launch_test(payload: dict = Body(...)):
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Invalid spec: {exc}")
 
+    # Save textures from payload to temp directory for build process
+    import base64
+    textures_dir = None
+    textures_json = payload.get("textures", {})
+    if textures_json and isinstance(textures_json, dict):
+        tex_tmp = Path(tempfile.mkdtemp(prefix="test_tex_"))
+        textures_dir = tex_tmp
+        for mob_name, base64_data in textures_json.items():
+            try:
+                if isinstance(base64_data, str) and base64_data:
+                    if "," in base64_data:
+                        base64_data = base64_data.split(",", 1)[1]
+                    png_bytes = base64.b64decode(base64_data)
+                    tex_path = textures_dir / f"{mob_name}.png"
+                    tex_path.write_bytes(png_bytes)
+            except Exception as e:
+                print(f"[TEST] Warning: Failed to process texture for {mob_name}: {e}")
+
     # Build addon to get the behavior pack folder
     out_dir = Path(tempfile.mkdtemp(prefix="test_session_"))
     try:
-        artifacts = build_addon(specs, out_dir, None, None)
+        artifacts = build_addon(specs, out_dir, None, None, textures_dir=textures_dir)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Build failed: {exc}")
 

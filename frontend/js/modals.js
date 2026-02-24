@@ -259,58 +259,17 @@ function initAddMobModal() {
 // =====================
 // LOAD TEMPLATE MODAL
 // =====================
-let allTemplateMobNames = []; // Store all available mob names from database
-
 function initLoadTemplateModal() {
   const loadTemplateModalOverlay = document.getElementById("load-template-modal-overlay");
   const templateMobInput = document.getElementById("template-mob-input");
   const templateCreateBtn = document.getElementById("template-create-btn");
-  const datalist = document.getElementById("template-mob-suggestions") || createDatalist();
-  
-  // Create datalist element if it doesn't exist
-  function createDatalist() {
-    const dl = document.createElement("datalist");
-    dl.id = "template-mob-suggestions";
-    document.body.appendChild(dl);
-    templateMobInput?.setAttribute("list", "template-mob-suggestions");
-    return dl;
-  }
-  
-  // Load all mob names from database when modal opens
-  async function loadTemplateMobNames() {
-    try {
-      const res = await fetch("/api/template/mobs");
-      if (res.ok) {
-        const data = await res.json();
-        allTemplateMobNames = data.mobs || [];
-        
-        // Populate datalist for autocomplete
-        datalist.innerHTML = "";
-        allTemplateMobNames.forEach(mobName => {
-          const option = document.createElement("option");
-          option.value = mobName;
-          datalist.appendChild(option);
-        });
-        
-        console.log(`[TEMPLATE] Loaded ${allTemplateMobNames.length} mob names from database`);
-      }
-    } catch (err) {
-      console.warn("[TEMPLATE] Failed to load mob names:", err);
-    }
-  }
-  
-  // Show modal and load names
-  const originalShowModal = window.showLoadTemplateModal;
-  window.showLoadTemplateModal = function() {
-    if (originalShowModal) originalShowModal();
-    loadTemplateMobNames();
-  };
   
   // Close modal when clicking outside
   loadTemplateModalOverlay?.addEventListener("click", (e) => {
     if (e.target === loadTemplateModalOverlay) {
       loadTemplateModalOverlay.classList.add("hidden");
       templateMobInput.value = "";
+      selectedTemplateId = null;
     }
   });
   
@@ -374,9 +333,9 @@ function initLoadTemplateModal() {
   
   // Create mob from selected template or AI generation
   async function createMobFromTemplate() {
-    const inputValue = templateMobInput.value.trim();
-    if (!inputValue) {
-      alert("Please enter a name for your new mob.");
+    const name = templateMobInput.value.trim();
+    if (!name) {
+      alert("Please enter a mob name.");
       return;
     }
     
@@ -384,10 +343,22 @@ function initLoadTemplateModal() {
     const templateMobName = templateMobInput.dataset.templateMob || inputValue;
     const customName = inputValue;
     const customSafeName = customName.toLowerCase().replace(/[^a-z0-9_]/g, "_");
+    if (!selectedTemplateId) {
+      alert("No template selected.");
+      return;
+    }
+    
+    const template = vanillaTemplates[selectedTemplateId];
+    if (!template) {
+      alert("Template not found.");
+      return;
+    }
+    
+    const safeName = name.toLowerCase().replace(/[^a-z0-9_]/g, "_");
     
     // Check if mob already exists
-    if (getUserMob(customSafeName)) {
-      alert(`A mob named '${customSafeName}' already exists.`);
+    if (getUserMob(safeName)) {
+      alert(`A mob named '${safeName}' already exists.`);
       return;
     }
     
@@ -543,6 +514,26 @@ function initLoadTemplateModal() {
       alert(`❌ Error creating mob: ${err.message}`);
       console.error("[TEMPLATE] Error:", err);
     }
+
+    // Try to pull the default texture for this template from the Mojang samples repo.
+    const templateId = template.short_name || selectedTemplateId;
+    const remoteTexture = await fetchTemplateTexture(templateId);
+    if (remoteTexture) {
+      saveUserMobTexture(safeName, remoteTexture);
+    }
+    
+    saveUserMob(safeName, spec);
+    currentMobName = safeName;
+    await loadMobList();
+    await selectMob(safeName);
+    
+    // Fetch and display geometry from bedrock-samples
+    await fetchAndDisplayGeometry(templateId);
+    
+    // Close modal
+    loadTemplateModalOverlay.classList.add("hidden");
+    templateMobInput.value = "";
+    selectedTemplateId = null;
   }
   
   templateCreateBtn?.addEventListener("click", createMobFromTemplate);
@@ -552,10 +543,4 @@ function initLoadTemplateModal() {
       createMobFromTemplate();
     }
   });
-  
-  // Load names on first modal init
-  loadTemplateMobNames();
-  
-  // Export function to be called from builder.js when opening modal
-  window.loadTemplateMobNamesFromDB = loadTemplateMobNames;
 }
