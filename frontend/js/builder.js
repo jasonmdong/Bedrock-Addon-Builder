@@ -115,6 +115,7 @@ function setupTemplateSearchInput(searchInput) {
 let selectedTemplateId = null;
 
 // Fetch default texture for a vanilla template from Mojang's bedrock-samples repo.
+// Exported globally for use in modals.js
 async function fetchTemplateTexture(templateId) {
   if (!templateId) return null;
   const base = "https://raw.githubusercontent.com/Mojang/bedrock-samples/main/resource_pack/textures/entity";
@@ -137,6 +138,8 @@ async function fetchTemplateTexture(templateId) {
     return null;
   }
 }
+// Make available globally for other scripts
+window.fetchTemplateTexture = fetchTemplateTexture;
 
 // Fetch mob geometry JSON from server endpoint
 // textureMobName is the actual mob name for loading textures (e.g., "orange_cow")
@@ -327,6 +330,9 @@ function initBuildHandlers() {
     localStorage.setItem(BUILD_MODE_KEY, buildModeSelect.value);
   });
 
+  // --- Publish to Database ---
+  initPublishHandler();
+
   // --- One-Click Play (Test in Game) ---
   initTestInGame();
 }
@@ -447,5 +453,111 @@ function initTestInGame() {
     testInGameBtn.disabled = false;
     testInGameBtn.textContent = "🎮 Test in Game";
     setTimeout(() => _setTestStatus("Stopped", "var(--hint)"), 500);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Publish to Database
+// ---------------------------------------------------------------------------
+const publishMobBtn = document.getElementById("publish-mob-btn");
+
+function initPublishHandler() {
+  publishMobBtn?.addEventListener("click", async (e) => {
+    e.preventDefault();
+    
+    const user = getCurrentUser();
+    if (!user) {
+      alert("Please select or create a user first.");
+      return;
+    }
+    
+    if (!currentMobName || currentMobName === "current") {
+      alert("Please create and save a mob first before publishing.");
+      return;
+    }
+    
+    // Ensure current spec is saved
+    const saved = await saveSpec();
+    if (saved === null) return;
+    
+    // Get the current mob spec
+    const spec = getUserMob(currentMobName);
+    if (!spec) {
+      alert("Could not find mob spec to publish.");
+      return;
+    }
+    
+    // Get geometry from the spec
+    const geometry = spec.geometry || {};
+    if (!geometry || Object.keys(geometry).length === 0) {
+      const proceed = confirm("This mob has no custom geometry. Publish anyway?");
+      if (!proceed) return;
+    }
+    
+    // Get prompts from LLM history
+    let prompts = [];
+    try {
+      const llmStackKey = `llm_stack_${user}`;
+      const rawHistory = localStorage.getItem(llmStackKey);
+      if (rawHistory) {
+        const history = JSON.parse(rawHistory);
+        prompts = history.map(entry => entry.prompt).filter(p => p);
+      }
+    } catch (e) {
+      console.warn("Could not read LLM history:", e);
+    }
+    
+    if (prompts.length === 0) {
+      const proceed = confirm("No LLM prompts found for this mob. The AI won't have context about how this mob was created. Publish anyway?");
+      if (!proceed) return;
+    }
+    
+    // Show confirmation dialog
+    const confirmMsg = `Publish "${currentMobName}" to the database?\n\nThis mob will be saved with ${prompts.length} prompt(s) for AI learning.\n\nUsername: ${user}`;
+    if (!confirm(confirmMsg)) return;
+    
+    // Disable button and show loading state
+    publishMobBtn.disabled = true;
+    const originalText = publishMobBtn.textContent;
+    publishMobBtn.textContent = "📤 Publishing...";
+    
+    try {
+      const response = await fetch("/api/publish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mob_name: currentMobName,
+          username: user,
+          prompts: prompts,
+          geometry: geometry
+        })
+      });
+      
+      const result = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(result.detail || result.error || "Failed to publish");
+      }
+      
+      // Success
+      alert(`✓ Published successfully!\n\nMob: ${result.mob_name}\nDescription: ${result.description}\nKeywords: ${result.keywords?.join(", ")}`);
+      
+      if (sidebarStatusEl) {
+        sidebarStatusEl.style.display = "block";
+        sidebarStatusEl.style.background = "rgba(16, 185, 129, 0.1)";
+        sidebarStatusEl.style.color = "#10b981";
+        sidebarStatusEl.textContent = `Published: ${result.mob_name}`;
+        setTimeout(() => {
+          sidebarStatusEl.style.display = "none";
+        }, 5000);
+      }
+      
+    } catch (err) {
+      console.error("Publish error:", err);
+      alert(`✗ Failed to publish: ${err.message}`);
+    } finally {
+      publishMobBtn.disabled = false;
+      publishMobBtn.textContent = originalText;
+    }
   });
 }

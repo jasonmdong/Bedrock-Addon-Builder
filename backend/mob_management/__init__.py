@@ -5,6 +5,7 @@ Mob management module for CRUD operations on mobs.
 - READ: retriever.py (get mobs from database)
 - UPDATE: updater.py (modify existing mobs)
 - DELETE: deleter.py (remove mobs from database)
+- PUBLISH: data/database_insertion/publish_mob.py (publish user mobs)
 """
 
 # Lazy imports to avoid loading psycopg2 until needed
@@ -13,6 +14,9 @@ def __getattr__(name):
     if name == 'find_similar_mobs':
         from .retriever import find_similar_mobs
         return find_similar_mobs
+    elif name == 'find_similar_mobs_by_embedding':
+        from .retriever import find_similar_mobs_by_embedding
+        return find_similar_mobs_by_embedding
     elif name == 'get_mob_by_name':
         from .retriever import get_mob_by_name
         return get_mob_by_name
@@ -60,6 +64,7 @@ def __getattr__(name):
 __all__ = [
     # READ operations
     "find_similar_mobs",
+    "find_similar_mobs_by_embedding",
     "get_mob_by_name",
     "get_all_mobs",
     "get_template_mob_by_name",

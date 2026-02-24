@@ -7,8 +7,36 @@ Part of CRUD operations:
 - update: updater.py (modify existing mobs)
 - delete: deleter.py (remove mobs from database)
 """
+import os
 from typing import List, Dict, Any, Optional
 from backend.database import fetch_all, fetch_one
+
+
+def _generate_query_embedding(query: str) -> List[float]:
+    """
+    Generate an embedding vector for a user's query text.
+    
+    Args:
+        query: The user's natural language query
+        
+    Returns:
+        List of 1536 floats representing the embedding vector
+        
+    Raises:
+        RuntimeError: If OPENAI_API_KEY is not set
+    """
+    import openai
+    
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY environment variable not set")
+    
+    client = openai.OpenAI(api_key=api_key)
+    response = client.embeddings.create(
+        input=query,
+        model="text-embedding-3-small"
+    )
+    return response.data[0].embedding
 
 
 def get_template_mob_by_name(mob_name: str) -> Optional[Dict[str, Any]]:
@@ -58,26 +86,98 @@ def find_similar_mobs(
     min_similarity: float = 0.5
 ) -> List[Dict[str, Any]]:
     """
-    Find mobs in the database that are similar to the user's query.
+    Find mobs in the database that are similar to the user's query
+    using vector similarity search (pgvector cosine distance).
     
     Args:
-        query: User's prompt describing desired mob
+        query: User's prompt describing desired mob (e.g., "a flying fire creature")
+        limit: Maximum number of results to return
+        min_similarity: Minimum similarity score (0-1), where 1 is identical
+    
+    Returns:
+        List of similar mob records from database, ordered by similarity (highest first).
+        Each record includes a 'similarity' field with the cosine similarity score.
+    """
+    # Generate embedding for the user's query
+    try:
+        query_embedding = _generate_query_embedding(query)
+    except RuntimeError as e:
+        print(f"Warning: Could not generate query embedding: {e}")
+        # Fallback to returning recent mobs if embeddings unavailable
+        sql = "SELECT * FROM mob_geometries ORDER BY creation_date DESC LIMIT %s"
+        return fetch_all(sql, (limit,)) or []
+    
+    # Convert embedding to string format for pgvector
+    embedding_str = "[" + ",".join(str(f) for f in query_embedding) + "]"
+    
+    # Query using pgvector cosine distance operator (<=>)
+    # Cosine distance = 1 - cosine similarity, so we compute similarity as (1 - distance)
+    sql = """
+        SELECT 
+            mob_id,
+            mob_name,
+            mob_description,
+            prompt,
+            mob_keywords,
+            mob_geometry,
+            bone_metadata,
+            complexity_score,
+            is_official,
+            creation_date,
+            1 - (mob_embedding <=> %s::vector) as similarity
+        FROM mob_geometries
+        WHERE mob_embedding IS NOT NULL
+          AND 1 - (mob_embedding <=> %s::vector) >= %s
+        ORDER BY mob_embedding <=> %s::vector ASC
+        LIMIT %s
+    """
+    
+    results = fetch_all(sql, (embedding_str, embedding_str, min_similarity, embedding_str, limit))
+    return results or []
+
+
+def find_similar_mobs_by_embedding(
+    embedding: List[float],
+    limit: int = 5,
+    min_similarity: float = 0.5
+) -> List[Dict[str, Any]]:
+    """
+    Find similar mobs using a pre-computed embedding vector.
+    
+    Useful when you already have an embedding (e.g., from an existing mob)
+    and want to find similar ones without re-computing.
+    
+    Args:
+        embedding: Pre-computed embedding vector (1536 floats)
         limit: Maximum number of results to return
         min_similarity: Minimum similarity score (0-1)
     
     Returns:
-        List of similar mob records from database
+        List of similar mob records ordered by similarity
     """
-    # TODO: Implement similarity matching logic
-    # This could use:
-    # - Semantic search on mob descriptions
-    # - Vector embeddings similarity
-    # - Keyword matching
-    # - Characteristics matching (type, size, etc.)
+    embedding_str = "[" + ",".join(str(f) for f in embedding) + "]"
     
-    # Placeholder: return all mobs for now
-    sql = "SELECT * FROM mob_geometries LIMIT %s"
-    results = fetch_all(sql, (limit,))
+    sql = """
+        SELECT 
+            mob_id,
+            mob_name,
+            mob_description,
+            prompt,
+            mob_keywords,
+            mob_geometry,
+            bone_metadata,
+            complexity_score,
+            is_official,
+            creation_date,
+            1 - (mob_embedding <=> %s::vector) as similarity
+        FROM mob_geometries
+        WHERE mob_embedding IS NOT NULL
+          AND 1 - (mob_embedding <=> %s::vector) >= %s
+        ORDER BY mob_embedding <=> %s::vector ASC
+        LIMIT %s
+    """
+    
+    results = fetch_all(sql, (embedding_str, embedding_str, min_similarity, embedding_str, limit))
     return results or []
 
 
