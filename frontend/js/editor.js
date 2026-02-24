@@ -347,26 +347,63 @@ function showDiff(beforeSpec, afterSpec) {
       if (lines.length && lines[lines.length-1] === '') lines.pop();
       lines.forEach(l => {
         if (chunk.added) {
-          contentParts.push(`<div style="white-space:pre; padding:2px 6px; background:rgba(16,185,129,0.06); color:#10b981;">+ ${escapeHtml(l)}</div>`);
-          gutterParts.push(`<div style="padding:2px 6px; text-align:right; color: #a7f3d0;">→ ${newLine}</div>`);
+          contentParts.push(`<div class="diff-line added">+ ${escapeHtml(l)}</div>`);
+          gutterParts.push(`<div class="gutter-line added">→ ${newLine}</div>`);
           newLine++;
         } else if (chunk.removed) {
-          contentParts.push(`<div style="white-space:pre; padding:2px 6px; background:rgba(239,68,68,0.06); color:#ef4444;">- ${escapeHtml(l)}</div>`);
-          gutterParts.push(`<div style="padding:2px 6px; text-align:right; color: #fecaca;">${oldLine} →</div>`);
+          contentParts.push(`<div class="diff-line removed">- ${escapeHtml(l)}</div>`);
+          gutterParts.push(`<div class="gutter-line removed">${oldLine} →</div>`);
           oldLine++;
         } else {
-          contentParts.push(`<div style="white-space:pre; padding:2px 6px; color:var(--muted);">  ${escapeHtml(l)}</div>`);
-          gutterParts.push(`<div style="padding:2px 6px; text-align:right; color:var(--muted);">${oldLine} | ${newLine}</div>`);
+          contentParts.push(`<div class="diff-line context">  ${escapeHtml(l)}</div>`);
+          gutterParts.push(`<div class="gutter-line context">${oldLine} | ${newLine}</div>`);
           oldLine++; newLine++;
         }
       });
     });
     specPre.innerHTML = contentParts.join('');
     lineGutter.innerHTML = gutterParts.join('');
+    try { forceRepaintDiff(); } catch (e) {}
+    try {
+      if (specPre && lineGutter) {
+        lineGutter.scrollTop = specPre.scrollTop;
+        if (!specPre._gutterSyncAttached) {
+          specPre.addEventListener('scroll', () => { lineGutter.scrollTop = specPre.scrollTop; });
+          specPre._gutterSyncAttached = true;
+        }
+        const firstChange = specPre.querySelector('.diff-line.added, .diff-line.removed');
+        if (firstChange && typeof firstChange.scrollIntoView === 'function') {
+          firstChange.scrollIntoView({ block: 'nearest' });
+        }
+      }
+    } catch (e) {}
   } catch (e) {
     specPre.innerHTML = '<div style="color: var(--muted); padding:8px;">Could not compute diff</div>';
     lineGutter.textContent = '';
   }
+}
+
+function forceRepaintDiff() {
+  try {
+    const nodes = [specDiffContainerEl, specPre, lineGutter].filter(Boolean);
+    nodes.forEach(n => {
+      n.style.willChange = 'opacity, transform';
+      n.style.transform = 'translateZ(0)';
+      n.style.backfaceVisibility = 'hidden';
+    });
+    nodes.forEach(n => void n.offsetHeight);
+    window.requestAnimationFrame(() => {
+      nodes.forEach(n => n.style.opacity = '0.999');
+      window.requestAnimationFrame(() => {
+        nodes.forEach(n => {
+          n.style.opacity = '';
+          n.style.willChange = '';
+          n.style.transform = '';
+          n.style.backfaceVisibility = '';
+        });
+      });
+    });
+  } catch (e) {}
 }
 
 function renderGlobalDiff() {
@@ -410,16 +447,28 @@ function setSpecView(mode) {
   currentSpecView = mode;
   if (mode === 'diff') {
     try { editor.style.display = 'none'; } catch (e) {}
-    try { specDiffContainerEl.style.display = 'block'; } catch (e) {}
+    try { specDiffContainerEl.style.display = 'block'; specDiffContainerEl.setAttribute('aria-visible','true'); } catch (e) {}
     moveToggleSlider(specViewDiffBtn);
     try { renderGlobalDiff(); } catch (e) { console.warn('renderGlobalDiff error', e); }
     try { if (diffScroll) diffScroll.scrollTop = 0; } catch (e) {}
+    try {
+      if (specPre) {
+        specPre.style.willChange = 'transform, opacity';
+        specPre.style.transform = 'translateZ(0)';
+        void specPre.offsetHeight;
+        window.requestAnimationFrame(() => {
+          specPre.style.willChange = 'auto';
+          specPre.style.transform = '';
+        });
+      }
+    } catch (e) {}
   } else {
     try { editor.style.display = 'block'; } catch (e) {}
-    try { specDiffContainerEl.style.display = 'none'; } catch (e) {}
+    try { specDiffContainerEl.style.display = 'none'; specDiffContainerEl.setAttribute('aria-visible','false'); } catch (e) {}
     moveToggleSlider(specViewEditorBtn);
     try { editor.focus(); } catch (e) {}
   }
+  try { specViewEditorBtn.classList.toggle('active', mode === 'editor'); specViewDiffBtn.classList.toggle('active', mode === 'diff'); } catch (e) {}
 }
 
 specViewEditorBtn?.addEventListener && specViewEditorBtn.addEventListener('click', () => setSpecView('editor'));

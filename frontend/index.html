@@ -259,7 +259,7 @@
 
         <textarea id="llm-prompt" placeholder="Describe how the mob should change (damage, hp, colors, geometry...)." style="flex: 1;"></textarea>
 
-        <div style="background: #1e293b; color: #f1f5f9; padding: 0.5rem; border-radius: 4px; margin-bottom: 0.5rem; font-size: 0.8rem; display: flex; align-items: center; gap: 0.5rem;">
+        <div style="background: var(--secondary-bg); color: var(--secondary-text); padding: 0.5rem; border-radius: 4px; margin-bottom: 0.5rem; font-size: 0.8rem; display: flex; align-items: center; gap: 0.5rem;">
 
           <span>🔒</span>
 
@@ -297,11 +297,11 @@
 
             <div id="spec-view-toggle" class="spec-view-toggle" style="position:relative; display:inline-flex; gap:0.25rem; border:1px solid var(--border); padding:2px; border-radius:6px; background:var(--card-bg);">
 
-              <div id="spec-toggle-slider" style="position:absolute; top:2px; left:2px; width:56px; height:calc(100% - 4px); border-radius:4px; background:rgba(255,255,255,0.08); transition:left 200ms ease, width 200ms ease;"></div>
+              <div id="spec-toggle-slider" style="position:absolute; top:2px; left:2px; width:56px; height:calc(100% - 4px); border-radius:4px; background:var(--toggle-slider-bg); transition:left 200ms ease, width 200ms ease;"></div>
 
-              <button id="spec-view-editor-btn" style="position:relative; padding:4px 8px; border-radius:4px; border:none; background:transparent; cursor:pointer; color:#ffffff;">Editor</button>
+              <button id="spec-view-editor-btn" style="position:relative; padding:4px 8px; border-radius:4px; border:none; background:transparent; cursor:pointer;">Editor</button>
 
-              <button id="spec-view-diff-btn" style="position:relative; padding:4px 8px; border-radius:4px; border:none; background:transparent; cursor:pointer; color:#ffffff;">Diff</button>
+              <button id="spec-view-diff-btn" style="position:relative; padding:4px 8px; border-radius:4px; border:none; background:transparent; cursor:pointer;">Diff</button>
 
             </div>
 
@@ -318,11 +318,11 @@
           <div id="spec-editor-box" style="position:relative; flex:1; overflow:hidden;">
             <textarea id="spec-editor" spellcheck="false" autocomplete="off" style="position:absolute; inset:0; width:100%; height:100%; box-sizing:border-box; resize:none; font-family: monospace; font-size:0.85rem; line-height:1.35; padding:8px; background:var(--editor-bg); color:var(--editor-text); border:none; outline:none;"></textarea>
 
-            <div id="spec-diff-overlay" style="position:absolute; inset:0; display:none;">
-              <div id="diff-scroll" style="height:100%; display:flex; overflow:auto; border-radius:6px;">
-                <pre id="line-gutter" style="width:64px; margin:0; padding:8px; font-family: monospace; font-size:0.85rem; color:var(--muted); background:transparent; border-right:1px solid rgba(255,255,255,0.02); text-align:right; line-height:1.35;"></pre>
-                <pre id="spec-pre" style="flex:1; margin:0; padding:8px; font-family: monospace; font-size:0.85rem; white-space:pre; color:var(--editor-text); line-height:1.35; background:transparent;"></pre>
-              </div>
+            <div id="spec-diff-overlay" aria-visible="false" style="position:absolute; inset:0; display:none;">
+              <div id="diff-scroll" class="diff-mini" style="height:100%; display:flex; overflow:hidden; border-radius:6px;">
+                  <pre id="line-gutter" class="gutter" style="width:64px; min-width:64px; margin:0; padding:8px; font-family: monospace; font-size:0.85rem; color:var(--muted); border-right:1px solid rgba(255,255,255,0.02); text-align:right; line-height:1.35; overflow:hidden;"></pre>
+                  <pre id="spec-pre" class="diff-content" style="flex:1 1 auto; min-width:0; margin:0; padding:8px; font-family: monospace; font-size:0.85rem; white-space:pre; color:var(--editor-text); line-height:1.35; overflow:auto;"></pre>
+                </div>
             </div>
           </div>
 
@@ -341,13 +341,11 @@
 
       <div style="padding: 1rem; background: var(--card-bg); border-radius: 8px; border: 1px solid var(--border); flex: 1; display: flex; flex-direction: column; overflow: hidden;">
 
-        <h3 style="margin: 0 0 0.75rem 0; font-size: 1rem; font-weight: bold;">🔄 LLM Changes</h3>
+        <h3 style="margin: 0 0 0.75rem 0; font-size: 1rem; font-weight: bold;">🕒 LLM History</h3>
 
         <div style="display:flex; gap:1rem; height:100%;">
 
-          <div id="llm-history" style="flex:1; background: var(--status-bg); color: var(--status-text); border-radius:8px; padding:0.5rem; overflow:auto;">
-
-            <div style="font-weight:700; margin-bottom:0.5rem;">LLM History</div>
+          <div id="llm-history" style="flex:1; background: var(--card-bg); color: var(--text); border-radius:8px; padding:0.5rem; overflow:auto;">
 
             <div id="llm-history-list" style="font-size:0.85rem; display:flex; flex-direction:column; gap:0.5rem;">
 
@@ -593,7 +591,7 @@
 
         <!-- LLM Geometry Generation (Hidden for now) -->
 
-        <div class="geometry-generator" style="display: none; margin-top: 1rem; padding: 1rem; background: #1e1e1f; border: 1px solid #3e3e42; border-radius: 8px;">
+        <div class="geometry-generator" style="display: none; margin-top: 1rem; padding: 1rem; background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; color: var(--text);">
 
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
 
@@ -601,7 +599,7 @@
 
           </div>
 
-          <textarea id="geometry-prompt" placeholder="Describe the geometry you want to create or modify... (e.g., 'Create a simple humanoid with large head' or 'Add wings to the body')" style="width: 100%; height: 60px; resize: vertical; background: #2d2d30; border: 1px solid #3e3e42; border-radius: 4px; color: #e0e0e0; padding: 0.5rem; font-size: 0.85rem;"></textarea>
+          <textarea id="geometry-prompt" placeholder="Describe the geometry you want to create or modify... (e.g., 'Create a simple humanoid with large head' or 'Add wings to the body')" style="width: 100%; height: 60px; resize: vertical; background: var(--card-bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text); padding: 0.5rem; font-size: 0.85rem;"></textarea>
 
           <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem;">
 

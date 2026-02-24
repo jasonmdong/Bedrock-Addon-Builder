@@ -85,34 +85,12 @@ function escapeHtmlMini(text) {
 function renderMiniDiffEl(beforeSpec, afterSpec) {
   const container = document.createElement('div');
   container.className = 'diff-mini';
-  container.style.display = 'flex';
-  container.style.flexDirection = 'row';
-  container.style.alignItems = 'flex-start';
-  container.style.background = 'transparent';
-  container.style.borderRadius = '6px';
-  container.style.padding = '2px';
 
   const gutter = document.createElement('pre');
-  gutter.style.margin = '0';
-  gutter.style.padding = '4px 6px';
-  gutter.style.width = '64px';
-  gutter.style.fontFamily = 'monospace';
-  gutter.style.fontSize = '0.72rem';
-  gutter.style.lineHeight = '1.1';
-  gutter.style.color = 'var(--muted)';
-  gutter.style.overflow = 'hidden';
-  gutter.style.whiteSpace = 'nowrap';
-  gutter.style.boxSizing = 'border-box';
+  gutter.className = 'gutter';
 
   const content = document.createElement('pre');
-  content.style.margin = '0';
-  content.style.padding = '4px 6px';
-  content.style.flex = '1';
-  content.style.fontFamily = 'monospace';
-  content.style.fontSize = '0.72rem';
-  content.style.lineHeight = '1.1';
-  content.style.overflow = 'auto';
-  content.style.whiteSpace = 'pre';
+  content.className = 'diff-content';
 
   try {
     function sortKeys(obj) {
@@ -184,17 +162,17 @@ function renderMiniDiffEl(beforeSpec, afterSpec) {
       lines.forEach(l => {
         if (chunk.added) {
           addedCount++;
-          contentParts.push(`<div class="diff-line added" style="white-space:pre; padding:2px 6px; background:rgba(16,185,129,0.06); color:#10b981;">+ ${escapeHtmlMini(l)}</div>`);
-          gutterParts.push(`<div class="gutter-line added" style="padding:2px 6px; color:#a7f3d0;">→ ${newLine}</div>`);
+          contentParts.push(`<div class="diff-line added">+ ${escapeHtmlMini(l)}</div>`);
+          gutterParts.push(`<div class="gutter-line added">→ ${newLine}</div>`);
           newLine++;
         } else if (chunk.removed) {
           removedCount++;
-          contentParts.push(`<div class="diff-line removed" style="white-space:pre; padding:2px 6px; background:rgba(239,68,68,0.06); color:#ef4444;">- ${escapeHtmlMini(l)}</div>`);
-          gutterParts.push(`<div class="gutter-line removed" style="padding:2px 6px; color:#fecaca;">${oldLine} →</div>`);
+          contentParts.push(`<div class="diff-line removed">- ${escapeHtmlMini(l)}</div>`);
+          gutterParts.push(`<div class="gutter-line removed">${oldLine} →</div>`);
           oldLine++;
         } else {
-          contentParts.push(`<div class="diff-line context" style="white-space:pre; padding:2px 6px; color:var(--muted);">  ${escapeHtmlMini(l)}</div>`);
-          gutterParts.push(`<div class="gutter-line context" style="padding:2px 6px; color:var(--muted);">${oldLine} | ${newLine}</div>`);
+          contentParts.push(`<div class="diff-line context">  ${escapeHtmlMini(l)}</div>`);
+          gutterParts.push(`<div class="gutter-line context">${oldLine} | ${newLine}</div>`);
           oldLine++; newLine++;
         }
       });
@@ -387,6 +365,16 @@ function renderLlmHistory() {
           }
         } catch (e) {}
       }, 0);
+      // sync scrolling b/w content and gutter
+      setTimeout(() => {
+        try {
+          const contentEl = mini.querySelector('.diff-content');
+          const gutterEl = mini.querySelector('.gutter');
+          if (contentEl && gutterEl) {
+            contentEl.addEventListener('scroll', () => { gutterEl.scrollTop =contentEl.scrollTop; });
+          }
+        } catch (e) {}
+      }, 50);
     } catch (e) {
       const fallback = document.createElement('div');
       fallback.textContent = '(diff)';
