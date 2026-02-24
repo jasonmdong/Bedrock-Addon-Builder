@@ -1,0 +1,10 @@
+import zipfile, glob, os
+fs = glob.glob(os.environ['TEMP'] + '\\out_*\\*.mcworld')
+fs.sort(key=os.path.getmtime, reverse=True)
+z = zipfile.ZipFile(fs[0])
+print("=== spawn_mobs.mcfunction ===")
+print(z.read('behavior_packs/custom_addon_beh/functions/spawn_mobs.mcfunction').decode())
+print("=== tick.json ===")
+print(z.read('behavior_packs/custom_addon_beh/functions/tick.json').decode())
+print("=== beh manifest ===")
+print(z.read('behavior_packs/custom_addon_beh/manifest.json').decode())

@@ -11,25 +11,33 @@ const llmSessionCount = document.getElementById("llm-session-count");
 const clearLlmHistoryBtn = document.getElementById("clear-llm-history");
 
 // LLM history stack -> newest first
-function llmStackKey(user) { return `llm_stack_${user}`; }
+function llmStackKey(user, mob) {
+  if (!user) return null;
+  const m = mob || 'global';
+  return `llm_stack_${user}_${m}`;
+}
 const LLM_STACK_MAX = 50;
 
-function readLlmStack(user) {
-  const raw = localStorage.getItem(llmStackKey(user));
+function readLlmStack(user, mob) {
+  const key = llmStackKey(user, mob);
+  if (!key) return [];
+  const raw = localStorage.getItem(key);
   return raw ? JSON.parse(raw) : [];
 }
 
-function pushLlmStack(user, entry) {
-  const key = llmStackKey(user);
-  const arr = readLlmStack(user);
+function pushLlmStack(user, mob, entry) {
+  const key = llmStackKey(user, mob);
+  if (!key) return;
+  const arr = readLlmStack(user, mob);
   arr.unshift(entry);
   arr.splice(LLM_STACK_MAX);
   localStorage.setItem(key, JSON.stringify(arr));
 }
 
-function popToLlmIndex(user, index) {
-  const key = llmStackKey(user);
-  const arr = readLlmStack(user);
+function popToLlmIndex(user, mob, index) {
+  const key = llmStackKey(user, mob);
+  if (!key) return [];
+  const arr = readLlmStack(user, mob);
   if (index < 0 || index >= arr.length) return arr;
   const newArr = arr.slice(index);
   localStorage.setItem(key, JSON.stringify(newArr));
@@ -77,34 +85,12 @@ function escapeHtmlMini(text) {
 function renderMiniDiffEl(beforeSpec, afterSpec) {
   const container = document.createElement('div');
   container.className = 'diff-mini';
-  container.style.display = 'flex';
-  container.style.flexDirection = 'row';
-  container.style.alignItems = 'flex-start';
-  container.style.background = 'transparent';
-  container.style.borderRadius = '6px';
-  container.style.padding = '2px';
 
   const gutter = document.createElement('pre');
-  gutter.style.margin = '0';
-  gutter.style.padding = '4px 6px';
-  gutter.style.width = '64px';
-  gutter.style.fontFamily = 'monospace';
-  gutter.style.fontSize = '0.72rem';
-  gutter.style.lineHeight = '1.1';
-  gutter.style.color = 'var(--muted)';
-  gutter.style.overflow = 'hidden';
-  gutter.style.whiteSpace = 'nowrap';
-  gutter.style.boxSizing = 'border-box';
+  gutter.className = 'gutter';
 
   const content = document.createElement('pre');
-  content.style.margin = '0';
-  content.style.padding = '4px 6px';
-  content.style.flex = '1';
-  content.style.fontFamily = 'monospace';
-  content.style.fontSize = '0.72rem';
-  content.style.lineHeight = '1.1';
-  content.style.overflow = 'auto';
-  content.style.whiteSpace = 'pre';
+  content.className = 'diff-content';
 
   try {
     function sortKeys(obj) {
@@ -176,17 +162,17 @@ function renderMiniDiffEl(beforeSpec, afterSpec) {
       lines.forEach(l => {
         if (chunk.added) {
           addedCount++;
-          contentParts.push(`<div class="diff-line added" style="white-space:pre; padding:2px 6px; background:rgba(16,185,129,0.06); color:#10b981;">+ ${escapeHtmlMini(l)}</div>`);
-          gutterParts.push(`<div class="gutter-line added" style="padding:2px 6px; color:#a7f3d0;">→ ${newLine}</div>`);
+          contentParts.push(`<div class="diff-line added">+ ${escapeHtmlMini(l)}</div>`);
+          gutterParts.push(`<div class="gutter-line added">→ ${newLine}</div>`);
           newLine++;
         } else if (chunk.removed) {
           removedCount++;
-          contentParts.push(`<div class="diff-line removed" style="white-space:pre; padding:2px 6px; background:rgba(239,68,68,0.06); color:#ef4444;">- ${escapeHtmlMini(l)}</div>`);
-          gutterParts.push(`<div class="gutter-line removed" style="padding:2px 6px; color:#fecaca;">${oldLine} →</div>`);
+          contentParts.push(`<div class="diff-line removed">- ${escapeHtmlMini(l)}</div>`);
+          gutterParts.push(`<div class="gutter-line removed">${oldLine} →</div>`);
           oldLine++;
         } else {
-          contentParts.push(`<div class="diff-line context" style="white-space:pre; padding:2px 6px; color:var(--muted);">  ${escapeHtmlMini(l)}</div>`);
-          gutterParts.push(`<div class="gutter-line context" style="padding:2px 6px; color:var(--muted);">${oldLine} | ${newLine}</div>`);
+          contentParts.push(`<div class="diff-line context">  ${escapeHtmlMini(l)}</div>`);
+          gutterParts.push(`<div class="gutter-line context">${oldLine} | ${newLine}</div>`);
           oldLine++; newLine++;
         }
       });
@@ -282,11 +268,12 @@ async function requestLlm() {
   
   setStatus(`${provider} updated the spec at ${new Date().toLocaleTimeString()}.`);
 
-  try {
+    try {
     const user = getCurrentUser();
+    const mob = currentMobName || null;
     if (user) {
       const entry = { ts: new Date().toISOString(), prompt: instruction, spec: payload.spec };
-      pushLlmStack(user, entry);
+      pushLlmStack(user, mob, entry);
       renderLlmHistory();
     }
   } catch (e) {
@@ -296,10 +283,15 @@ async function requestLlm() {
 
 function renderLlmHistory() {
   const user = getCurrentUser();
+  const mob = currentMobName || null;
   if (!user || !llmHistoryList) {
-  }
     try { renderGlobalDiff(); } catch (e) {}
-  const hist = readLlmStack(user);
+    return;
+  }
+  try { 
+    renderGlobalDiff();
+  } catch (e) {}
+  const hist = readLlmStack(user, mob);
   if (!hist.length) {
     llmHistoryList.innerHTML = '<div style="color: var(--muted); font-style:italic; text-align:center;">No history yet</div>';
     if (llmSessionCount) llmSessionCount.textContent = '0';
@@ -348,11 +340,11 @@ function renderLlmHistory() {
     let prevSpec = undefined;
     try {
       if (idx < hist.length - 1) {
-        prevSpec = hist[idx + 1].spec;
-      } else {
-        const user = getCurrentUser();
-        prevSpec = (typeof getOriginalSpec === 'function' && user && currentMobName) ? (getOriginalSpec(user, currentMobName) || {}) : (getUserMob(currentMobName) || {});
-      }
+          prevSpec = hist[idx + 1].spec;
+        } else {
+          const user = getCurrentUser();
+          prevSpec = (typeof getOriginalSpec === 'function' && user && currentMobName) ? (getOriginalSpec(user, currentMobName) || {}) : (getUserMob(currentMobName) || {});
+        }
     } catch (e) {
       prevSpec = {};
     }
@@ -373,6 +365,16 @@ function renderLlmHistory() {
           }
         } catch (e) {}
       }, 0);
+      // sync scrolling b/w content and gutter
+      setTimeout(() => {
+        try {
+          const contentEl = mini.querySelector('.diff-content');
+          const gutterEl = mini.querySelector('.gutter');
+          if (contentEl && gutterEl) {
+            contentEl.addEventListener('scroll', () => { gutterEl.scrollTop =contentEl.scrollTop; });
+          }
+        } catch (e) {}
+      }, 50);
     } catch (e) {
       const fallback = document.createElement('div');
       fallback.textContent = '(diff)';
@@ -388,7 +390,7 @@ function renderLlmHistory() {
 function restoreHistoryEntry(index, btnEl) {
     const user = getCurrentUser();
     if (!user) return;
-    const hist = readLlmStack(user);
+  const hist = readLlmStack(user, currentMobName || null);
     if (!hist || index < 0 || index >= hist.length) return;
     const entry = hist[index];
     if (!entry || !entry.spec) return;
@@ -409,7 +411,7 @@ function restoreHistoryEntry(index, btnEl) {
           updateFileTree(entry.spec);
         }
         setStatus(`restored spec from ${new Date(entry.ts).toLocaleString()}`);
-        popToLlmIndex(user, index);
+        popToLlmIndex(user, currentMobName || null, index);
         renderLlmHistory();
         try { showDiff(prior || {}, entry.spec || {}); if (typeof setSpecView === 'function') setSpecView('diff'); } catch (er) {}
       } catch (e) {
@@ -435,9 +437,11 @@ function restoreHistoryEntry(index, btnEl) {
 function initLlmHandlers() {
   clearLlmHistoryBtn?.addEventListener('click', () => {
     const user = getCurrentUser();
+    const mob = currentMobName || null;
     if (!user) return;
-    if (!confirm('Clear LLM history for user ' + user + '?')) return;
-    localStorage.removeItem(`llm_stack_${user}`);
+    if (!confirm('Clear LLM history for User: ' + user + (mob ? (' | Mob: ' + mob) : '') + '?')) return;
+    const key = llmStackKey(user, mob);
+    if (key) localStorage.removeItem(key);
     renderLlmHistory();
   });
 
