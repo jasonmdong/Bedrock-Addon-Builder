@@ -17,3 +17,7 @@ bedrock_server/
 # Local documentation (not for git)
 USER_MANAGEMENT_DOCS.md
 CODEBASE_ARCHITECTURE.md
+
+# API Keys
+API_KEY.py
+**/API_KEY.py

@@ -34,10 +34,14 @@ from backend.core.routes import (
     get_templates,
     get_template_mob_from_database,
     get_all_template_mob_names,
+    generate_mob_from_similar,
+    generate_complete_mob,
     fetch_mob_geometry,
     launch_test,
     launch_test_status,
     launch_test_stop,
+    publish_mob_to_database,
+    check_published_mob,
 )
 
 
@@ -80,6 +84,8 @@ app.get("/download/{name}")(download)
 app.get("/api/templates")(get_templates)
 app.get("/api/template/mobs")(get_all_template_mob_names)
 app.get("/api/template/mob/{mob_name}")(get_template_mob_from_database)
+app.post("/api/template/generate")(generate_mob_from_similar)
+app.post("/api/mob/generate-complete")(generate_complete_mob)
 app.get("/api/geometry/{mob_name}")(fetch_mob_geometry)
 app.post("/api/geometry/generate")(llm_geometry_generate)
 app.post("/api/spec/llm_mock")(llm_spec_mock)
@@ -88,6 +94,10 @@ app.post("/api/spec/llm_mock")(llm_spec_mock)
 app.post("/api/launch-test")(launch_test)
 app.get("/api/launch-test/status")(launch_test_status)
 app.post("/api/launch-test/stop")(launch_test_stop)
+
+# Publish routes (save user mobs to database for RAG)
+app.post("/api/publish")(publish_mob_to_database)
+app.get("/api/publish/check/{mob_name}/{username}")(check_published_mob)
 
 # Static routes
 app.get("/")(index)
