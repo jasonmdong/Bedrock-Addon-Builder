@@ -6,23 +6,14 @@ function initResizer() {
   const resizer = document.getElementById("resizer");
   let isResizing = false;
 
-  if (!sidebar || !resizer) {
-    console.warn("[Resizer] sidebar or resizer element not found");
-    return;
-  }
-
   resizer.addEventListener("mousedown", (e) => {
-    // Don't resize while collapsed (it can also eat clicks near the toggle)
-    if (sidebar.classList.contains("collapsed")) return;
     isResizing = true;
     document.body.classList.add("resizing");
-    e.preventDefault();
   });
 
   window.addEventListener("mousemove", (e) => {
     if (!isResizing) return;
-    const rect = sidebar.getBoundingClientRect();
-    const newWidth = e.clientX - rect.left;
+    const newWidth = e.clientX;
     if (newWidth >= 350 && newWidth <= 600) {
       sidebar.style.width = newWidth + "px";
     }
@@ -110,139 +101,74 @@ function initAddMobModal() {
 // =====================
 // LOAD TEMPLATE MODAL
 // =====================
-let allTemplateMobNames = []; // Store all available mob names from database
-
 function initLoadTemplateModal() {
   const loadTemplateModalOverlay = document.getElementById("load-template-modal-overlay");
   const templateMobInput = document.getElementById("template-mob-input");
   const templateCreateBtn = document.getElementById("template-create-btn");
-  const datalist = document.getElementById("template-mob-suggestions") || createDatalist();
-  
-  // Create datalist element if it doesn't exist
-  function createDatalist() {
-    const dl = document.createElement("datalist");
-    dl.id = "template-mob-suggestions";
-    document.body.appendChild(dl);
-    templateMobInput?.setAttribute("list", "template-mob-suggestions");
-    return dl;
-  }
-  
-  // Load all mob names from database when modal opens
-  async function loadTemplateMobNames() {
-    try {
-      const res = await fetch("/api/template/mobs");
-      if (res.ok) {
-        const data = await res.json();
-        allTemplateMobNames = data.mobs || [];
-        
-        // Populate datalist for autocomplete
-        datalist.innerHTML = "";
-        allTemplateMobNames.forEach(mobName => {
-          const option = document.createElement("option");
-          option.value = mobName;
-          datalist.appendChild(option);
-        });
-        
-        console.log(`[TEMPLATE] Loaded ${allTemplateMobNames.length} mob names from database`);
-      }
-    } catch (err) {
-      console.warn("[TEMPLATE] Failed to load mob names:", err);
-    }
-  }
-  
-  // Show modal and load names
-  const originalShowModal = window.showLoadTemplateModal;
-  window.showLoadTemplateModal = function() {
-    if (originalShowModal) originalShowModal();
-    loadTemplateMobNames();
-  };
   
   // Close modal when clicking outside
   loadTemplateModalOverlay?.addEventListener("click", (e) => {
     if (e.target === loadTemplateModalOverlay) {
       loadTemplateModalOverlay.classList.add("hidden");
       templateMobInput.value = "";
+      selectedTemplateId = null;
     }
   });
   
-  // Create mob from selected template
+  // Create mob from template handler
   async function createMobFromTemplate() {
-    const inputValue = templateMobInput.value.trim();
-    if (!inputValue) {
-      alert("Please enter a name for your new mob.");
+    const name = templateMobInput.value.trim();
+    if (!name) {
+      alert("Please enter a mob name.");
       return;
     }
     
-    // The template mob name is stored in a data attribute when modal opens from search
-    const templateMobName = templateMobInput.dataset.templateMob || inputValue;
-    
-    // If no template is explicitly set, validate the input is a valid database mob
-    if (!templateMobInput.dataset.templateMob && !allTemplateMobNames.includes(inputValue)) {
-      alert(`"${inputValue}" is not available in the database.\nPlease select from the suggestions.`);
+    if (!selectedTemplateId) {
+      alert("No template selected.");
       return;
     }
     
-    const customName = inputValue;
-    const customSafeName = customName.toLowerCase().replace(/[^a-z0-9_]/g, "_");
+    const template = vanillaTemplates[selectedTemplateId];
+    if (!template) {
+      alert("Template not found.");
+      return;
+    }
+    
+    const safeName = name.toLowerCase().replace(/[^a-z0-9_]/g, "_");
     
     // Check if mob already exists
-    if (getUserMob(customSafeName)) {
-      alert(`A mob named '${customSafeName}' already exists.`);
+    if (getUserMob(safeName)) {
+      alert(`A mob named '${safeName}' already exists.`);
       return;
     }
     
-    try {
-      // Load the template mob from database
-      const dbRes = await fetch(`/api/template/mob/${encodeURIComponent(templateMobName)}`);
-      
-      if (!dbRes.ok) {
-        const errorData = await dbRes.json().catch(() => ({}));
-        throw new Error(errorData.detail || 'Failed to load template');
-      }
-      
-      const dbData = await dbRes.json();
-      const templateMob = dbData.mob;
-      
-      // Create a new spec based on the template
-      const newSpec = {
-        ...templateMob,
-        short_name: customSafeName,
-        display_name: customName.charAt(0).toUpperCase() + customName.slice(1).replace(/_/g, " "),
-        identifier: `custom:${customSafeName}`
-      };
-      
-      // Remember the vanilla template name so geometry can be resolved on reload
-      newSpec._template_base = templateMobName;
-
-      // Fetch geometry from bedrock-samples and embed it into the spec
-      try {
-        const geoRes = await fetch(`/api/geometry/${encodeURIComponent(templateMobName)}`);
-        if (geoRes.ok) {
-          const geoData = await geoRes.json();
-          if (geoData.geometry && geoData.geometry["minecraft:geometry"]) {
-            newSpec.geometry_json = geoData.geometry;
-          }
-        }
-      } catch (e) {
-        console.warn(`[TEMPLATE] Could not fetch geometry for ${templateMobName}:`, e);
-      }
-
-      // Save the custom mob
-      saveUserMob(customSafeName, newSpec);
-      currentMobName = customSafeName;
-      await loadMobList();
-      await selectMob(customSafeName);
-      
-      alert(`✅ Successfully created "${customName}" from "${templateMobName}"!`);
-      
-      // Close modal
-      loadTemplateModalOverlay.classList.add("hidden");
-      templateMobInput.value = "";
-      templateMobInput.dataset.templateMob = "";
-    } catch (err) {
-      alert(`❌ Error creating mob: ${err.message}`);
-      console.error("[TEMPLATE] Error:", err);
+    // Clone the template and customize
+    const spec = JSON.parse(JSON.stringify(template));
+    spec.short_name = safeName;
+    spec.display_name = name.charAt(0).toUpperCase() + name.slice(1).replace(/_/g, " ");
+    if (spec.identifier.startsWith("minecraft:")) {
+      spec.identifier = `custom:${safeName}`;
     }
+
+    // Try to pull the default texture for this template from the Mojang samples repo.
+    const templateId = template.short_name || selectedTemplateId;
+    const remoteTexture = await fetchTemplateTexture(templateId);
+    if (remoteTexture) {
+      saveUserMobTexture(safeName, remoteTexture);
+    }
+    
+    saveUserMob(safeName, spec);
+    currentMobName = safeName;
+    await loadMobList();
+    await selectMob(safeName);
+    
+    // Fetch and display geometry from bedrock-samples
+    await fetchAndDisplayGeometry(templateId);
+    
+    // Close modal
+    loadTemplateModalOverlay.classList.add("hidden");
+    templateMobInput.value = "";
+    selectedTemplateId = null;
   }
   
   templateCreateBtn?.addEventListener("click", createMobFromTemplate);
@@ -252,10 +178,4 @@ function initLoadTemplateModal() {
       createMobFromTemplate();
     }
   });
-  
-  // Load names on first modal init
-  loadTemplateMobNames();
-  
-  // Export function to be called from builder.js when opening modal
-  window.loadTemplateMobNamesFromDB = loadTemplateMobNames;
 }

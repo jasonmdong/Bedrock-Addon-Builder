@@ -10,7 +10,7 @@ const painterPencil = document.getElementById("painter-pencil");
 const painterEraser = document.getElementById("painter-eraser");
 const painterClear = document.getElementById("painter-clear");
 const painterLoad = document.getElementById("painter-load");
-const painterSave = document.getElementById("painter-save");
+
 const painterImport = document.getElementById("painter-import");
 const painterWrapper = document.querySelector(".painter-canvas-wrapper");
 
@@ -21,6 +21,12 @@ const SCALE = canvas.width / GRID_SIZE;
 
 // Painter Logic
 function initPainter() {
+  // Check if canvas exists
+  if (!canvas) {
+    console.warn('[Painter] Canvas not found, skipping initialization');
+    return;
+  }
+  
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   painterWrapper?.classList.remove("texture-loaded");
@@ -42,23 +48,45 @@ function initPainter() {
 
   canvas.addEventListener("mousedown", (e) => { isDrawing = true; draw(e); });
   canvas.addEventListener("mousemove", draw);
-  window.addEventListener("mouseup", () => { isDrawing = false; });
+  canvas.addEventListener("mouseup", () => {
+    if (isDrawing) {
+      isDrawing = false;
+      // Auto-save texture when mouse is released
+      console.log('[Painter] Mouse released, triggering auto-save');
+      autoSaveTexture();
+    }
+  });
+  
+  // Also handle mouse leaving canvas
+  canvas.addEventListener("mouseleave", () => {
+    if (isDrawing) {
+      isDrawing = false;
+      autoSaveTexture();
+    }
+  });
 
-  painterPencil.onclick = () => { currentTool = "pencil"; updateToolUI(); };
-  painterEraser.onclick = () => { currentTool = "eraser"; updateToolUI(); };
-  painterClear.onclick = () => {
+  painterPencil?.onclick && (painterPencil.onclick = () => { currentTool = "pencil"; updateToolUI(); });
+  painterEraser?.onclick && (painterEraser.onclick = () => { currentTool = "eraser"; updateToolUI(); });
+  painterClear?.onclick && (painterClear.onclick = () => {
     if (confirm("Clear canvas?")) {
       ctx.fillStyle = "#ffffff";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       painterWrapper?.classList.remove("texture-loaded");
     }
-  };
+  });
 
-  painterLoad.onclick = () => loadTextureIntoPainter(currentMobName);
+  painterLoad?.onclick && (painterLoad.onclick = () => loadTextureIntoPainter(currentMobName));
   
-  painterSave.onclick = async () => {
-    if (!currentMobName) return;
-    setStatus(`Saving texture for ${currentMobName}...`);
+  // Auto-save texture (used on mouseup after drawing)
+  async function autoSaveTexture() {
+    // Get current mob name from the global variable or editor
+    const mobName = window.currentMobName || getCurrentMobFromEditor();
+    if (!mobName) {
+      console.log('[Painter] No mob name available for auto-save');
+      return;
+    }
+    
+    console.log('[Painter] Auto-saving texture for:', mobName);
     
     // Create a temporary 64x64 canvas to export the actual image
     const tempCanvas = document.createElement("canvas");
@@ -70,14 +98,33 @@ function initPainter() {
     
     // Save to localStorage as base64
     const base64Data = tempCanvas.toDataURL("image/png");
-    if (saveUserMobTexture(currentMobName, base64Data)) {
-      setStatus(`Texture saved for ${currentMobName}.`);
+    if (saveUserMobTexture(mobName, base64Data)) {
+      console.log('[Painter] Texture saved, refreshing 3D view...');
       // Refresh the 3D viewer to show the updated texture
-      refresh3DTexture(currentMobName);
-    } else {
-      setStatus(`Failed to save texture.`, true);
+      refresh3DTexture(mobName);
     }
-  };
+  }
+  
+  // Helper to get current mob name from editor
+  function getCurrentMobFromEditor() {
+    // Try to get from URL or editor state
+    const urlParams = new URLSearchParams(window.location.search);
+    const mobFromUrl = urlParams.get('mob');
+    if (mobFromUrl) return mobFromUrl;
+    
+    // Try to get from current spec
+    try {
+      const editor = document.getElementById('spec-editor');
+      if (editor && editor.value) {
+        const spec = JSON.parse(editor.value);
+        return spec.short_name || spec.name;
+      }
+    } catch (e) {}
+    
+    return null;
+  }
+  
+  // Auto-save is now triggered on mouseup after drawing
 
   painterImport.onchange = (e) => {
     const file = e.target.files[0];

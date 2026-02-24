@@ -2,6 +2,8 @@
 // SPEC EDITOR & VALIDATION
 // =====================
 
+console.log('[editor.js] Loading...');
+
 const editor = document.getElementById("spec-editor");
 const statusEl = document.getElementById("status");
 const schemaView = document.getElementById("schema-view");
@@ -82,6 +84,14 @@ async function selectMob(name) {
   }
   
   editor.value = JSON.stringify(spec, null, 2);
+  editor.scrollTop = 0; // Scroll to top after loading
+  editor.selectionStart = 0; // Move cursor to beginning
+  editor.selectionEnd = 0;
+  
+  // Load spec into form editor
+  if (typeof loadSpecIntoForm === 'function') {
+    loadSpecIntoForm(spec);
+  }
   
   // Load schema from server (it's static)
   try {
@@ -428,7 +438,102 @@ const diffScroll = document.getElementById('diff-scroll');
 
 editor?.addEventListener && editor.addEventListener('input', () => {
   if (currentSpecView === 'diff') renderGlobalDiff();
+  
+  // Live preview: update 3D model as user types (with debounce)
+  debouncedLivePreview();
 });
+
+// Debounced live preview to avoid excessive re-renders
+let livePreviewTimeout = null;
+function debouncedLivePreview() {
+  clearTimeout(livePreviewTimeout);
+  livePreviewTimeout = setTimeout(() => {
+    try {
+      const spec = JSON.parse(editor.value);
+      if (spec && spec.geometry) {
+        updateLivePreview(spec);
+      }
+    } catch (e) {
+      // Invalid JSON, ignore
+    }
+  }, 500); // 500ms debounce
+}
+
+// Update the 3D preview with current spec changes
+function updateLivePreview(spec) {
+  // Only update if viewer is initialized
+  if (!window.viewer3D || !window.viewer3D.mesh) return;
+  
+  console.log('[Live Preview] Updating 3D model...');
+  
+  // Update bone visibility and colors based on spec
+  if (spec.geometry && spec.geometry.bones) {
+    const bones = spec.geometry.bones;
+    window.viewer3D.mesh.traverse(child => {
+      if (child.userData && child.userData.boneName) {
+        const boneName = child.userData.boneName;
+        const boneData = bones.find(b => b.name === boneName);
+        
+        if (boneData) {
+          // Update visibility
+          child.visible = boneData.cubes && boneData.cubes.length > 0;
+          
+          // Update color tint based on bone index for visual feedback
+          const boneIndex = bones.indexOf(boneData);
+          if (child.isMesh && child.material) {
+            const colors = [0x4CAF50, 0x2196F3, 0xFFC107, 0xE91E63, 0x9C27B0, 0x00BCD4];
+            const color = colors[boneIndex % colors.length];
+            child.material.emissive = new THREE.Color(color);
+            child.material.emissiveIntensity = 0.2;
+          }
+        }
+      }
+    });
+    
+    // Reset emissive after a short delay
+    setTimeout(() => {
+      window.viewer3D.mesh.traverse(child => {
+        if (child.isMesh && child.material) {
+          child.material.emissiveIntensity = 0;
+        }
+      });
+    }, 300);
+  }
+  
+  // Show live preview indicator
+  showLivePreviewIndicator();
+}
+
+// Show a brief "Live Preview" indicator
+function showLivePreviewIndicator() {
+  let indicator = document.getElementById('live-preview-indicator');
+  if (!indicator) {
+    indicator = document.createElement('div');
+    indicator.id = 'live-preview-indicator';
+    indicator.style.cssText = `
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      background: var(--primary);
+      color: white;
+      padding: 8px 16px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      z-index: 1000;
+      opacity: 0;
+      transition: opacity 0.3s;
+      pointer-events: none;
+    `;
+    indicator.textContent = '⚡ Live Preview';
+    document.body.appendChild(indicator);
+  }
+  
+  indicator.style.opacity = '1';
+  setTimeout(() => {
+    indicator.style.opacity = '0';
+  }, 1500);
+}
 
 const specViewEditorBtn = document.getElementById('spec-view-editor-btn');
 const specViewDiffBtn = document.getElementById('spec-view-diff-btn');
@@ -444,10 +549,21 @@ function moveToggleSlider(toBtn) {
 }
 
 function setSpecView(mode) {
+  console.log('[setSpecView] Setting view to:', mode);
+  console.trace('[setSpecView] Called from:');
   currentSpecView = mode;
+  const formContainer = document.getElementById('spec-form-container');
+  const editorContainer = document.getElementById('spec-editor-container');
+  const specViewFormBtn = document.getElementById('spec-view-form-btn');
+  
+  console.log('[setSpecView] Elements:', { formContainer, editorContainer, editor, specDiffContainerEl });
+  
   if (mode === 'diff') {
-    try { editor.style.display = 'none'; } catch (e) {}
-    try { specDiffContainerEl.style.display = 'block'; specDiffContainerEl.setAttribute('aria-visible','true'); } catch (e) {}
+    console.log('[setSpecView] Switching to diff view');
+    if (formContainer) formContainer.style.display = 'none';
+    if (editorContainer) editorContainer.style.display = 'flex';
+    if (editor) editor.style.display = 'none';
+    if (specDiffContainerEl) { specDiffContainerEl.style.display = 'block'; specDiffContainerEl.setAttribute('aria-visible','true'); }
     moveToggleSlider(specViewDiffBtn);
     try { renderGlobalDiff(); } catch (e) { console.warn('renderGlobalDiff error', e); }
     try { if (diffScroll) diffScroll.scrollTop = 0; } catch (e) {}
@@ -462,21 +578,73 @@ function setSpecView(mode) {
         });
       }
     } catch (e) {}
-  } else {
-    try { editor.style.display = 'block'; } catch (e) {}
-    try { specDiffContainerEl.style.display = 'none'; specDiffContainerEl.setAttribute('aria-visible','false'); } catch (e) {}
+  } else if (mode === 'editor' || mode === 'json') {
+    console.log('[setSpecView] Switching to JSON view');
+    if (formContainer) formContainer.style.display = 'none';
+    if (editorContainer) editorContainer.style.display = 'flex';
+    if (editor) editor.style.display = 'block';
+    if (specDiffContainerEl) { specDiffContainerEl.style.display = 'none'; specDiffContainerEl.setAttribute('aria-visible','false'); }
     moveToggleSlider(specViewEditorBtn);
-    try { editor.focus(); } catch (e) {}
+    // Don't auto-focus to avoid scrolling to bottom on page load
+  } else if (mode === 'form') {
+    console.log('[setSpecView] Switching to form view');
+    if (formContainer) formContainer.style.display = 'block';
+    if (editorContainer) editorContainer.style.display = 'none';
+    moveToggleSlider(specViewFormBtn);
   }
-  try { specViewEditorBtn.classList.toggle('active', mode === 'editor'); specViewDiffBtn.classList.toggle('active', mode === 'diff'); } catch (e) {}
+  
+  // Update active states
+  if (specViewFormBtn) specViewFormBtn.classList.toggle('active', mode === 'form');
+  if (specViewEditorBtn) specViewEditorBtn.classList.toggle('active', mode === 'editor' || mode === 'json'); 
+  if (specViewDiffBtn) specViewDiffBtn.classList.toggle('active', mode === 'diff'); 
 }
 
-specViewEditorBtn?.addEventListener && specViewEditorBtn.addEventListener('click', () => setSpecView('editor'));
-specViewDiffBtn?.addEventListener && specViewDiffBtn.addEventListener('click', () => setSpecView('diff'));
-window.requestAnimationFrame(() => setSpecView('editor'));
-window.addEventListener && window.addEventListener('resize', () => {
-  try { moveToggleSlider(currentSpecView === 'editor' ? specViewEditorBtn : specViewDiffBtn); } catch (e) {}
-});
+// Initialize view toggle buttons after DOM is ready
+function initViewToggle() {
+  const specViewFormBtn = document.getElementById('spec-view-form-btn');
+  
+  console.log('[Editor] Form button:', specViewFormBtn);
+  console.log('[Editor] Editor button:', specViewEditorBtn);
+  console.log('[Editor] Diff button:', specViewDiffBtn);
+
+  if (specViewFormBtn) {
+    specViewFormBtn.addEventListener('click', () => {
+      console.log('[Editor] Form button clicked');
+      setSpecView('form');
+    });
+  }
+  if (specViewEditorBtn) {
+    specViewEditorBtn.addEventListener('click', () => {
+      console.log('[Editor] JSON button clicked');
+      setSpecView('editor');
+    });
+  }
+  if (specViewDiffBtn) {
+    specViewDiffBtn.addEventListener('click', () => {
+      console.log('[Editor] Diff button clicked');
+      setSpecView('diff');
+    });
+  }
+  
+  // Set initial view
+  setSpecView('form');
+  
+  // Handle resize
+  window.addEventListener('resize', () => {
+    let activeBtn;
+    if (currentSpecView === 'form') activeBtn = specViewFormBtn;
+    else if (currentSpecView === 'editor' || currentSpecView === 'json') activeBtn = specViewEditorBtn;
+    else if (currentSpecView === 'diff') activeBtn = specViewDiffBtn;
+    try { moveToggleSlider(activeBtn); } catch (e) {}
+  });
+}
+
+// Call init when DOM is ready
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initViewToggle);
+} else {
+  initViewToggle();
+}
 
 function escapeHtml(text) {
   const div = document.createElement('div');

@@ -61,9 +61,9 @@ body {
 }
 
 aside {
-  width: 350px;
-  min-width: 350px;
-  max-width: 600px;
+  width: 420px;
+  min-width: 420px;
+  max-width: 700px;
   background: var(--card-bg);
   border-right: 1px solid var(--border);
   display: flex;
@@ -330,7 +330,7 @@ input[type=password], select {
 
 .row { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin-top: 1rem; }
 
-.llm-card {
+.llm-card, .content-card {
   margin-top: 1.5rem;
   padding: 1.2rem 1.4rem;
   border-radius: 16px;
@@ -340,6 +340,20 @@ input[type=password], select {
   display: flex;
   flex-direction: column;
   gap: 1rem;
+  resize: vertical;
+  overflow: auto;
+  min-height: 200px;
+}
+
+.content-card {
+  background: var(--card-bg);
+  color: var(--text);
+}
+
+/* Card with no resize for small elements */
+.card-static {
+  resize: none;
+  overflow: visible;
 }
 
 .llm-controls {

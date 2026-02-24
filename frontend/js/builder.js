@@ -226,6 +226,8 @@ async function buildArtifact() {
     .filter(item => item.querySelector("input[type='checkbox']").checked)
     .map(item => item.querySelector(".mob-name").textContent);
 
+  console.log('[BUILD] Selected mob names:', selectedMobNames);
+
   if (selectedMobNames.length === 0) {
     setStatus("No mobs selected for bundle.", true);
     return;
@@ -234,6 +236,9 @@ async function buildArtifact() {
   // Get the actual specs from localStorage
   const selectedSpecs = selectedMobNames.map(name => getUserMob(name)).filter(Boolean);
   
+  console.log('[BUILD] Selected specs count:', selectedSpecs.length);
+  console.log('[BUILD] Selected specs:', selectedSpecs.map(s => s.short_name || s.name));
+
   if (selectedSpecs.length === 0) {
     setStatus("No valid mob specs found.", true);
     return;

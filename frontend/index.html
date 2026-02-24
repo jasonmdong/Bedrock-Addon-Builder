@@ -191,234 +191,235 @@
 
   
 
-  <!-- Two-Column Widget Layout -->
-
-  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 2rem; min-height: calc(100vh - 300px);">
-
-    
-
-    <!-- LEFT WIDGET -->
-
-    <div style="display: flex; flex-direction: column; gap: 1rem; height: 100%;">
-
-      <!-- Generated Pack Structure -->
-
-      <div style="padding: 1rem; background: var(--card-bg); border-radius: 8px; border: 1px solid var(--border); flex: 1; display: flex; flex-direction: column; overflow: hidden;">
-
-        <h3 style="margin: 0 0 0.75rem 0; font-size: 1rem; font-weight: bold;">📁 Generated Pack Structure</h3>
-
-        <div id="file-tree" style="font-family: monospace; font-size: 0.85rem; line-height: 1.6; overflow-y: auto; flex: 1;"></div>
-
-      </div>
-
-      
-
+  <!-- MAIN LAYOUT: Left column (LLM Assistant + History) | Right column (JSON Editor) -->
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 1.5rem;">
+    <!-- LEFT COLUMN: LLM Assistant (top) + History (bottom) -->
+    <div style="display: flex; flex-direction: column; gap: 1.5rem;">
       <!-- LLM Assistant -->
-
-      <div class="llm-card" style="flex: 1; display: flex; flex-direction: column;">
-
+      <div class="llm-card" style="display: flex; flex-direction: column; min-height: 400px;">
         <div>
-
-          <label style="font-size:1rem;">🤖 LLM Assistant Prompt</label>
-
+          <label style="font-size:1rem;">LLM Assistant Prompt</label>
           <p class="hint" style="margin:.2rem 0 0;">Describe the change you want and let an LLM update the spec.</p>
-
         </div>
-
         <div class="llm-controls">
-
           <div class="field">
-
             <label>Provider</label>
-
             <select id="llm-provider">
-
               <option value="openai">OpenAI</option>
-
               <option value="deepseek">DeepSeek</option>
-
               <option value="gemini">Gemini</option>
-
               <option value="claude">Claude</option>
-
               <option value="mock">Local Mock (dev)</option>
-
             </select>
-
           </div>
-
           <div class="field">
-
             <label>API Key</label>
-
             <input type="password" id="llm-key" placeholder="sk-..." autocomplete="off">
-
           </div>
-
         </div>
-
-        <textarea id="llm-prompt" placeholder="Describe how the mob should change (damage, hp, colors, geometry...)." style="flex: 1;"></textarea>
-
-        <div style="background: var(--secondary-bg); color: var(--secondary-text); padding: 0.5rem; border-radius: 4px; margin-bottom: 0.5rem; font-size: 0.8rem; display: flex; align-items: center; gap: 0.5rem;">
-
-          <span>🔒</span>
-
-          <span><strong>Private:</strong> The API key is stored locally in your browser only. Never sent to our server.</span>
-
+        <textarea id="llm-prompt" placeholder="Describe how the mob should change (damage, hp, colors, geometry...)." style="min-height: 80px; flex: 1;"></textarea>
+        <div style="background: var(--secondary-bg); color: var(--secondary-text); padding: 0.5rem; border-radius: 4px; margin: 0.5rem 0; font-size: 0.8rem;">
+          <strong>Private:</strong> The API key is stored locally in your browser only. Never sent to our server.
         </div>
-
-          <div class="actions">
-
+        <div class="actions">
           <button type="button" class="primary" id="llm-run">Ask LLM</button>
-
         </div>
-
       </div>
 
+      <!-- LLM History -->
+      <div class="content-card" style="display: flex; flex-direction: column; height: 650px; resize: vertical; overflow: auto;">
+        <h3 style="margin: 0 0 0.75rem 0; font-size: 1rem; font-weight: bold;">LLM History</h3>
+        <div id="llm-history" style="background: var(--bg); color: var(--text); border-radius:8px; padding:0.5rem; overflow:auto; flex: 1; min-height: 200px;">
+          <div id="llm-history-list" style="font-size:0.85rem; display:flex; flex-direction:column; gap:0.5rem;">
+            <div style="color: var(--muted); font-style: italic; text-align:center;">No history yet</div>
+          </div>
+          <div style="margin-top:0.5rem; display:flex; gap:0.5rem;">
+            <button id="clear-llm-history" class="ghost" style="flex:1;">Clear</button>
+          </div>
+          <div style="margin-top:0.5rem; font-size:0.8rem; color:var(--muted);">Session: <span id="llm-session-count">0</span> iterations</div>
+        </div>
+      </div>
     </div>
 
-    
-
-    <!-- RIGHT WIDGET -->
-
-    <div style="display: flex; flex-direction: column; gap: 1rem; height: 100%;">
-
-      <!-- Mob Spec JSON Editor -->
-
-      <div style="display: flex; flex-direction: column; flex: 1; overflow: hidden;">
-
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-
-          <label>📝 Mob Spec JSON</label>
-
-          <div style="display:flex; align-items:center; gap:0.5rem;">
-
-            <span id="validation-badge" style="font-size: 0.85rem; padding: 0.25rem 0.75rem; border-radius: 12px; display: none;"></span>
-
-            <div id="spec-view-toggle" class="spec-view-toggle" style="position:relative; display:inline-flex; gap:0.25rem; border:1px solid var(--border); padding:2px; border-radius:6px; background:var(--card-bg);">
-
-              <div id="spec-toggle-slider" style="position:absolute; top:2px; left:2px; width:56px; height:calc(100% - 4px); border-radius:4px; background:var(--toggle-slider-bg); transition:left 200ms ease, width 200ms ease;"></div>
-
-              <button id="spec-view-editor-btn" style="position:relative; padding:4px 8px; border-radius:4px; border:none; background:transparent; cursor:pointer;">Editor</button>
-
-              <button id="spec-view-diff-btn" style="position:relative; padding:4px 8px; border-radius:4px; border:none; background:transparent; cursor:pointer;">Diff</button>
-
-            </div>
-
+    <!-- RIGHT COLUMN: Mob Spec Editor (Form + JSON) -->
+    <div class="llm-card" style="display: flex; flex-direction: column; overflow: hidden; min-height: 500px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+        <label>Mob Editor</label>
+        <div style="display:flex; align-items:center; gap:0.5rem;">
+          <span id="validation-badge" style="font-size: 0.85rem; padding: 0.25rem 0.75rem; border-radius: 12px; display: none;"></span>
+          <div id="spec-view-toggle" class="spec-view-toggle" style="position:relative; display:inline-flex; gap:0.25rem; border:1px solid var(--border); padding:2px; border-radius:6px; background:var(--card-bg);">
+            <div id="spec-toggle-slider" style="position:absolute; top:2px; left:2px; width:56px; height:calc(100% - 4px); border-radius:4px; background:var(--toggle-slider-bg); transition:left 200ms ease, width 200ms ease;"></div>
+            <button id="spec-view-form-btn" style="position:relative; padding:4px 8px; border-radius:4px; border:none; background:transparent; cursor:pointer;">Form</button>
+            <button id="spec-view-editor-btn" style="position:relative; padding:4px 8px; border-radius:4px; border:none; background:transparent; cursor:pointer;">JSON</button>
+            <button id="spec-view-diff-btn" style="position:relative; padding:4px 8px; border-radius:4px; border:none; background:transparent; cursor:pointer;">Diff</button>
           </div>
-
         </div>
+      </div>
 
-
-
-        <!-- editor+diff view -->
-
-        <div id="spec-editor-container" style="flex: 1; display:flex; flex-direction:column; overflow: hidden;">
-
-          <div id="spec-editor-box" style="position:relative; flex:1; overflow:hidden;">
-            <textarea id="spec-editor" spellcheck="false" autocomplete="off" style="position:absolute; inset:0; width:100%; height:100%; box-sizing:border-box; resize:none; font-family: monospace; font-size:0.85rem; line-height:1.35; padding:8px; background:var(--editor-bg); color:var(--editor-text); border:none; outline:none;"></textarea>
-
-            <div id="spec-diff-overlay" aria-visible="false" style="position:absolute; inset:0; display:none;">
-              <div id="diff-scroll" class="diff-mini" style="height:100%; display:flex; overflow:hidden; border-radius:6px;">
-                  <pre id="line-gutter" class="gutter" style="width:64px; min-width:64px; margin:0; padding:8px; font-family: monospace; font-size:0.85rem; color:var(--muted); border-right:1px solid rgba(255,255,255,0.02); text-align:right; line-height:1.35; overflow:hidden;"></pre>
-                  <pre id="spec-pre" class="diff-content" style="flex:1 1 auto; min-width:0; margin:0; padding:8px; font-family: monospace; font-size:0.85rem; white-space:pre; color:var(--editor-text); line-height:1.35; overflow:auto;"></pre>
+      <!-- Form View (User-friendly) -->
+      <div id="spec-form-container" style="flex: 1; overflow: auto; min-height: 400px;">
+        <div id="mob-form" style="display: grid; gap: 1rem;">
+          <!-- Basic Info Section -->
+          <div style="background: var(--bg); padding: 1rem; border-radius: 8px; border: 1px solid var(--border);">
+            <h4 style="margin: 0 0 0.75rem 0; color: var(--primary); font-size: 0.9rem;">Basic Info</h4>
+            <div style="display: grid; gap: 0.75rem;">
+              <div class="field">
+                <label>Display Name <span style="color: var(--muted); font-size: 0.8rem;">(What players see)</span></label>
+                <input type="text" id="form-display-name" placeholder="My Awesome Mob" style="width: 100%; padding: 0.5rem; border-radius: 6px; border: 1px solid var(--border); background: var(--card-bg); color: var(--text);">
+              </div>
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
+                <div class="field">
+                  <label>Short Name <span style="color: var(--muted); font-size: 0.8rem;">(for files)</span></label>
+                  <input type="text" id="form-short-name" placeholder="my_mob" style="width: 100%; padding: 0.5rem; border-radius: 6px; border: 1px solid var(--border); background: var(--card-bg); color: var(--text);">
                 </div>
+                <div class="field">
+                  <label>Identifier <span style="color: var(--muted); font-size: 0.8rem;">(namespace:name)</span></label>
+                  <input type="text" id="form-identifier" placeholder="custom:my_mob" style="width: 100%; padding: 0.5rem; border-radius: 6px; border: 1px solid var(--border); background: var(--card-bg); color: var(--text);">
+                </div>
+              </div>
             </div>
           </div>
 
-          <div class="actions" style="margin-top: 0.75rem;">
-            <button type="button" class="secondary" id="reset">Reset</button>
-            <button type="button" class="danger" id="save">Save Spec</button>
+          <!-- Stats Section -->
+          <div style="background: var(--bg); padding: 1rem; border-radius: 8px; border: 1px solid var(--border);">
+            <h4 style="margin: 0 0 0.75rem 0; color: var(--primary); font-size: 0.9rem;">Stats</h4>
+            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem;">
+              <div class="field">
+                <label>Health (HP)</label>
+                <input type="number" id="form-hp" min="1" max="2048" value="20" style="width: 100%; padding: 0.5rem; border-radius: 6px; border: 1px solid var(--border); background: var(--card-bg); color: var(--text);">
+              </div>
+              <div class="field">
+                <label>Damage</label>
+                <input type="number" id="form-damage" min="0" max="128" value="4" step="0.5" style="width: 100%; padding: 0.5rem; border-radius: 6px; border: 1px solid var(--border); background: var(--card-bg); color: var(--text);">
+              </div>
+              <div class="field">
+                <label>Speed</label>
+                <input type="number" id="form-speed" min="0" max="2" value="0.3" step="0.1" style="width: 100%; padding: 0.5rem; border-radius: 6px; border: 1px solid var(--border); background: var(--card-bg); color: var(--text);">
+              </div>
+            </div>
           </div>
 
-        </div>
+          <!-- Appearance Section -->
+          <div style="background: var(--bg); padding: 1rem; border-radius: 8px; border: 1px solid var(--border);">
+            <h4 style="margin: 0 0 0.75rem 0; color: var(--primary); font-size: 0.9rem;">Appearance</h4>
+            <div style="display: grid; gap: 0.75rem;">
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
+                <div class="field">
+                  <label>Primary Color</label>
+                  <div style="display: flex; gap: 0.5rem; align-items: center;">
+                    <input type="color" id="form-color" value="#ff0000" style="width: 50px; height: 40px; border: none; border-radius: 6px; cursor: pointer;">
+                    <span id="form-color-value" style="font-family: monospace; font-size: 0.85rem; color: var(--muted);">#FF0000</span>
+                  </div>
+                </div>
+                <div class="field">
+                  <label>Scale (Size)</label>
+                  <input type="range" id="form-scale" min="0.2" max="5" value="1" step="0.1" style="width: 100%;">
+                  <span id="form-scale-value" style="font-size: 0.8rem; color: var(--muted);">1.0x</span>
+                </div>
+              </div>
+              <div class="field">
+                <label>Texture Description <span style="color: var(--muted); font-size: 0.8rem;">(for AI texture generation)</span></label>
+                <input type="text" id="form-texture-hint" placeholder="e.g., solid red with black spots" style="width: 100%; padding: 0.5rem; border-radius: 6px; border: 1px solid var(--border); background: var(--card-bg); color: var(--text);">
+              </div>
+            </div>
+          </div>
 
+          <!-- Spawn Egg Section -->
+          <div style="background: var(--bg); padding: 1rem; border-radius: 8px; border: 1px solid var(--border);">
+            <h4 style="margin: 0 0 0.75rem 0; color: var(--primary); font-size: 0.9rem;">Spawn Egg Colors</h4>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
+              <div class="field">
+                <label>Base Color</label>
+                <div style="display: flex; gap: 0.5rem; align-items: center;">
+                  <input type="color" id="form-egg-base" value="#0000ff" style="width: 50px; height: 40px; border: none; border-radius: 6px; cursor: pointer;">
+                  <span id="form-egg-base-value" style="font-family: monospace; font-size: 0.85rem; color: var(--muted);">#0000FF</span>
+                </div>
+              </div>
+              <div class="field">
+                <label>Overlay Color</label>
+                <div style="display: flex; gap: 0.5rem; align-items: center;">
+                  <input type="color" id="form-egg-overlay" value="#000055" style="width: 50px; height: 40px; border: none; border-radius: 6px; cursor: pointer;">
+                  <span id="form-egg-overlay-value" style="font-family: monospace; font-size: 0.85rem; color: var(--muted);">#000055</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Geometry Section -->
+          <div style="background: var(--bg); padding: 1rem; border-radius: 8px; border: 1px solid var(--border);">
+            <h4 style="margin: 0 0 0.75rem 0; color: var(--primary); font-size: 0.9rem;">Geometry & Collision</h4>
+            <div style="display: grid; gap: 0.75rem;">
+              <div class="field">
+                <label>Base Geometry</label>
+                <select id="form-geometry" style="width: 100%; padding: 0.5rem; border-radius: 6px; border: 1px solid var(--border); background: var(--card-bg); color: var(--text);">
+                  <option value="geometry.cow">Cow</option>
+                  <option value="geometry.sheep">Sheep</option>
+                  <option value="geometry.pig">Pig</option>
+                  <option value="geometry.chicken">Chicken</option>
+                  <option value="geometry.zombie">Zombie</option>
+                  <option value="geometry.skeleton">Skeleton</option>
+                  <option value="geometry.creeper">Creeper</option>
+                  <option value="geometry.spider">Spider</option>
+                </select>
+              </div>
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
+                <div class="field">
+                  <label>Collision Width</label>
+                  <input type="number" id="form-collision-width" min="0.1" max="5" value="0.9" step="0.1" style="width: 100%; padding: 0.5rem; border-radius: 6px; border: 1px solid var(--border); background: var(--card-bg); color: var(--text);">
+                </div>
+                <div class="field">
+                  <label>Collision Height</label>
+                  <input type="number" id="form-collision-height" min="0.5" max="5" value="1.4" step="0.1" style="width: 100%; padding: 0.5rem; border-radius: 6px; border: 1px solid var(--border); background: var(--card-bg); color: var(--text);">
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
-      
-
-      <!-- LLM Changes Diff (Always Visible) -->
-
-      <div style="padding: 1rem; background: var(--card-bg); border-radius: 8px; border: 1px solid var(--border); flex: 1; display: flex; flex-direction: column; overflow: hidden;">
-
-        <h3 style="margin: 0 0 0.75rem 0; font-size: 1rem; font-weight: bold;">🕒 LLM History</h3>
-
-        <div style="display:flex; gap:1rem; height:100%;">
-
-          <div id="llm-history" style="flex:1; background: var(--card-bg); color: var(--text); border-radius:8px; padding:0.5rem; overflow:auto;">
-
-            <div id="llm-history-list" style="font-size:0.85rem; display:flex; flex-direction:column; gap:0.5rem;">
-
-              <div style="color: var(--muted); font-style: italic; text-align:center;">No history yet</div>
-
+      <!-- JSON Editor View (Hidden by default) -->
+      <div id="spec-editor-container" style="flex: 1; display:none; flex-direction:column; overflow: hidden; min-height: 400px;">
+        <div id="spec-editor-box" style="position:relative; flex:1; overflow:hidden; min-height: 350px;">
+          <textarea id="spec-editor" spellcheck="false" autocomplete="off" style="position:absolute; inset:0; width:100%; height:100%; box-sizing:border-box; resize:none; font-family: monospace; font-size:0.85rem; line-height:1.35; padding:8px; background:var(--editor-bg); color:var(--editor-text); border:none; outline:none;"></textarea>
+          <div id="spec-diff-overlay" aria-visible="false" style="position:absolute; inset:0; display:none;">
+            <div id="diff-scroll" class="diff-mini" style="height:100%; display:flex; overflow:hidden; border-radius:6px;">
+              <pre id="line-gutter" class="gutter" style="width:64px; min-width:64px; margin:0; padding:8px; font-family: monospace; font-size:0.85rem; color:var(--muted); border-right:1px solid rgba(255,255,255,0.02); text-align:right; line-height:1.35; overflow:hidden;"></pre>
+              <pre id="spec-pre" class="diff-content" style="flex:1 1 auto; min-width:0; margin:0; padding:8px; font-family: monospace; font-size:0.85rem; white-space:pre; color:var(--editor-text); line-height:1.35; overflow:auto;"></pre>
             </div>
-
-            <div style="margin-top:0.5rem; display:flex; gap:0.5rem;">
-
-              <button id="clear-llm-history" class="ghost" style="flex:1;">Clear</button>
-
-            </div>
-
-            <div style="margin-top:0.5rem; font-size:0.8rem; color:var(--muted);">Session: <span id="llm-session-count">0</span> iterations</div>
-
           </div>
-
         </div>
-
       </div>
 
+      <div class="actions" style="margin-top: 0.75rem;">
+        <button type="button" class="secondary" id="reset">Reset</button>
+        <button type="button" class="danger" id="save">Save Spec</button>
+      </div>
     </div>
-
-    
-
   </div>
 
-  
-
-  <!-- Bottom Section: Resource Packs & Texture Painter -->
-
-  <div class="row" style="margin-top: 2rem;">
-
-    <div class="field">
-
-      <label>📦 Resource Pack (.zip/.mcpack)</label>
-
-      <div style="position: relative;">
-
-        <input type="file" id="resource" style="display: none;" accept=".zip,.mcpack">
-
-        <button type="button" class="secondary" onclick="document.getElementById('resource').click()" style="width: 100%; text-align: left; display: flex; align-items: center; gap: 0.5rem;">
-
-          <span style="font-size: 1.25rem;">📂</span>
-
-          <span id="resource-file-name" style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Choose file...</span>
-
-        </button>
-
+  <!-- Bottom Section: Resource Packs -->
+  <div class="content-card card-static" style="margin-top: 2rem;">
+    <h3 style="margin: 0 0 1rem 0; font-size: 1rem; font-weight: bold;">Load existing resource/behavior pack</h3>
+    <div class="row" style="margin-top: 0;">
+      <div class="field">
+        <label>Resource Pack (.zip/.mcpack)</label>
+        <div style="position: relative;">
+          <input type="file" id="resource" style="display: none;" accept=".zip,.mcpack">
+          <button type="button" class="secondary" onclick="document.getElementById('resource').click()" style="width: 100%; text-align: left; display: flex; align-items: center; gap: 0.5rem;">
+            <span id="resource-file-name" style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Choose file...</span>
+          </button>
+        </div>
       </div>
-
-    </div>
-
-    <div class="field">
-
-      <label>⚙️ Behavior Pack (.zip/.mcpack)</label>
-
-      <div style="position: relative;">
-
-        <input type="file" id="behavior" style="display: none;" accept=".zip,.mcpack">
-
-        <button type="button" class="secondary" onclick="document.getElementById('behavior').click()" style="width: 100%; text-align: left; display: flex; align-items: center; gap: 0.5rem;">
-
-          <span style="font-size: 1.25rem;">📂</span>
-
-          <span id="behavior-file-name" style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Choose file...</span>
-
-        </button>
-
+      <div class="field">
+        <label>Behavior Pack (.zip/.mcpack)</label>
+        <div style="position: relative;">
+          <input type="file" id="behavior" style="display: none;" accept=".zip,.mcpack">
+          <button type="button" class="secondary" onclick="document.getElementById('behavior').click()" style="width: 100%; text-align: left; display: flex; align-items: center; gap: 0.5rem;">
+            <span id="behavior-file-name" style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Choose file...</span>
+          </button>
+        </div>
       </div>
-
     </div>
-
   </div>
 
   
@@ -430,12 +431,9 @@
     
 
     <!-- LEFT: Mob Geometry -->
-
-    <div class="painter-container" id="geometry-container" style="display: none; margin-top: 0;">
-
-      <h2 style="margin-top: 0;">📐 Mob Geometry</h2>
-
-      <p class="hint">Geometry file from Mojang's bedrock-samples repository.</p>
+    <div class="content-card" id="geometry-container" style="display: none; margin-top: 0; min-height: 400px;">
+      <h3 style="margin: 0 0 0.5rem 0; font-size: 1rem; font-weight: bold;">Mob Geometry</h3>
+      <p class="hint" style="margin: 0 0 1rem 0;">Geometry file from Mojang's bedrock-samples repository.</p>
 
       <div style="position: relative; margin-bottom: 1rem;">
 
@@ -443,7 +441,7 @@
 
           <a id="geometry-url" href="#" target="_blank" rel="noopener" style="color: var(--primary); text-decoration: underline; font-size: 0.9rem;"></a>
 
-          <button type="button" class="secondary" id="geometry-copy" style="padding: 0.5rem 1rem; font-size: 0.9rem;">📋 Copy JSON</button>
+          <button type="button" class="secondary" id="geometry-copy" style="padding: 0.5rem 1rem; font-size: 0.9rem;">Copy JSON</button>
 
         </div>
 
@@ -467,13 +465,13 @@
 
           <div class="toolbar-group" style="display: flex; gap: 0.25rem; border-right: 1px solid var(--border); padding-right: 0.5rem;">
 
-            <button type="button" class="secondary editor-tool-btn" data-tool="select" id="tool-select" onclick="setEditorTool('select')" title="Select (Q)">🔍</button>
+            <button type="button" class="secondary editor-tool-btn" data-tool="select" id="tool-select" onclick="setEditorTool('select')" title="Select (Q)">Select</button>
 
-            <button type="button" class="secondary editor-tool-btn" data-tool="move" id="tool-move" onclick="setEditorTool('move')" title="Move (W)">↔️</button>
+            <button type="button" class="secondary editor-tool-btn" data-tool="move" id="tool-move" onclick="setEditorTool('move')" title="Move (W)">Move</button>
 
-            <button type="button" class="secondary editor-tool-btn" data-tool="rotate" id="tool-rotate" onclick="setEditorTool('rotate')" title="Rotate (E)">🔄</button>
+            <button type="button" class="secondary editor-tool-btn" data-tool="rotate" id="tool-rotate" onclick="setEditorTool('rotate')" title="Rotate (E)">Rotate</button>
 
-            <button type="button" class="secondary editor-tool-btn" data-tool="scale" id="tool-scale" onclick="setEditorTool('scale')" title="Scale (R)">📐</button>
+            <button type="button" class="secondary editor-tool-btn" data-tool="scale" id="tool-scale" onclick="setEditorTool('scale')" title="Scale (R)">Scale</button>
 
           </div>
 
@@ -483,13 +481,13 @@
 
           <div class="toolbar-group" style="display: flex; gap: 0.25rem; border-right: 1px solid var(--border); padding-right: 0.5rem;">
 
-            <button type="button" class="secondary editor-mode-btn active" data-mode="object" id="mode-object" onclick="setEditorMode('object')" title="Object Mode">📦</button>
+            <button type="button" class="secondary editor-mode-btn active" data-mode="object" id="mode-object" onclick="setEditorMode('object')" title="Object Mode">Object</button>
 
-            <button type="button" class="secondary editor-mode-btn" data-mode="face" id="mode-face" onclick="setEditorMode('face')" title="Face Mode">🔲</button>
+            <button type="button" class="secondary editor-mode-btn" data-mode="face" id="mode-face" onclick="setEditorMode('face')" title="Face Mode">Face</button>
 
-            <button type="button" class="secondary editor-mode-btn" data-mode="edge" id="mode-edge" onclick="setEditorMode('edge')" title="Edge Mode">📏</button>
+            <button type="button" class="secondary editor-mode-btn" data-mode="edge" id="mode-edge" onclick="setEditorMode('edge')" title="Edge Mode">Edge</button>
 
-            <button type="button" class="secondary editor-mode-btn" data-mode="vertex" id="mode-vertex" onclick="setEditorMode('vertex')" title="Vertex Mode">•</button>
+            <button type="button" class="secondary editor-mode-btn" data-mode="vertex" id="mode-vertex" onclick="setEditorMode('vertex')" title="Vertex Mode">Vertex</button>
 
           </div>
 
@@ -499,11 +497,11 @@
 
           <div class="toolbar-group" style="display: flex; gap: 0.25rem; border-right: 1px solid var(--border); padding-right: 0.5rem;">
 
-            <button type="button" class="secondary editor-tool-btn" data-tool="paint" id="tool-paint" onclick="setEditorTool('paint')" title="Paint (P)">🎨</button>
+            <button type="button" class="secondary editor-tool-btn" data-tool="paint" id="tool-paint" onclick="setEditorTool('paint')" title="Paint (P)">Paint</button>
 
             <input type="color" id="editor-paint-color" value="#ff0000" onchange="if(window.editor3DState) window.editor3DState.paintColor = this.value" style="width: 32px; height: 32px; border: none; border-radius: 4px; cursor: pointer;" title="Paint Color">
 
-            <button type="button" class="secondary editor-tool-btn" data-tool="erase" id="tool-erase" onclick="setEditorTool('erase')" title="Erase (X)">🧽</button>
+            <button type="button" class="secondary editor-tool-btn" data-tool="erase" id="tool-erase" onclick="setEditorTool('erase')" title="Erase (X)">Erase</button>
 
           </div>
 
@@ -513,11 +511,11 @@
 
           <div class="toolbar-group" style="display: flex; gap: 0.25rem; border-right: 1px solid var(--border); padding-right: 0.5rem;">
 
-            <button type="button" class="secondary" id="editor-add-cube" onclick="addCube([0,8,0],[8,8,8])" title="Add Cube (Shift+A)">➕ Cube</button>
+            <button type="button" class="secondary" id="editor-add-cube" onclick="addCube([0,8,0],[8,8,8])" title="Add Cube (Shift+A)">+ Cube</button>
 
-            <button type="button" class="secondary" id="editor-duplicate" onclick="duplicateSelected()" title="Duplicate (Shift+D)">📋</button>
+            <button type="button" class="secondary" id="editor-duplicate" onclick="duplicateSelected()" title="Duplicate (Shift+D)">Duplicate</button>
 
-            <button type="button" class="secondary" id="editor-delete" onclick="deleteSelected()" title="Delete (Del)">🗑️</button>
+            <button type="button" class="secondary" id="editor-delete" onclick="deleteSelected()" title="Delete (Del)">Delete</button>
 
           </div>
 
@@ -527,9 +525,9 @@
 
           <div class="toolbar-group" style="display: flex; gap: 0.25rem; border-right: 1px solid var(--border); padding-right: 0.5rem;">
 
-            <button type="button" class="secondary" id="editor-grid" onclick="toggleGrid()" title="Toggle Grid (G)">#️⃣ Grid</button>
+            <button type="button" class="secondary" id="editor-grid" onclick="toggleGrid()" title="Toggle Grid (G)">Grid</button>
 
-            <button type="button" class="secondary" id="editor-wireframe" onclick="toggleWireframe()" title="Toggle Wireframe (Z)">🔲 Wire</button>
+            <button type="button" class="secondary" id="editor-wireframe" onclick="toggleWireframe()" title="Toggle Wireframe (Z)">Wire</button>
 
           </div>
 
@@ -630,12 +628,9 @@
 
 
     <!-- RIGHT: Texture Painter -->
-
-    <div class="painter-container" style="margin-top: 0;">
-
-      <h2 style="margin-top: 0;">Texture Painter</h2>
-
-      <p class="hint">Paint the 64x64 skin for the selected mob.</p>
+    <div class="content-card" style="margin-top: 0; min-height: 400px;">
+      <h3 style="margin: 0 0 0.5rem 0; font-size: 1rem; font-weight: bold;">Texture Painter</h3>
+      <p class="hint" style="margin: 0 0 1rem 0;">Paint the 64x64 skin for the selected mob.</p>
 
       <div class="painter-layout">
 
@@ -657,19 +652,17 @@
 
           <div class="tool-row">
 
-            <button type="button" class="secondary" id="painter-pencil">✏️ Pencil</button>
+            <button type="button" class="secondary" id="painter-pencil">Pencil</button>
 
-            <button type="button" class="secondary" id="painter-eraser">🧽 Eraser</button>
+            <button type="button" class="secondary" id="painter-eraser">Eraser</button>
 
-            <button type="button" class="secondary" id="painter-clear">🗑 Clear</button>
+            <button type="button" class="secondary" id="painter-clear">Clear</button>
 
           </div>
 
           <div class="tool-row">
 
-            <button type="button" class="secondary" id="painter-load">📥 Load Current</button>
-
-            <button type="button" class="primary" id="painter-save">💾 Save Texture</button>
+            <button type="button" class="secondary" id="painter-load">Load Current</button>
 
           </div>
 
@@ -691,12 +684,9 @@
 
 
 
-  <details>
-
-    <summary>View schema (for LLM prompts)</summary>
-
-    <pre id="schema-view" style="background:var(--status-bg);color:var(--status-text);padding:1rem;border-radius:12px;overflow:auto;max-height:240px;"></pre>
-
+  <details class="content-card card-static" style="margin-top: 2rem;">
+    <summary style="font-weight: bold; font-size: 1rem; margin-bottom: 0.5rem; cursor: pointer;">View Schema (for LLM prompts)</summary>
+    <pre id="schema-view" style="background:var(--status-bg);color:var(--status-text);padding:1rem;border-radius:12px;overflow:auto;max-height:240px; margin: 0;"></pre>
   </details>
 
 </main>
@@ -717,7 +707,9 @@
 
 <script src="js/painter.js?v=4"></script>
 
-<script src="js/editor.js?v=4"></script>
+<script src="js/editor.js?v=5"></script>
+
+<script src="js/form-editor.js?v=4"></script>
 
 <script src="js/llm.js?v=4"></script>
 
