@@ -2,6 +2,8 @@
 // LLM INTEGRATION
 // =====================
 
+console.log('[LLM] Script loaded');
+
 const llmPrompt = document.getElementById("llm-prompt");
 const llmButton = document.getElementById("llm-run");
 const llmProvider = document.getElementById("llm-provider");
@@ -228,6 +230,7 @@ async function requestLlm() {
   if (apiKey) {
     requestBody.api_key = apiKey;
   }
+  
   // mock uses dedicated mock route for dev
   let endpoint = "/api/spec/llm";
   if (provider === "mock") endpoint = "/api/spec/llm_mock";
@@ -434,6 +437,58 @@ function restoreHistoryEntry(index, btnEl) {
     }
 }
 
+// MCP Status checking
+let mcpStatus = { available: false, checked: false };
+
+async function checkMcpStatus() {
+  console.log('[MCP] Checking status...');
+  const dot = document.getElementById('mcp-status-dot');
+  const text = document.getElementById('mcp-status-text');
+  
+  if (dot) dot.style.background = '#fbbf24'; // yellow - checking
+  if (text) text.textContent = 'Checking MCP...';
+  
+  try {
+    // Add timeout to prevent hanging
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    
+    const res = await fetch('/api/mcp/status', { signal: controller.signal });
+    clearTimeout(timeoutId);
+    
+    const status = await res.json();
+    
+    mcpStatus = {
+      available: status.mcp_available && status.connection?.available,
+      checked: true,
+      details: status
+    };
+    
+    if (mcpStatus.available) {
+      if (dot) dot.style.background = '#22c55e'; // green
+      const toolCount = status.connection?.tool_count || 0;
+      if (text) text.textContent = `MCP Connected (${toolCount} tools)`;
+    } else {
+      if (dot) dot.style.background = '#ef4444'; // red
+      const error = status.connection?.error || 'Not available';
+      if (text) text.textContent = `MCP: ${error}`;
+    }
+  } catch (err) {
+    console.error('[MCP] Check failed:', err);
+    if (err.name === 'AbortError') {
+      mcpStatus = { available: false, checked: true, error: 'Timeout' };
+      if (text) text.textContent = 'MCP: Check timed out';
+    } else {
+      mcpStatus = { available: false, checked: true, error: err.message };
+      if (text) text.textContent = 'MCP: Server error';
+    }
+    if (dot) dot.style.background = '#ef4444'; // red
+  }
+  
+  console.log('[MCP] Status check complete:', mcpStatus);
+  return mcpStatus;
+}
+
 function initLlmHandlers() {
   clearLlmHistoryBtn?.addEventListener('click', () => {
     const user = getCurrentUser();
@@ -457,4 +512,11 @@ function initLlmHandlers() {
   llmKey?.addEventListener("input", () => {
     localStorage.setItem(LLM_API_KEY_STORAGE, llmKey.value.trim());
   });
+  
+  // Check MCP status on init (non-blocking)
+  console.log('[MCP] Scheduling status check in 1s');
+  setTimeout(() => {
+    console.log('[MCP] Running scheduled status check');
+    checkMcpStatus();
+  }, 1000);
 }

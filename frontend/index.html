@@ -217,6 +217,14 @@
             <input type="password" id="llm-key" placeholder="sk-..." autocomplete="off">
           </div>
         </div>
+        <!-- MCP Status Indicator -->
+        <div id="mcp-status-bar" style="display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem; background: var(--bg); border-radius: 6px; margin: 0.5rem 0; font-size: 0.85rem;">
+          <span id="mcp-status-dot" style="width: 8px; height: 8px; border-radius: 50%; background: #fbbf24;"></span>
+          <span id="mcp-status-text">Checking MCP...</span>
+        </div>
+        <div style="font-size: 0.75rem; color: var(--muted); margin-bottom: 0.5rem;">
+          MCP provides context to LLMs (model templates, schemas) and validates output. Select an LLM provider above to edit specs.
+        </div>
         <textarea id="llm-prompt" placeholder="Describe how the mob should change (damage, hp, colors, geometry...)." style="min-height: 80px; flex: 1;"></textarea>
         <div style="background: var(--secondary-bg); color: var(--secondary-text); padding: 0.5rem; border-radius: 4px; margin: 0.5rem 0; font-size: 0.8rem;">
           <strong>Private:</strong> The API key is stored locally in your browser only. Never sent to our server.

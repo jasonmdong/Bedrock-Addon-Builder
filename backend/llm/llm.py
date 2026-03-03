@@ -1,12 +1,29 @@
-"""LLM integration for spec editing via OpenAI and DeepSeek."""
+"""LLM integration for spec editing via OpenAI, DeepSeek, and MCP."""
 import json
 import os
 import time
 from typing import Optional
 
-from backend.core.core import LLM_MODEL_NAME, DEEPSEEK_MODEL_NAME, GEMINI_MODEL_NAME, CLAUDE_MODEL_NAME, OLLAMA_MODEL_NAME, OLLAMA_BASE_URL, DEFAULT_LLM_PROVIDER, LLM_SYSTEM_PROMPT, BACKEND_DIR
+from backend.core.core import (
+    LLM_MODEL_NAME, DEEPSEEK_MODEL_NAME, GEMINI_MODEL_NAME, CLAUDE_MODEL_NAME, 
+    OLLAMA_MODEL_NAME, OLLAMA_BASE_URL, DEFAULT_LLM_PROVIDER, LLM_SYSTEM_PROMPT, 
+    BACKEND_DIR, USE_MCP, MCP_WORKING_DIR
+)
+
+# Re-export for use in routes
+__all__ = ['USE_MCP', 'MCP_AVAILABLE']
 from backend.schemas.schemas_loader import SPEC_SCHEMA
 from backend.schemas.spec_utils import validate_spec, SpecValidationError
+
+# Import MCP modules (optional - gracefully handle if not available)
+try:
+    from backend.llm.mcp_client import get_mcp_client, close_mcp_client
+    from backend.llm.mcp_spec_editor import mcp_rewrite_spec, mcp_validate_content, get_mcp_context_for_llm
+    from backend.llm.mcp_geometry import mcp_generate_geometry, mcp_get_model_templates
+    MCP_AVAILABLE = True
+except ImportError as e:
+    MCP_AVAILABLE = False
+    print(f"[MCP] MCP modules not available: {e}")
 
 # Optional logging - gracefully handle if not available
 try:
@@ -28,12 +45,22 @@ if ref_path.exists():
         print(f"Failed to load vanilla reference: {e}")
 
 def _get_full_system_prompt() -> str:
-    """Get the full system prompt including vanilla reference context."""
+    """Get the full system prompt including vanilla reference and MCP context."""
     schema_text = json.dumps(SPEC_SCHEMA or {}, indent=2)
     prompt = f"{LLM_SYSTEM_PROMPT}\n\nSchema:\n{schema_text}"
     if VANILLA_REF:
         ref_text = json.dumps(VANILLA_REF, indent=2)
         prompt += f"\n\nVanilla Reference (from bedrock-samples):\n{ref_text}"
+    
+    # Add MCP context if available
+    if MCP_AVAILABLE and USE_MCP:
+        try:
+            mcp_context = get_mcp_context_for_llm(working_dir=MCP_WORKING_DIR)
+            if mcp_context:
+                prompt += f"\n\nMinecraft Creator Tools Context:\n{mcp_context}"
+        except Exception as e:
+            print(f"[MCP] Failed to add context to prompt: {e}")
+    
     return prompt
 
 try:
@@ -91,6 +118,16 @@ def _call_openai(prompt: str, current: dict, api_key: Optional[str]) -> dict:
         candidate = json.loads(content)
     except Exception as exc:
         raise RuntimeError(f"LLM returned invalid JSON: {exc}") from exc
+    
+    # Validate with MCP if available
+    if MCP_AVAILABLE and USE_MCP:
+        try:
+            print("[MCP] Validating generated spec...")
+            validation_result = mcp_validate_content(candidate)
+            print(f"[MCP] Validation result: {validation_result}")
+        except Exception as e:
+            print(f"[MCP] Validation failed (non-critical): {e}")
+    
     return validate_spec(candidate)
 
 
@@ -476,4 +513,89 @@ def _call_geometry_ollama(user_content: str, api_key: str | None) -> dict:
     elif "```" in content:
         content = content.split("```")[1].split("```")[0]
     return json.loads(content.strip())
+
+
+# =============================================================================
+# MCP-based functions (replaces LLM API calls when USE_MCP is True)
+# =============================================================================
+
+def llm_rewrite_spec_mcp(prompt: str, current: dict, api_key: Optional[str] = None) -> dict:
+    """
+    Use MCP to rewrite a spec based on user prompt.
+    This is the MCP-based replacement for llm_rewrite_spec.
+    
+    Args:
+        prompt: User instruction for modifying the spec
+        current: Current spec dictionary
+        api_key: Not used for MCP (kept for API compatibility)
+        
+    Returns:
+        Updated and validated spec dictionary
+    """
+    if not MCP_AVAILABLE:
+        raise RuntimeError("MCP modules not available")
+    
+    print(f"[MCP] Rewriting spec with prompt: {prompt[:50]}...")
+    return mcp_rewrite_spec(prompt, current, working_dir=MCP_WORKING_DIR)
+
+
+def llm_generate_geometry_mcp(prompt: str, current_geometry: dict | None, api_key: str | None = None) -> dict:
+    """
+    Use MCP to generate or modify Bedrock geometry JSON.
+    This is the MCP-based replacement for llm_generate_geometry.
+    
+    Args:
+        prompt: User instruction for the geometry
+        current_geometry: Optional existing geometry to modify
+        api_key: Not used for MCP (kept for API compatibility)
+        
+    Returns:
+        Valid minecraft:geometry JSON object
+    """
+    if not MCP_AVAILABLE:
+        raise RuntimeError("MCP modules not available")
+    
+    print(f"[MCP] Generating geometry with prompt: {prompt[:50]}...")
+    return mcp_generate_geometry(prompt, current_geometry, working_dir=MCP_WORKING_DIR)
+
+
+def get_mcp_status() -> dict:
+    """
+    Get the status of the MCP connection.
+    
+    Returns:
+        Dictionary with MCP availability and tool information
+    """
+    if not MCP_AVAILABLE:
+        return {
+            "available": False,
+            "error": "MCP modules not installed"
+        }
+    
+    try:
+        client = get_mcp_client(working_dir=MCP_WORKING_DIR)
+        if client:
+            tools = client.get_available_tools()
+            return {
+                "available": True,
+                "initialized": client._initialized,
+                "tool_count": len(tools),
+                "tools": [t.get("name") for t in tools]
+            }
+        else:
+            return {
+                "available": False,
+                "error": "Failed to connect to MCP server. Is mct-int installed?"
+            }
+    except Exception as e:
+        return {
+            "available": False,
+            "error": str(e)
+        }
+
+
+def close_mcp_connection():
+    """Close the MCP connection if it's open."""
+    if MCP_AVAILABLE:
+        close_mcp_client()
 

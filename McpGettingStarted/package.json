@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "mctools-int": "file:mctools-int-0.0.1.tgz"
+  }
+}

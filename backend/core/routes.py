@@ -18,7 +18,10 @@ from backend.schemas.spec_utils import (
     read_current_spec, write_current_spec, apply_spec_patch,
     validate_spec, SpecValidationError
 )
-from backend.llm.llm import llm_rewrite_spec, llm_generate_geometry
+from backend.llm.llm import (
+    llm_rewrite_spec, llm_generate_geometry,
+    get_mcp_status, MCP_AVAILABLE, USE_MCP
+)
 from backend.core.packaging import build_addon
 from backend.core.builders import make_png_rgba
 
@@ -344,7 +347,7 @@ async def patch_spec(operations: list[dict] = Body(...)):
 
 
 def llm_spec_editor(payload: dict = Body(...)):
-    """Use LLM to rewrite a spec."""
+    """Use LLM or MCP to rewrite a spec."""
     data = payload or {}
     prompt = data.get("prompt") or data.get("instruction") or ""
     if not prompt or not str(prompt).strip():
@@ -354,8 +357,8 @@ def llm_spec_editor(payload: dict = Body(...)):
     current = data.get("current_spec") or data.get("spec")
     if not current:
         current = read_current_spec()
-
-    print(f"[LLM] provider={provider} prompt_len={len(str(prompt).strip())}")
+    
+    print(f"[LLM] provider={provider}, prompt_len={len(str(prompt).strip())}")
 
     # if server running in local dev mode prefer mock to avoid external calls
     if LOCAL_LLM_DEV and not provider:
@@ -381,7 +384,7 @@ def llm_spec_editor(payload: dict = Body(...)):
 
 
 def llm_geometry_generate(payload: dict = Body(...)):
-    """Use LLM to generate or modify Bedrock geometry JSON."""
+    """Use LLM or MCP to generate or modify Bedrock geometry JSON."""
     data = payload or {}
     prompt = data.get("prompt") or ""
     if not prompt or not str(prompt).strip():
@@ -391,7 +394,7 @@ def llm_geometry_generate(payload: dict = Body(...)):
     api_key = data.get("api_key")
     current_geometry = data.get("current_geometry")
     
-    print(f"[LLM-GEOMETRY] provider={provider} prompt_len={len(str(prompt).strip())}")
+    print(f"[LLM-GEOMETRY] provider={provider}, prompt_len={len(str(prompt).strip())}")
     
     try:
         geometry = llm_generate_geometry(prompt, current_geometry, provider, api_key)
@@ -497,6 +500,16 @@ def serve_js(filename: str):
 def healthz():
     """Health check endpoint."""
     return PlainTextResponse("ok")
+
+
+def mcp_status():
+    """Get MCP server status and available tools."""
+    status = get_mcp_status()
+    return {
+        "mcp_available": MCP_AVAILABLE,
+        "use_mcp_by_default": USE_MCP,
+        "connection": status
+    }
 
 
 def build_form(resource: Optional[UploadFile] = File(None),

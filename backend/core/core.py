@@ -65,6 +65,17 @@ DEFAULT_LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "openai")
 # local dev flag toggle (need to fix server side sync still)
 LOCAL_LLM_DEV = True
 
+# MCP (Minecraft Creator Tools) configuration
+USE_MCP = os.environ.get("USE_MCP", "true").lower() in ("true", "1", "yes")
+MCP_COMMAND = os.environ.get("MCP_COMMAND", "mct-int")
+MCP_WORKING_DIR = os.environ.get("MCP_WORKING_DIR", str(BASE_DIR))
+
+# Add npm global bin to PATH for MCP on Windows
+if os.name == 'nt':  # Windows
+    npm_bin = os.path.expanduser("~\\AppData\\Roaming\\npm")
+    if os.path.exists(npm_bin) and npm_bin not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = npm_bin + os.pathsep + os.environ.get("PATH", "")
+
 # World template candidates (now in data/templates/)
 DATA_DIR = BASE_DIR / "data"
 WORLD_TEMPLATE_BASES = [

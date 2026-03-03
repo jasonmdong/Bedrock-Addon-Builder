@@ -28,6 +28,7 @@ from backend.core.routes import (
     styles_css,
     serve_js,
     healthz,
+    mcp_status,
     build_form,
     api_build,
     download,
@@ -94,6 +95,7 @@ app.get("/")(index)
 app.get("/styles.css")(styles_css)
 app.get("/js/{filename}")(serve_js)
 app.get("/healthz")(healthz)
+app.get("/api/mcp/status")(mcp_status)
 
 # =========================
 # ======= WEB APP ==========
