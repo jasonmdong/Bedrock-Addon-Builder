@@ -23,3 +23,7 @@ McpGettingStarted/
 
 # Temp test files
 test_mctools.py
+
+# API Keys
+API_KEY.py
+**/API_KEY.py

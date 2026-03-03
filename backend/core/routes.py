@@ -199,6 +199,395 @@ def _normalize_geometry(geometry_data: dict) -> dict:
     }
 
 
+async def generate_mob_from_similar(payload: dict = Body(...)):
+    """Generate a new mob spec using AI based on similar mobs in the database.
+    
+    This is the RAG-powered mob generation endpoint. It:
+    1. Searches for similar mobs using vector similarity
+    2. Uses those mobs as training examples for the LLM
+    3. Generates a new mob spec based on the user's description
+    
+    Request body:
+        query: str - Description of the desired mob (e.g., "a flying fire dragon")
+        custom_name: str - The name for the new mob
+        provider: str (optional) - LLM provider to use
+        api_key: str (optional) - API key for the provider
+    
+    Returns:
+        mob: dict - The generated mob spec
+        similar_mobs: list - Names of mobs used as examples
+        source: str - "ai_generated"
+    """
+    data = payload or {}
+    query = data.get("query", "").strip()
+    custom_name = data.get("custom_name", "").strip()
+    provider = data.get("provider")
+    api_key = data.get("api_key")
+    
+    if not query:
+        raise HTTPException(status_code=400, detail="query is required")
+    if not custom_name:
+        raise HTTPException(status_code=400, detail="custom_name is required")
+    
+    try:
+        from backend.mob_management import find_similar_mobs
+        from backend.core.core import DEFAULTS
+        
+        # Find similar mobs for RAG context
+        similar_mobs = find_similar_mobs(query, limit=5, min_similarity=0.3)
+        
+        if not similar_mobs:
+            print(f"[AI-GEN] No similar mobs found for: {query}")
+            similar_mobs = []
+        
+        # Build context from similar mobs
+        examples_context = []
+        similar_names = []
+        for mob in similar_mobs:
+            mob_name = mob.get("mob_name", "unknown")
+            similar_names.append(mob_name)
+            examples_context.append({
+                "name": mob_name,
+                "description": mob.get("mob_description", ""),
+                "keywords": mob.get("mob_keywords", []),
+                "geometry": mob.get("mob_geometry", {}).get("description", {}).get("identifier", ""),
+                "complexity": mob.get("complexity_score", 0)
+            })
+        
+        print(f"[AI-GEN] Found {len(similar_mobs)} similar mobs: {similar_names}")
+        
+        # Build the LLM prompt
+        safe_name = custom_name.lower().replace(" ", "_").replace("-", "_")
+        safe_name = ''.join(c for c in safe_name if c.isalnum() or c == '_')
+        
+        system_prompt = """You are a Minecraft Bedrock mob generator. Generate a valid mob specification JSON based on the user's description and the example mobs provided.
+
+The output must be a valid JSON object with these required fields:
+- identifier: string in format "custom:{short_name}"
+- display_name: string (human-readable name)
+- short_name: string (lowercase, alphanumeric + underscore only)
+- hp: number (1-2048)
+- damage: number (0-128)
+- speed: number (0-2)
+- collision_box: object with width (0.1-5) and height (0.5-5)
+- geometry: string (geometry identifier like "geometry.cow")
+- scale: number (0.2-5.0)
+- components: object (Bedrock behavior components)
+
+Use the example mobs as inspiration for appropriate stats and components. Match the complexity and style of similar creatures."""
+
+        user_prompt = f"""Create a mob matching this description: "{query}"
+
+The mob should be named "{custom_name}" (short_name: "{safe_name}")
+
+Example similar mobs for reference:
+{json.dumps(examples_context, indent=2)}
+
+Generate a complete mob specification JSON. Only output the JSON, no explanation."""
+
+        # Call the LLM
+        base_spec = dict(DEFAULTS)
+        base_spec["identifier"] = f"custom:{safe_name}"
+        base_spec["display_name"] = custom_name.title()
+        base_spec["short_name"] = safe_name
+        
+        try:
+            generated_spec = llm_rewrite_spec(
+                prompt=user_prompt,
+                current=base_spec,
+                provider=provider,
+                api_key=api_key
+            )
+        except Exception as llm_err:
+            print(f"[AI-GEN] LLM generation failed: {llm_err}")
+            generated_spec = base_spec
+        
+        # Ensure the spec has the correct naming
+        generated_spec["identifier"] = f"custom:{safe_name}"
+        generated_spec["display_name"] = custom_name.title()
+        generated_spec["short_name"] = safe_name
+        
+        return {
+            "mob": generated_spec,
+            "similar_mobs": similar_names,
+            "source": "ai_generated"
+        }
+        
+    except Exception as e:
+        print(f"[ERROR] AI mob generation failed: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to generate mob: {str(e)}")
+
+
+async def generate_complete_mob(payload: dict = Body(...)):
+    """Generate a complete mob with AI-powered spec AND geometry generation.
+    
+    This is the comprehensive AI mob creation endpoint that:
+    1. Searches for similar mobs using vector similarity (RAG)
+    2. AI "thinks through" what features the mob should have based on its name
+    3. Generates the mob behavior spec (stats, components)
+    4. Generates custom geometry JSON
+    5. Returns everything needed for a complete mob
+    
+    Request body:
+        mob_name: str - The name/description of the mob (e.g., "fire_dragon", "ice golem")
+        provider: str (optional) - LLM provider to use (openai, deepseek, etc.)
+        api_key: str (optional) - API key for the provider
+    
+    Returns:
+        mob: dict - The generated mob spec
+        geometry: dict - The generated geometry JSON
+        reasoning: str - AI's reasoning about the mob's features
+        similar_mobs: list - Names of mobs used as RAG context
+        source: str - "ai_generated_complete"
+    """
+    data = payload or {}
+    mob_name = data.get("mob_name", "").strip()
+    provider = data.get("provider")
+    api_key = data.get("api_key")
+    
+    if not mob_name:
+        raise HTTPException(status_code=400, detail="mob_name is required")
+    
+    try:
+        from backend.mob_management import find_similar_mobs
+        from backend.core.core import DEFAULTS
+        
+        # Create safe name from input
+        safe_name = mob_name.lower().replace(" ", "_").replace("-", "_")
+        safe_name = ''.join(c for c in safe_name if c.isalnum() or c == '_')
+        display_name = mob_name.replace("_", " ").title()
+        
+        print(f"[AI-COMPLETE] Generating complete mob: {mob_name} -> {safe_name}")
+        
+        # Step 1: Find similar mobs for RAG context
+        similar_mobs = find_similar_mobs(mob_name, limit=5, min_similarity=0.25)
+        
+        # Build examples context with geometry data
+        examples_context = []
+        geometry_examples = []
+        similar_names = []
+        
+        for mob in similar_mobs:
+            mob_db_name = mob.get("mob_name", "unknown")
+            similar_names.append(mob_db_name)
+            
+            # Extract spec-relevant info
+            examples_context.append({
+                "name": mob_db_name,
+                "description": mob.get("mob_description", ""),
+                "keywords": mob.get("mob_keywords", []),
+                "complexity": mob.get("complexity_score", 0)
+            })
+            
+            # Extract geometry structure for geometry generation
+            geo = mob.get("mob_geometry", {})
+            if geo and "minecraft:geometry" in geo:
+                geo_data = geo["minecraft:geometry"]
+                if isinstance(geo_data, list) and len(geo_data) > 0:
+                    bones_summary = []
+                    for bone in geo_data[0].get("bones", [])[:10]:  # Limit bones
+                        bone_info = {"name": bone.get("name", ""), "parent": bone.get("parent")}
+                        if bone.get("cubes"):
+                            bone_info["cube_count"] = len(bone["cubes"])
+                        bones_summary.append(bone_info)
+                    geometry_examples.append({
+                        "mob_name": mob_db_name,
+                        "identifier": geo_data[0].get("description", {}).get("identifier", ""),
+                        "bones": bones_summary
+                    })
+        
+        print(f"[AI-COMPLETE] Found {len(similar_mobs)} similar mobs: {similar_names}")
+        
+        # Step 2: AI "Thinking" - Analyze what features this mob should have
+        thinking_prompt = f"""Analyze the mob name "{mob_name}" and determine what features it should have.
+
+Consider:
+1. What type of creature is this? (humanoid, quadruped, flying, aquatic, multi-limbed, etc.)
+2. What special abilities might it have based on the name?
+3. What stat ranges would be appropriate? (HP, damage, speed, scale)
+4. What Bedrock behavior components would fit?
+5. What body parts would it need in geometry? (head, body, limbs, wings, tail, etc.)
+
+Similar mobs from database for reference:
+{json.dumps(examples_context, indent=2)}
+
+Output a JSON object with:
+{{
+  "creature_type": "description of creature type",
+  "body_parts": ["list", "of", "body", "parts", "needed"],
+  "special_features": ["list", "of", "special", "features"],
+  "suggested_stats": {{"hp": number, "damage": number, "speed": number, "scale": number}},
+  "behavior_components": ["list", "of", "minecraft:behavior", "components"],
+  "reasoning": "brief explanation of your analysis"
+}}"""
+
+        analysis = None
+        reasoning = "Could not analyze mob features"
+        
+        try:
+            analysis = llm_rewrite_spec(
+                prompt=thinking_prompt,
+                current={"thinking": True},
+                provider=provider,
+                api_key=api_key
+            )
+            reasoning = analysis.get("reasoning", "AI analysis complete")
+            print(f"[AI-COMPLETE] Analysis: {analysis.get('creature_type', 'unknown')}, parts: {analysis.get('body_parts', [])}")
+        except Exception as e:
+            print(f"[AI-COMPLETE] Analysis step failed: {e}, using defaults")
+            analysis = {
+                "creature_type": "quadruped",
+                "body_parts": ["body", "head", "leg0", "leg1", "leg2", "leg3"],
+                "special_features": [],
+                "suggested_stats": {"hp": 20, "damage": 4, "speed": 0.3, "scale": 1.0},
+                "behavior_components": [],
+                "reasoning": "Using default quadruped structure"
+            }
+            reasoning = analysis["reasoning"]
+        
+        # Step 3: Generate mob spec using analysis
+        spec_system_prompt = """You are a Minecraft Bedrock mob generator. Generate a valid mob specification JSON.
+
+Required fields:
+- identifier: "custom:{short_name}"
+- display_name: string
+- short_name: lowercase with underscores only
+- hp: 1-2048
+- damage: 0-128
+- speed: 0-2
+- collision_box: {width: 0.1-5, height: 0.5-5}
+- geometry: "geometry.{short_name}"
+- scale: 0.2-5.0
+- components: object with Bedrock behavior components
+
+Output ONLY valid JSON."""
+
+        spec_prompt = f"""Create a mob spec for "{display_name}" (short_name: "{safe_name}")
+
+Based on analysis:
+- Creature type: {analysis.get('creature_type', 'unknown')}
+- Body parts: {analysis.get('body_parts', [])}
+- Special features: {analysis.get('special_features', [])}
+- Suggested stats: {analysis.get('suggested_stats', {})}
+- Recommended behaviors: {analysis.get('behavior_components', [])}
+
+Generate a complete mob specification JSON with appropriate components for this creature type."""
+
+        base_spec = dict(DEFAULTS)
+        base_spec["identifier"] = f"custom:{safe_name}"
+        base_spec["display_name"] = display_name
+        base_spec["short_name"] = safe_name
+        base_spec["geometry"] = f"geometry.{safe_name}"
+        
+        # Apply suggested stats from analysis
+        if analysis and analysis.get("suggested_stats"):
+            stats = analysis["suggested_stats"]
+            base_spec["hp"] = max(1, min(2048, stats.get("hp", 20)))
+            base_spec["damage"] = max(0, min(128, stats.get("damage", 4)))
+            base_spec["speed"] = max(0, min(2, stats.get("speed", 0.3)))
+            base_spec["scale"] = max(0.2, min(5.0, stats.get("scale", 1.0)))
+        
+        try:
+            generated_spec = llm_rewrite_spec(
+                prompt=spec_prompt,
+                current=base_spec,
+                provider=provider,
+                api_key=api_key
+            )
+        except Exception as e:
+            print(f"[AI-COMPLETE] Spec generation failed: {e}, using base spec")
+            generated_spec = base_spec
+        
+        # Ensure correct naming
+        generated_spec["identifier"] = f"custom:{safe_name}"
+        generated_spec["display_name"] = display_name
+        generated_spec["short_name"] = safe_name
+        generated_spec["geometry"] = f"geometry.{safe_name}"
+        
+        # Step 4: Generate geometry JSON
+        body_parts = analysis.get("body_parts", ["body", "head"]) if analysis else ["body", "head"]
+        creature_type = analysis.get("creature_type", "quadruped") if analysis else "quadruped"
+        
+        geometry_prompt = f"""Generate Minecraft Bedrock geometry JSON for a "{display_name}" mob.
+
+Creature type: {creature_type}
+Required body parts: {body_parts}
+Scale: {generated_spec.get('scale', 1.0)}
+Special features: {analysis.get('special_features', []) if analysis else []}
+
+The geometry identifier should be "geometry.{safe_name}".
+
+Example bone structures from similar mobs:
+{json.dumps(geometry_examples[:3], indent=2)}
+
+Create a complete, valid minecraft:geometry JSON with appropriate bones and cubes for this creature.
+- Use proper parent-child bone hierarchy
+- Include realistic sizes and pivots
+- Add cubes with proper UV coordinates
+- Make proportions match a {creature_type} body type"""
+
+        try:
+            generated_geometry = llm_generate_geometry(
+                prompt=geometry_prompt,
+                current_geometry=None,
+                provider=provider,
+                api_key=api_key
+            )
+            
+            # Ensure geometry has correct identifier
+            if "minecraft:geometry" in generated_geometry:
+                geo_list = generated_geometry["minecraft:geometry"]
+                if isinstance(geo_list, list) and len(geo_list) > 0:
+                    if "description" not in geo_list[0]:
+                        geo_list[0]["description"] = {}
+                    geo_list[0]["description"]["identifier"] = f"geometry.{safe_name}"
+            
+            print(f"[AI-COMPLETE] Geometry generated successfully")
+        except Exception as e:
+            print(f"[AI-COMPLETE] Geometry generation failed: {e}, using fallback")
+            # Fallback to basic geometry
+            generated_geometry = {
+                "format_version": "1.12.0",
+                "minecraft:geometry": [{
+                    "description": {
+                        "identifier": f"geometry.{safe_name}",
+                        "texture_width": 64,
+                        "texture_height": 64,
+                        "visible_bounds_width": 2,
+                        "visible_bounds_height": 2,
+                        "visible_bounds_offset": [0, 1, 0]
+                    },
+                    "bones": [
+                        {"name": "root", "pivot": [0, 0, 0]},
+                        {"name": "body", "parent": "root", "pivot": [0, 12, 0], 
+                         "cubes": [{"origin": [-4, 8, -3], "size": [8, 8, 6], "uv": [0, 0]}]},
+                        {"name": "head", "parent": "body", "pivot": [0, 16, -3],
+                         "cubes": [{"origin": [-3, 16, -6], "size": [6, 6, 6], "uv": [0, 14]}]}
+                    ]
+                }]
+            }
+        
+        # Store geometry in spec for convenience
+        generated_spec["geometry_json"] = generated_geometry
+        
+        return {
+            "mob": generated_spec,
+            "geometry": generated_geometry,
+            "reasoning": reasoning,
+            "similar_mobs": similar_names,
+            "analysis": analysis,
+            "source": "ai_generated_complete"
+        }
+        
+    except Exception as e:
+        print(f"[ERROR] Complete AI mob generation failed: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to generate mob: {str(e)}")
+
+
 async def fetch_mob_geometry(mob_name: str):
     """Fetch mob geometry JSON from Mojang's bedrock-samples repository.
     
@@ -924,3 +1313,90 @@ async def launch_test_stop():
         _server_session["status"] = "idle"
         _server_session["running"] = False
         return {"status": "idle", "message": "No server was running."}
+
+# =========================
+# ====== PUBLISH ROUTES ===
+# =========================
+
+async def publish_mob_to_database(payload: dict = Body(...)):
+    """
+    POST /api/publish — Publish a user-created mob to the database.
+    
+    Request body:
+    {
+        "mob_name": "fire_dragon",
+        "username": "player123",
+        "prompts": ["make it breathe fire", "give it wings"],
+        "geometry": { ... geometry JSON ... },
+        "api_key": "sk-..." (optional, falls back to env var)
+    }
+    
+    Returns:
+    {
+        "success": true,
+        "mob_name": "fire_dragon_player123",
+        "description": "A flying creature that breathes fire.",
+        "keywords": ["hostile", "flying", "fire"]
+    }
+    """
+    # Import from data/database_insertion module
+    import sys
+    from pathlib import Path
+    
+    # Add database_insertion to path if not already there
+    db_insertion_path = Path(__file__).parent.parent.parent / "data" / "database_insertion"
+    if str(db_insertion_path) not in sys.path:
+        sys.path.insert(0, str(db_insertion_path))
+    
+    from publish_mob import publish_or_update_mob
+    
+    mob_name = payload.get("mob_name")
+    username = payload.get("username")
+    prompts = payload.get("prompts", [])
+    geometry = payload.get("geometry", {})
+    api_key = payload.get("api_key")
+    
+    # Validate required fields
+    if not mob_name:
+        raise HTTPException(status_code=400, detail="mob_name is required")
+    if not username:
+        raise HTTPException(status_code=400, detail="username is required")
+    if not prompts:
+        raise HTTPException(status_code=400, detail="prompts array is required")
+    if not geometry:
+        raise HTTPException(status_code=400, detail="geometry is required")
+    
+    # Use the combined publish_or_update function
+    result = publish_or_update_mob(mob_name, username, prompts, geometry, api_key)
+    
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("error", "Unknown error"))
+    
+    return result
+
+
+async def check_published_mob(mob_name: str, username: str):
+    """
+    GET /api/publish/check/{mob_name}/{username} — Check if a mob is already published.
+    
+    Returns:
+    {
+        "exists": true/false,
+        "full_name": "fire_dragon_player123"
+    }
+    """
+    # Import from data/database_insertion module
+    import sys
+    from pathlib import Path
+    
+    db_insertion_path = Path(__file__).parent.parent.parent / "data" / "database_insertion"
+    if str(db_insertion_path) not in sys.path:
+        sys.path.insert(0, str(db_insertion_path))
+    
+    from publish_mob import check_mob_exists
+    
+    exists = check_mob_exists(mob_name, username)
+    return {
+        "exists": exists,
+        "full_name": f"{mob_name}_{username}"
+    }
