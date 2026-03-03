@@ -55,7 +55,7 @@ SHORT_NAME_RE = re.compile(r"^[a-z0-9_]+$")
 HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 # LLM configuration
-LLM_MODEL_NAME = os.environ.get("LLM_MODEL", "gpt-4o")
+LLM_MODEL_NAME = os.environ.get("LLM_MODEL", "openai/gpt-4.1")
 DEEPSEEK_MODEL_NAME = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
 GEMINI_MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
 CLAUDE_MODEL_NAME = os.environ.get("CLAUDE_MODEL", "claude-3-5-sonnet-20240620")
@@ -82,14 +82,19 @@ You edit Mob Specifications (MobSpec) to fulfill user requests.
 
 FIELDS OVERVIEW:
 1. BEHAVIOR: Use the 'components' object to add/remove AI goals.
-2. GEOMETRY: 
-   - 'geometry' (string): Use for vanilla models (e.g. "geometry.cow").
-   - 'geometry_json' (object): Use for CUSTOM 3D models. Provide a full 'minecraft:geometry' object.
+2. GEOMETRY:
+   - 'geometry' (string): The geometry reference ID. For known vanilla mobs, use the vanilla geometry ID (e.g. "geometry.ghast", "geometry.cow", "geometry.zombie", "geometry.spider", "geometry.creeper", "geometry.chicken", "geometry.pig", "geometry.wolf", "geometry.skeleton", "geometry.blaze", "geometry.enderman", "geometry.slime", "geometry.iron_golem"). The app will auto-fetch the real Mojang geometry for rendering.
+   - 'geometry_json' (object): ONLY use for truly custom/invented shapes that don't exist in vanilla Minecraft. Set to {} (empty object) when using a vanilla geometry reference.
 3. VISUALS:
-   - 'color_rgb' (array): Set the base color [R, G, B].
+   - 'color_rgb' (array): Set the base color [R, G, B]. IMPORTANT: Update this when changing mob type (e.g. ghast=[246,246,246], zombie=[76,122,58], creeper=[76,175,80], spider=[58,42,26], blaze=[245,205,50]).
    - 'texture_instructions' (array): Describe the texture style (e.g. ["scales", "glowing eyes", "lava cracks"]).
 
-GEOMETRY JSON FORMAT:
+GEOMETRY RULES:
+- For VANILLA Minecraft mobs (ghast, cow, zombie, creeper, spider, chicken, pig, wolf, skeleton, blaze, enderman, slime, iron_golem, etc.), use the vanilla geometry reference and set geometry_json={}.
+  Example: user says "turn it into a ghast" → geometry="geometry.ghast", geometry_json={}.
+- For NON-VANILLA creatures (elephant, dragon, dinosaur, unicorn, robot, etc.), you MUST generate custom geometry_json with an appropriate body shape. Do NOT use a cow/pig/zombie model as a substitute — build the right shape.
+  Example: user says "make an elephant" → geometry="geometry.custom_elephant", geometry_json={full custom geometry with large body, trunk, big ears, thick legs}.
+- When you generate custom geometry_json, use this format:
 {
   "format_version": "1.12.0",
   "minecraft:geometry": [
@@ -105,8 +110,9 @@ GEOMETRY JSON FORMAT:
 CRITICAL RULES:
 1. ALWAYS return a single VALID JSON object matching the schema.
 2. Include ALL required keys: identifier, display_name, short_name, engine_min, hp, damage, speed, collision_box, geometry, geometry_json, render_controller, texture_hint, texture_instructions, color_rgb, egg_base, egg_overlay, scale, components.
-3. If the user wants a custom shape (e.g. "three heads"), use 'geometry_json'.
-4. BONE NAMING FOR ANIMATIONS: If you want the mob to use vanilla walk/look animations, you MUST use standard bone names in 'geometry_json': 'head', 'body', 'leg0', 'leg1', 'leg2', 'leg3'.
+3. Use vanilla geometry for vanilla mobs. Generate custom geometry_json for non-vanilla creatures (elephant, dragon, etc.).
+4. BONE NAMING FOR ANIMATIONS: If you use custom geometry_json, use standard bone names: 'head', 'body', 'leg0', 'leg1', 'leg2', 'leg3'.
 5. To delete a default component, set it to null in 'components'.
 6. For explosive behavior, you MUST have both "minecraft:behavior.swell" and "minecraft:explode".
+7. ALWAYS update color_rgb when changing the mob type — it controls the texture color.
 """

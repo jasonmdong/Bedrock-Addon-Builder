@@ -5,10 +5,23 @@
 const llmPrompt = document.getElementById("llm-prompt");
 const llmButton = document.getElementById("llm-run");
 const llmProvider = document.getElementById("llm-provider");
+const llmCategory = document.getElementById("llm-category");
 const llmKey = document.getElementById("llm-key");
 const llmHistoryList = document.getElementById("llm-history-list");
 const llmSessionCount = document.getElementById("llm-session-count");
 const clearLlmHistoryBtn = document.getElementById("clear-llm-history");
+
+const LLM_CATEGORY_KEY = "builder_llm_category";
+
+function detectCategoryFromSpec(spec) {
+  if (!spec || typeof spec !== "object") return "entity_logic_ai";
+  if ("minecraft:item" in spec) return "items_weaponry";
+  if ("minecraft:block" in spec) return "blocks_furniture";
+  if ("pools" in spec || Object.keys(spec).some(k => k.startsWith("minecraft:recipe")))
+    return "loot_recipes";
+  if ("header" in spec && "modules" in spec) return "scripting_components";
+  return "entity_logic_ai";
+}
 
 // LLM history stack -> newest first
 function llmStackKey(user, mob) {
@@ -205,10 +218,20 @@ async function requestLlm() {
     return;
   }
   const provider = llmProvider ? llmProvider.value : "openai";
-  setStatus(`Contacting ${provider}...`);
+  const category = llmCategory ? llmCategory.value : "entity_logic_ai";
   const apiKey = llmKey ? llmKey.value.trim() : "";
+
+  // Animated progress steps while waiting for the backend
+  const _steps = _buildProgressSteps(provider, category);
+  let _stepIdx = 0;
+  setStatus(_steps[0]);
+  const _progressTimer = setInterval(() => {
+    _stepIdx++;
+    if (_stepIdx < _steps.length) {
+      setStatus(_steps[_stepIdx]);
+    }
+  }, 3000);
   
-  // Get current spec from editor (this is the BEFORE state)
   let currentSpec;
   try {
     currentSpec = JSON.parse(editor.value);
@@ -216,13 +239,30 @@ async function requestLlm() {
     setStatus("Invalid JSON in editor. Fix it before using the LLM.", true);
     return;
   }
+
+  // Warn if the spec structure doesn't match the selected category
+  const detected = detectCategoryFromSpec(currentSpec);
+  if (detected !== category) {
+    const labelMap = {
+      entity_logic_ai: "Entity / Mob",
+      items_weaponry: "Items & Weaponry",
+      blocks_furniture: "Blocks & Furniture",
+      loot_recipes: "Loot Tables & Recipes",
+      scripting_components: "Scripting & Manifests",
+    };
+    const detectedLabel = labelMap[detected] || detected;
+    const selectedLabel = labelMap[category] || category;
+    console.warn(`[LLM] Category mismatch: dropdown=${category}, detected=${detected}`);
+    setStatus(`Note: Spec looks like "${detectedLabel}" but you selected "${selectedLabel}". Treating as a conversion request.`);
+    await new Promise(r => setTimeout(r, 2000));
+  }
   
-  // Store the before state for diff comparison
   const beforeSpec = JSON.parse(JSON.stringify(currentSpec));
   
   const requestBody = { 
     prompt: instruction, 
     provider: provider,
+    category: category,
     current_spec: currentSpec 
   };
   if (apiKey) {
@@ -240,10 +280,12 @@ async function requestLlm() {
       body: JSON.stringify(requestBody)
     });
   } catch (err) {
+    clearInterval(_progressTimer);
     console.error("LLM fetch failed", err);
     setStatus("LLM request failed (network): " + err.message, true);
     return;
   }
+  clearInterval(_progressTimer);
   const payload = await res.json().catch(() => ({}));
   if (!res.ok) {
     const detail = payload.detail || payload.error || res.statusText;
@@ -259,16 +301,73 @@ async function requestLlm() {
   
   // Save to localStorage
   if (currentMobName) {
+    // If short_name changed, rename the mob in localStorage (same logic as saveSpec)
+    const newShortName = payload.spec.short_name || currentMobName;
+    if (newShortName !== currentMobName) {
+      const oldTexture = typeof getUserMobTexture === "function" ? getUserMobTexture(currentMobName) : null;
+      if (typeof deleteUserMob === "function") deleteUserMob(currentMobName);
+      currentMobName = newShortName;
+      localStorage.setItem("builder_current_mob", currentMobName);
+      // Migrate texture to new name
+      if (oldTexture && typeof saveUserMobTexture === "function") {
+        saveUserMobTexture(currentMobName, oldTexture);
+      }
+      console.log(`[LLM] Mob renamed: → ${currentMobName}`);
+      if (typeof loadMobList === "function") loadMobList();
+    }
     saveUserMob(currentMobName, payload.spec);
-    // Sync texture painter with potentially new color
+
+    // Detect if the mob type changed (by display_name or identifier)
+    const oldDisplay = (beforeSpec.display_name || "").toLowerCase();
+    const newDisplay = (payload.spec.display_name || "").toLowerCase();
+    const oldIdent = (beforeSpec.identifier || "").toLowerCase();
+    const newIdent = (payload.spec.identifier || "").toLowerCase();
+    const mobTypeChanged = (oldDisplay && newDisplay && oldDisplay !== newDisplay)
+                        || (oldIdent && newIdent && oldIdent !== newIdent);
+
+    if (payload.texture_b64 && typeof saveUserMobTexture === "function") {
+      saveUserMobTexture(currentMobName, payload.texture_b64);
+      console.log("[LLM] MCP texture received, saved to localStorage");
+    } else if (mobTypeChanged) {
+      if (typeof deleteUserMobTexture === "function") {
+        deleteUserMobTexture(currentMobName);
+      }
+      delete payload.spec._template_base;
+      editor.value = JSON.stringify(payload.spec, null, 2);
+      console.log(`[LLM] Mob identity changed (${oldDisplay} → ${newDisplay}), cleared old texture + template`);
+    }
+
     loadTextureIntoPainter(currentMobName);
-    // Update file tree
     updateFileTree(payload.spec);
+
+    // Re-render 3D geometry if the geometry reference changed
+    const oldGeo = beforeSpec.geometry || "";
+    const newGeo = payload.spec.geometry || "";
+    const hasNewGeometryJson = payload.spec.geometry_json
+                            && payload.spec.geometry_json["minecraft:geometry"];
+
+    if (hasNewGeometryJson) {
+      if (typeof render3DGeometry === "function") {
+        render3DGeometry(payload.spec.geometry_json, currentMobName);
+      }
+    } else if (newGeo && newGeo !== oldGeo) {
+      const geoName = newGeo.replace("geometry.", "");
+      if (typeof fetchAndDisplayGeometry === "function") {
+        fetchAndDisplayGeometry(geoName, currentMobName);
+      }
+    }
   }
   
-  setStatus(`${provider} updated the spec at ${new Date().toLocaleTimeString()}.`);
+  // Build status message with MCP augmentation info
+  let statusMsg = `${provider} updated the spec at ${new Date().toLocaleTimeString()}.`;
+  const mcpInfo = _formatMcpStatus(payload.mcp);
+  if (mcpInfo) statusMsg += " " + mcpInfo;
+  setStatus(statusMsg);
 
-    try {
+  // Show MCP detail badge if available
+  _renderMcpBadge(payload.mcp);
+
+  try {
     const user = getCurrentUser();
     const mob = currentMobName || null;
     if (user) {
@@ -279,6 +378,81 @@ async function requestLlm() {
   } catch (e) {
     console.warn('Failed to write llm history', e);
   }
+}
+
+
+// ---------------------------------------------------------------------------
+// Progress steps during LLM request
+// ---------------------------------------------------------------------------
+
+function _buildProgressSteps(provider, category) {
+  const steps = [];
+  if (typeof mctoolsAvailable !== "undefined" && mctoolsAvailable) {
+    steps.push(`Retrieving MCP context for [${category}]...`);
+    steps.push(`Sending to ${provider} (with MCP context)...`);
+  } else {
+    steps.push(`Sending to ${provider} [${category}]...`);
+  }
+  steps.push(`Waiting for ${provider} response...`);
+  steps.push(`Still waiting for ${provider}...`);
+  return steps;
+}
+
+
+// ---------------------------------------------------------------------------
+// MCP augmentation status helpers
+// ---------------------------------------------------------------------------
+
+function _formatMcpStatus(mcp) {
+  if (!mcp || !mcp.augmented) return "";
+  const parts = [];
+  const sources = (mcp.context_sources || []).join(", ");
+  if (sources) parts.push(`MCP context: ${sources}`);
+  if (mcp.retrieval_ms) parts.push(`${mcp.retrieval_ms}ms`);
+  if (mcp.validation && mcp.validation.ran) {
+    parts.push(mcp.validation.valid ? "validated" : "validation warnings");
+  }
+  return parts.length ? `[${parts.join(" | ")}]` : "";
+}
+
+
+function _renderMcpBadge(mcp) {
+  let badge = document.getElementById("llm-mcp-badge");
+  if (!badge) {
+    const statusArea = document.getElementById("status");
+    if (!statusArea) return;
+    badge = document.createElement("div");
+    badge.id = "llm-mcp-badge";
+    badge.style.cssText =
+      "font-size:0.75rem;color:var(--muted);margin-top:4px;font-style:italic;";
+    statusArea.parentNode.insertBefore(badge, statusArea.nextSibling);
+  }
+
+  if (!mcp || !mcp.augmented) {
+    badge.textContent = "";
+    badge.style.display = "none";
+    return;
+  }
+
+  badge.style.display = "block";
+  const parts = [];
+
+  if (mcp.context_sources && mcp.context_sources.length) {
+    parts.push("Context from: " + mcp.context_sources.join(", "));
+  }
+  if (mcp.retrieval_ms) {
+    parts.push(`retrieved in ${mcp.retrieval_ms}ms`);
+  }
+  if (mcp.validation && mcp.validation.ran) {
+    if (mcp.validation.valid) {
+      parts.push("MCP validation passed");
+    } else {
+      const msgs = (mcp.validation.messages || []).slice(0, 3).join("; ");
+      parts.push("MCP validation: " + (msgs || "issues found"));
+    }
+  }
+
+  badge.textContent = parts.join(" | ");
 }
 
 function renderLlmHistory() {
@@ -454,7 +628,17 @@ function initLlmHandlers() {
     localStorage.setItem(LLM_PROVIDER_KEY, llmProvider.value);
   });
 
+  llmCategory?.addEventListener("change", () => {
+    localStorage.setItem(LLM_CATEGORY_KEY, llmCategory.value);
+  });
+
   llmKey?.addEventListener("input", () => {
     localStorage.setItem(LLM_API_KEY_STORAGE, llmKey.value.trim());
   });
+
+  // Restore saved category
+  const savedCategory = localStorage.getItem(LLM_CATEGORY_KEY);
+  if (savedCategory && llmCategory) {
+    llmCategory.value = savedCategory;
+  }
 }

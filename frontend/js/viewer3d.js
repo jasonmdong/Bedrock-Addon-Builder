@@ -1384,43 +1384,55 @@ async function generateGeometry(modify = false) {
       prompt: prompt,
       provider: provider
     };
-    
+
     if (apiKey) body.api_key = apiKey;
     if (modify && currentGeometryData) body.current_geometry = currentGeometryData;
-    
+
+    const mobName = (typeof currentMobName !== "undefined" && currentMobName) ? currentMobName : "custom_mob";
+    body.mob_name = mobName;
+
     const response = await fetch("/api/geometry/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body)
     });
-    
+
     const data = await response.json();
-    
+
     if (!response.ok) {
       throw new Error(data.detail || "Failed to generate geometry");
     }
-    
+
     if (data.geometry) {
       currentGeometryData = data.geometry;
       render3DGeometry(data.geometry);
-      
-      // Update the JSON viewer
+
       const geometryViewer = document.getElementById("geometry-viewer");
       if (geometryViewer) {
         geometryViewer.textContent = JSON.stringify(data.geometry, null, 2);
       }
-      
-      // Update copy button data
+
       const geometryCopy = document.getElementById("geometry-copy");
       if (geometryCopy) {
         geometryCopy.dataset.json = JSON.stringify(data.geometry, null, 2);
       }
-      
-      // Show the geometry container if hidden
+
       const container = document.getElementById("geometry-container");
       if (container) container.style.display = "block";
-      
-      console.log("[Geometry] Generated successfully");
+
+      // If MCP generated a matching texture, load it into the Pixel Painter
+      if (data.texture_b64 && typeof saveUserMobTexture === "function" && mobName) {
+        saveUserMobTexture(mobName, data.texture_b64);
+        if (typeof loadTextureIntoPainter === "function") {
+          loadTextureIntoPainter(mobName);
+        }
+        if (typeof refresh3DTexture === "function") {
+          refresh3DTexture(mobName);
+        }
+        console.log("[Geometry] MCP texture generated and loaded into Pixel Painter");
+      }
+
+      console.log("[Geometry] Generated successfully", data.mcp_texture ? "(with MCP texture)" : "");
     }
   } catch (err) {
     console.error("[Geometry] Generation failed:", err);

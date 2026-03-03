@@ -19,6 +19,7 @@ from backend.schemas.spec_utils import (
     validate_spec, SpecValidationError
 )
 from backend.llm.llm import llm_rewrite_spec, llm_generate_geometry
+from backend.llm.category_context import CATEGORIES, CATEGORY_LABELS
 from backend.core.packaging import build_addon
 from backend.core.builders import make_png_rgba
 
@@ -149,6 +150,53 @@ async def get_all_template_mob_names():
     except Exception as e:
         print(f"[ERROR] Failed to fetch template mob names: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch mobs: {str(e)}")
+
+
+def _normalize_geometry(geometry_data: dict) -> dict:
+    """Convert old-format Bedrock geometry (geometry.X: {...}) to the modern
+    minecraft:geometry array format so all downstream code can use a single check.
+    Old format example:  {"format_version": "1.8.0", "geometry.bat": { ... }}
+    New format example:  {"format_version": "1.21.0", "minecraft:geometry": [{"description": {"identifier": "geometry.bat", ...}, "bones": [...]}]}
+    """
+    if "minecraft:geometry" in geometry_data:
+        return geometry_data  # already new format
+
+    converted_entries = []
+    for key, value in geometry_data.items():
+        if key == "format_version":
+            continue
+        if not key.startswith("geometry.") or not isinstance(value, dict):
+            continue
+        # Build a new-format entry from the old-format block
+        desc = {"identifier": key}
+        # Carry over description-level fields
+        for field in ("texturewidth", "texture_width"):
+            if field in value:
+                desc["texture_width"] = value[field]
+        for field in ("textureheight", "texture_height"):
+            if field in value:
+                desc["texture_height"] = value[field]
+        for field in ("visible_bounds_width", "visible_bounds_height", "visible_bounds_offset"):
+            if field in value:
+                desc[field] = value[field]
+        # Ensure texture dimensions are present (required for proper UV mapping)
+        if "texture_width" not in desc:
+            desc["texture_width"] = 64
+        if "texture_height" not in desc:
+            desc["texture_height"] = 64
+        entry = {"description": desc}
+        if "bones" in value:
+            entry["bones"] = value["bones"]
+        converted_entries.append(entry)
+
+    if not converted_entries:
+        return geometry_data  # nothing to convert
+
+    print(f"[GEOMETRY] Converted old-format geometry keys: {[e['description']['identifier'] for e in converted_entries]}")
+    return {
+        "format_version": geometry_data.get("format_version", "1.12.0"),
+        "minecraft:geometry": converted_entries
+    }
 
 
 async def generate_mob_from_similar(payload: dict = Body(...)):
@@ -546,6 +594,8 @@ async def fetch_mob_geometry(mob_name: str):
     Searches for all .geo.json files containing the mob_name (with version numbers/descriptors),
     and fetches the most recently updated one. Results are cached locally to avoid
     burning through the GitHub API rate limit (60 req/hr unauthenticated).
+    Old-format geometry files are automatically normalized to the modern
+    minecraft:geometry array format.
     """
     if not mob_name:
         raise HTTPException(status_code=400, detail="mob_name is required")
@@ -579,6 +629,7 @@ async def fetch_mob_geometry(mob_name: str):
                     except (json.JSONDecodeError, ValueError):
                         continue
 
+                    geometry_data = _normalize_geometry(geometry_data)
                     result = {
                         "geometry": geometry_data,
                         "url": raw_url,
@@ -620,7 +671,7 @@ async def fetch_mob_geometry(mob_name: str):
             if response.status_code != 200:
                 raise HTTPException(status_code=response.status_code, detail="Failed to fetch geometry file")
 
-            geometry_data = response.json()
+            geometry_data = _normalize_geometry(response.json())
             result = {
                 "geometry": geometry_data,
                 "url": raw_url,
@@ -740,33 +791,48 @@ def llm_spec_editor(payload: dict = Body(...)):
         raise HTTPException(status_code=400, detail="prompt is required")
     provider = data.get("provider")
     api_key = data.get("api_key")
+    category = data.get("category", "entity_logic_ai")
     current = data.get("current_spec") or data.get("spec")
     if not current:
         current = read_current_spec()
 
-    print(f"[LLM] provider={provider} prompt_len={len(str(prompt).strip())}")
+    print(f"[LLM] provider={provider} category={category} prompt_len={len(str(prompt).strip())}")
 
     # if server running in local dev mode prefer mock to avoid external calls
     if LOCAL_LLM_DEV and not provider:
         return llm_spec_mock(payload)
 
     try:
-        updated = llm_rewrite_spec(prompt, current, provider, api_key)
+        updated = llm_rewrite_spec(prompt, current, provider, api_key, category=category)
     except SpecValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except RuntimeError as exc:
         print(f"[LLM] error: {exc}")
         raise HTTPException(status_code=500, detail=str(exc))
 
+    # Extract internal metadata before saving (don't persist it)
+    mcp_meta = updated.pop("_mcp_meta", None) if updated else None
+    texture_b64 = updated.pop("_texture_b64", "") if updated else ""
+
     if data.get("save"):
         try:
             name = updated.get("short_name") or "current"
             saved = write_mob_spec(name, updated)
-            return {"spec": saved, "saved": True}
+            result = {"spec": saved, "saved": True}
+            if mcp_meta:
+                result["mcp"] = mcp_meta
+            if texture_b64:
+                result["texture_b64"] = texture_b64
+            return result
         except SpecValidationError as exc:
             raise HTTPException(status_code=422, detail=str(exc))
 
-    return {"spec": updated, "saved": False}
+    result = {"spec": updated, "saved": False}
+    if mcp_meta:
+        result["mcp"] = mcp_meta
+    if texture_b64:
+        result["texture_b64"] = texture_b64
+    return result
 
 
 def llm_geometry_generate(payload: dict = Body(...)):
@@ -775,23 +841,31 @@ def llm_geometry_generate(payload: dict = Body(...)):
     prompt = data.get("prompt") or ""
     if not prompt or not str(prompt).strip():
         raise HTTPException(status_code=400, detail="prompt is required")
-    
+
     provider = data.get("provider")
     api_key = data.get("api_key")
     current_geometry = data.get("current_geometry")
-    
-    print(f"[LLM-GEOMETRY] provider={provider} prompt_len={len(str(prompt).strip())}")
-    
+    mob_name = data.get("mob_name", "custom_mob")
+
+    print(f"[LLM-GEOMETRY] provider={provider} prompt_len={len(str(prompt).strip())} mob={mob_name}")
+
     try:
-        geometry = llm_generate_geometry(prompt, current_geometry, provider, api_key)
+        geometry = llm_generate_geometry(prompt, current_geometry, provider, api_key, mob_name=mob_name)
     except RuntimeError as exc:
         print(f"[LLM-GEOMETRY] error: {exc}")
         raise HTTPException(status_code=500, detail=str(exc))
     except Exception as exc:
         print(f"[LLM-GEOMETRY] unexpected error: {exc}")
         raise HTTPException(status_code=500, detail=str(exc))
-    
-    return {"geometry": geometry}
+
+    texture_b64 = geometry.pop("_texture_b64", "") if geometry else ""
+    mcp_design = geometry.pop("_mcp_design", False) if geometry else False
+
+    result = {"geometry": geometry}
+    if texture_b64:
+        result["texture_b64"] = texture_b64
+        result["mcp_texture"] = True
+    return result
 
 def llm_spec_mock(payload: dict = Body(...)):
     data = payload or {}
@@ -886,6 +960,14 @@ def serve_js(filename: str):
 def healthz():
     """Health check endpoint."""
     return PlainTextResponse("ok")
+
+
+def get_llm_categories():
+    """Return available LLM content categories for the frontend dropdown."""
+    return {"categories": [
+        {"id": cat, "label": CATEGORY_LABELS.get(cat, cat)}
+        for cat in CATEGORIES
+    ]}
 
 
 def build_form(resource: Optional[UploadFile] = File(None),

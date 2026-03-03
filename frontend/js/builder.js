@@ -115,23 +115,37 @@ function setupTemplateSearchInput(searchInput) {
 let selectedTemplateId = null;
 
 // Fetch default texture for a vanilla template from Mojang's bedrock-samples repo.
+// Tries multiple URL patterns since some mobs use a subdirectory (bee/bee.png)
+// while others are flat files (bat.png) in the textures/entity folder.
 async function fetchTemplateTexture(templateId) {
   if (!templateId) return null;
   const base = "https://raw.githubusercontent.com/Mojang/bedrock-samples/main/resource_pack/textures/entity";
-  const url = `${base}/${encodeURIComponent(templateId)}/${encodeURIComponent(templateId)}.png`;
+  const safeName = encodeURIComponent(templateId);
+  const candidates = [
+    `${base}/${safeName}/${safeName}.png`,   // subdirectory pattern: creeper/creeper.png, bee/bee.png
+    `${base}/${safeName}.png`,               // flat file pattern: bat.png
+  ];
   try {
-    const res = await fetch(url);
-    if (!res.ok) {
-      console.warn(`[TEMPLATE] No texture found for ${templateId} (status ${res.status}) at ${url}`);
-      return null;
+    for (const url of candidates) {
+      const res = await fetch(url);
+      if (!res.ok) {
+        console.warn(`[TEMPLATE] No texture at ${url} (status ${res.status})`);
+        continue;
+      }
+      const blob = await res.blob();
+      const dataUrl = await new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result);
+        reader.onerror = () => resolve(null);
+        reader.readAsDataURL(blob);
+      });
+      if (dataUrl) {
+        console.log(`[TEMPLATE] Fetched texture for ${templateId} from ${url}`);
+        return dataUrl;
+      }
     }
-    const blob = await res.blob();
-    return await new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(reader.result);
-      reader.onerror = () => resolve(null);
-      reader.readAsDataURL(blob);
-    });
+    console.warn(`[TEMPLATE] No texture found for ${templateId} at any candidate URL`);
+    return null;
   } catch (err) {
     console.warn(`[TEMPLATE] Failed to fetch texture for ${templateId}:`, err);
     return null;
@@ -146,6 +160,9 @@ async function fetchAndDisplayGeometry(geometryMobName, textureMobName = null) {
   
   // Use textureMobName if provided, otherwise fall back to geometryMobName
   const mobNameForTexture = textureMobName || geometryMobName;
+
+  // Snapshot the mob we're loading for so we can detect stale responses
+  const requestedFor = mobNameForTexture;
   
   const geometryContainer = document.getElementById("geometry-container");
   const geometryViewer = document.getElementById("geometry-viewer");
@@ -155,18 +172,21 @@ async function fetchAndDisplayGeometry(geometryMobName, textureMobName = null) {
   if (!geometryContainer || !geometryViewer) return;
   
   try {
-    // Call our backend endpoint that fetches from bedrock-samples
     const res = await fetch(`/api/geometry/${encodeURIComponent(geometryMobName)}`);
+
+    // After the await, the user may have switched mobs — discard stale results
+    if (currentMobName !== requestedFor) {
+      console.log(`[GEOMETRY] Discarding stale response for ${geometryMobName} (current mob is now ${currentMobName})`);
+      return;
+    }
     
     if (!res.ok) {
       const error = await res.json().catch(() => ({}));
       console.warn(`[GEOMETRY] Failed to fetch geometry for ${geometryMobName}:`, error.detail || res.statusText);
-      // Show container with placeholder instead of hiding it (to maintain layout)
       geometryViewer.textContent = `// No geometry available for "${geometryMobName}"\n// The mob may be using a custom or undefined geometry.`;
       geometryUrl.href = "#";
       geometryUrl.textContent = "No source available";
       geometryContainer.style.display = "block";
-      // Clear any previous 3D model
       if (viewer3D && viewer3D.mesh) {
         viewer3D.scene.remove(viewer3D.mesh);
         viewer3D.mesh = null;
@@ -178,23 +198,24 @@ async function fetchAndDisplayGeometry(geometryMobName, textureMobName = null) {
     const geometryData = data.geometry;
     const url = data.url;
     
-    // Format JSON with indentation
     const formattedJson = JSON.stringify(geometryData, null, 2);
     
-    // Display the geometry
     geometryViewer.textContent = formattedJson;
     geometryUrl.href = url;
     geometryUrl.textContent = `View on GitHub: ${geometryMobName}.geo.json`;
     geometryContainer.style.display = "block";
     
-    // Store formatted JSON for copy functionality
     geometryCopy.dataset.json = formattedJson;
     
-    // Render the 3D model with texture (use mobNameForTexture to load the correct texture)
+    try {
+      if (geometryData["minecraft:geometry"] && geometryData["minecraft:geometry"][0]) {
+        const desc = geometryData["minecraft:geometry"][0].description || {};
+        setPainterDimensions(desc.texture_width || 64, desc.texture_height || 64);
+      }
+    } catch (e) { /* keep current painter dims */ }
+
     render3DGeometry(geometryData, mobNameForTexture);
 
-    // Persistently save geometry into the mob spec (like behavior modifications)
-    // This ensures it's available for BDS builds and survives page reloads
     if (currentMobName) {
       const spec = getUserMob(currentMobName);
       if (spec && (!spec.geometry_json || !spec.geometry_json["minecraft:geometry"])) {
@@ -244,12 +265,24 @@ async function buildArtifact() {
     return;
   }
 
-  // Get textures from localStorage
+  // Get textures from localStorage, keyed by short_name (which the backend uses
+  // for file paths). The sidebar mob name may differ from the spec's short_name
+  // if the LLM renamed the mob.
   const textures = {};
-  selectedMobNames.forEach(name => {
-    const tex = getUserMobTexture(name);
-    if (tex) textures[name] = tex;
-  });
+  for (const name of selectedMobNames) {
+    const spec = getUserMob(name);
+    const shortName = (spec && spec.short_name) || name;
+    let tex = getUserMobTexture(name);
+    if (!tex) {
+      const base = spec && (spec._template_base || shortName.replace(/_custom$/, ''));
+      if (base) {
+        console.log(`[BUILD] Fetching missing texture for ${name} (base: ${base})`);
+        tex = await fetchTemplateTexture(base);
+        if (tex) saveUserMobTexture(name, tex);
+      }
+    }
+    if (tex) textures[shortName] = tex;
+  }
 
   const choice = buildModeSelect ? buildModeSelect.value : "bundle";
   const msg = `Building bundle with ${selectedSpecs.length} mobs (${choice})...`;
@@ -397,10 +430,11 @@ function initPlayWorld() {
     }
     const selectedSpecs = [copy];
 
-    // Gather texture for this mob
+    // Gather texture for this mob, keyed by short_name (backend uses it for file paths)
     const textures = {};
     const tex = getUserMobTexture(currentMobName);
-    if (tex) textures[currentMobName] = tex;
+    const shortName = copy.short_name || currentMobName;
+    if (tex) textures[shortName] = tex;
 
     playWorldBtn.disabled = true;
     playWorldBtn.textContent = "Building...";
