@@ -216,7 +216,11 @@ def get_mcp_context_for_llm(working_dir: Optional[str] = None) -> str:
     # Get model templates
     try:
         if client.is_tool_available("getModelTemplates"):
-            result = client.call_tool("getModelTemplates", {})
+            # Default to a common template type so the tool
+            # still works when the caller does not specify one.
+            default_template_type = "humanoid"
+            print(f"[MCP] Calling getModelTemplates with templateType='{default_template_type}'")
+            result = client.call_tool("getModelTemplates", {"templateType": default_template_type})
             if "templates" in result:
                 templates = result["templates"]
                 context_parts.append("Available Model Templates:")
@@ -230,7 +234,11 @@ def get_mcp_context_for_llm(working_dir: Optional[str] = None) -> str:
     # Get effective content schema if available
     try:
         if client.is_tool_available("getEffectiveContentSchema"):
-            result = client.call_tool("getEffectiveContentSchema", {})
+            # Use the working directory (or current directory) as the
+            # default folderPath so the MCP schema requirement is satisfied.
+            folder_path = working_dir or os.getcwd()
+            print(f"[MCP] Calling getEffectiveContentSchema with folderPath='{folder_path}'")
+            result = client.call_tool("getEffectiveContentSchema", {"folderPath": folder_path})
             if "schema" in result:
                 schema = result["schema"]
                 context_parts.append("\nMinecraft Content Schema:")
