@@ -9,8 +9,8 @@ const LLM_PROVIDER_KEY = "builder_llm_provider";
 const LLM_API_KEY_STORAGE = "builder_llm_api_key";
 const BUILD_MODE_KEY = "builder_build_mode";
 
-// Shared state
-let currentMobName = "current";
+// Shared state — restore last selected mob across page reloads
+let currentMobName = localStorage.getItem("builder_current_mob") || "current";
 
 // Theme management
 const themeToggle = document.getElementById("theme-toggle");
@@ -173,6 +173,7 @@ function initApp() {
   safe("initFileUploadLabels", (typeof initFileUploadLabels !== "undefined") ? initFileUploadLabels : null);
   safe("initTemplateSelect", (typeof initTemplateSelect !== "undefined") ? initTemplateSelect : null);
   safe("initBuildHandlers", (typeof initBuildHandlers !== "undefined") ? initBuildHandlers : null);
+  safe("initMctools", (typeof initMctools !== "undefined") ? initMctools : null);
   safe("initEventListeners", initEventListeners);
   
   // Initialize 3D Editor controls

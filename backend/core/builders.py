@@ -111,13 +111,18 @@ def patch_resource_pack(res_root: Path, specs: list[dict], textures_dir: Path = 
         
         custom_geo = spec.get("geometry_json")
         if custom_geo and isinstance(custom_geo, dict) and "minecraft:geometry" in custom_geo:
-            # Ensure the geometry has a unique identifier based on the mob name
+            # Deep-copy to avoid mutating the original spec dict
+            import copy
+            custom_geo = copy.deepcopy(custom_geo)
+
+            # Ensure the geometry has a unique identifier based on the mob name.
+            # Keep only the first geometry entry to avoid identifier conflicts
+            # (some Mojang files contain multiple versions of the same geometry).
             unique_geo_id = f"geometry.{spec['short_name']}.custom"
             try:
-                # Force the internal identifier to be unique to this mob
+                custom_geo["minecraft:geometry"] = [custom_geo["minecraft:geometry"][0]]
                 custom_geo["minecraft:geometry"][0]["description"]["identifier"] = unique_geo_id
                 actual_geometry = unique_geo_id
-                # Use our generic render controller for custom geometries to ensure they show up
                 actual_rc = "controller.render.custom_mob"
             except (KeyError, IndexError):
                 pass
@@ -129,8 +134,6 @@ def patch_resource_pack(res_root: Path, specs: list[dict], textures_dir: Path = 
         mob_textures_dir.mkdir(parents=True, exist_ok=True)
 
         png_path = mob_textures_dir / f"{spec['short_name']}.png"
-        mers_tga = mob_textures_dir / f"{spec['short_name']}_mers.tga"
-        texset = mob_textures_dir / f"{spec['short_name']}.texture_set.json"
 
         # Try to copy texture from client-provided textures_dir first
         if textures_dir:
@@ -147,32 +150,28 @@ def patch_resource_pack(res_root: Path, specs: list[dict], textures_dir: Path = 
 
         if not png_path.exists():
             col = spec.get("color_rgb", COLOR_WORDS.get("red"))
-            png = make_png_rgba(64, 64, *col, 255)
+            # Use texture dimensions from geometry if available, else default 64x64
+            tex_w, tex_h = 64, 64
+            try:
+                geo = spec.get("geometry_json", {})
+                desc = geo.get("minecraft:geometry", [{}])[0].get("description", {})
+                tex_w = int(desc.get("texture_width", 64))
+                tex_h = int(desc.get("texture_height", 64))
+            except (IndexError, KeyError, TypeError, ValueError):
+                pass
+            png = make_png_rgba(tex_w, tex_h, *col, 255)
             png_path.write_bytes(png)
 
         if not first_png:
             first_png = png_path
 
-        if not mers_tga.exists():
-            col = spec.get("color_rgb", COLOR_WORDS.get("red"))
-            write_tga(mers_tga, 128, 128, *col, 255)
-
-        if not texset.exists():
-            texset.write_text(json.dumps({
-                "format_version": "1.21.30",
-                "minecraft:texture_set": {
-                    "color": spec["short_name"],
-                    "metalness_emissive_roughness_subsurface": f"{spec['short_name']}_mers"
-                }
-            }, indent=2), encoding="utf-8")
 
         scale = float(spec.get("scale", 1.0))
         client = {
-            "format_version": "1.21.0",
+            "format_version": "1.10.0",
             "minecraft:client_entity": {
                 "description": {
                     "identifier": spec["identifier"],
-                    "min_engine_version": "1.8.0",
                     "materials": {"default": "entity_alphatest"},
                     "textures": {"default": f"textures/entity/{spec['short_name']}/{spec['short_name']}"},
                     "geometry": {"default": actual_geometry},
@@ -263,44 +262,41 @@ def patch_behavior_pack(beh_root: Path, specs: list[dict]):
                     "minecraft:type_family": {"family": [spec["short_name"], "monster"]},
                     "minecraft:health": {"value": int(spec["hp"]), "max": int(spec["hp"])},
                     "minecraft:movement.basic": {},
+                    "minecraft:jump.static": {},
                     "minecraft:movement": {"value": float(spec.get("speed", 0.30))},
                     "minecraft:attack": {"damage": float(spec["damage"])},
-                    "minecraft:physics": {"has_gravity": True, "has_collision": True},
+                    "minecraft:physics": {},
                     "minecraft:collision_box": spec["collision_box"],
-                    "minecraft:navigation.walk": {"can_pass_doors": True, "avoid_water": True},
-                    "minecraft:follow_range": {"value": 40.0},
-                    "minecraft:knockback_resistance": {"value": 0.5},
-                    "minecraft:pushable": {"is_pushable": True},
-                    "minecraft:despawn": {"despawn_time": 6000},
-                    "minecraft:behavior.hurt_by_target": {"priority": 0},
-                    "minecraft:behavior.target_nearby_player": {
-                        "priority": 1,
-                        "within_radius": 32,
-                        "must_see": False,
-                        "sprint_speed_multiplier": 1.2
+                    "minecraft:navigation.walk": {
+                        "can_walk": True,
+                        "can_pass_doors": True,
+                        "avoid_water": True
                     },
+                    "minecraft:knockback_resistance": {"value": 0.5},
+                    "minecraft:pushable": {"is_pushable": True, "is_pushable_by_piston": True},
+                    "minecraft:behavior.hurt_by_target": {"priority": 1},
                     "minecraft:behavior.nearest_attackable_target": {
                         "priority": 2,
+                        "within_radius": 25,
                         "reselect_targets": True,
                         "entity_types": [
                             {
-                                "filters": {"test": "is_family", "subject": "other", "value": "player"},
-                                "max_dist": 40,
-                                "must_see": False
+                                "filters": {
+                                    "any_of": [
+                                        {"test": "is_family", "subject": "other", "value": "player"}
+                                    ]
+                                },
+                                "max_dist": 35
                             }
                         ]
                     },
-                    "minecraft:behavior.move_towards_target": {
-                        "priority": 3,
-                        "speed_multiplier": 1.15,
-                        "within_radius": 1.8
-                    },
                     "minecraft:behavior.melee_attack": {
-                        "priority": 4,
+                        "priority": 3,
                         "speed_multiplier": 1.0,
                         "track_target": True
                     },
-                    "minecraft:behavior.look_at_player": {"priority": 5, "look_distance": 8.0},
+                    "minecraft:behavior.look_at_player": {"priority": 7, "look_distance": 6.0, "probability": 0.02},
+                    "minecraft:behavior.random_look_around": {"priority": 8},
                     "minecraft:behavior.random_stroll": {"priority": 6, "speed_multiplier": 1.0}
                 }
             }
@@ -331,7 +327,7 @@ def patch_behavior_pack(beh_root: Path, specs: list[dict]):
     ]
     for i, spec in enumerate(specs):
         spawn_lines.append(
-            f'execute as @a[tag=!mob_spawned,scores={{addon_spawn=40..}},c=1] at @s run '
+            f'execute @a[tag=!mob_spawned,scores={{addon_spawn=40..}},c=1] ~ ~ ~ '
             f'summon {spec["identifier"]} ~ ~ ~'
         )
     spawn_lines.append("tag @a[scores={addon_spawn=40..}] add mob_spawned")

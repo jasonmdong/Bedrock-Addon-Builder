@@ -198,10 +198,23 @@
       <!-- LLM Assistant -->
       <div class="llm-card" style="display: flex; flex-direction: column; min-height: 400px;">
         <div>
-          <label style="font-size:1rem;">LLM Assistant Prompt</label>
+          <div style="display: flex; align-items: center; gap: 0.5rem;">
+            <label style="font-size:1rem;">LLM Assistant Prompt</label>
+            <span id="mctools-status-badge" title="Minecraft Creator Tools — provides authoritative templates to the LLM" style="font-size: 0.65rem; padding: 0.15rem 0.5rem; border-radius: 10px; background: #6b7280; color: #fff; cursor: default;">MCP</span>
+          </div>
           <p class="hint" style="margin:.2rem 0 0;">Describe the change you want and let an LLM update the spec.</p>
         </div>
         <div class="llm-controls">
+          <div class="field">
+            <label>Category</label>
+            <select id="llm-category">
+              <option value="entity_logic_ai">Entity / Mob</option>
+              <option value="items_weaponry">Items & Weaponry</option>
+              <option value="blocks_furniture">Blocks & Furniture</option>
+              <option value="loot_recipes">Loot Tables & Recipes</option>
+              <option value="scripting_components">Scripting & Manifests</option>
+            </select>
+          </div>
           <div class="field">
             <label>Provider</label>
             <select id="llm-provider">
@@ -689,6 +702,7 @@
     <pre id="schema-view" style="background:var(--status-bg);color:var(--status-text);padding:1rem;border-radius:12px;overflow:auto;max-height:240px; margin: 0;"></pre>
   </details>
 
+
 </main>
 
 
@@ -705,17 +719,19 @@
 
 <script src="js/viewer3d.js?v=4"></script>
 
-<script src="js/painter.js?v=4"></script>
+<script src="js/painter.js?v=5"></script>
 
-<script src="js/editor.js?v=5"></script>
+<script src="js/editor.js?v=7"></script>
 
 <script src="js/form-editor.js?v=4"></script>
 
-<script src="js/llm.js?v=4"></script>
+<script src="js/llm.js?v=7"></script>
 
-<script src="js/builder.js?v=4"></script>
+<script src="js/builder.js?v=7"></script>
 
-<script src="js/app.js?v=4"></script>
+<script src="js/mctools.js?v=2"></script>
+
+<script src="js/app.js?v=5"></script>
 
 
 

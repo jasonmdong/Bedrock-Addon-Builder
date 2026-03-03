@@ -17,3 +17,9 @@ bedrock_server/
 # Local documentation (not for git)
 USER_MANAGEMENT_DOCS.md
 CODEBASE_ARCHITECTURE.md
+
+# mctools-int (large Node.js package, install locally with npm install)
+McpGettingStarted/
+
+# Temp test files
+test_mctools.py
