@@ -1,0 +1,29 @@
+{
+  "format_version": 2,
+  "header": {
+    "name": "custom Resource Pack",
+    "description": "Make this mob have 100 HP and deal 20 damage",
+    "uuid": "1341d20a-7e80-4916-a4db-65ce9ccf7954",
+    "version": [
+      1,
+      0,
+      0
+    ],
+    "min_engine_version": [
+      1,
+      21,
+      0
+    ]
+  },
+  "modules": [
+    {
+      "type": "resources",
+      "uuid": "2fa7f613-4b4e-42c1-9941-bd956909f915",
+      "version": [
+        1,
+        0,
+        0
+      ]
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "format_version": 2,
+  "header": {
+    "name": "custom Behavior Pack",
+    "description": "Make this mob have 100 HP and deal 20 damage",
+    "uuid": "300e2400-8e4d-4854-b2c4-6117d1c1fc6f",
+    "version": [
+      1,
+      0,
+      0
+    ],
+    "min_engine_version": [
+      1,
+      21,
+      0
+    ]
+  },
+  "modules": [
+    {
+      "type": "data",
+      "uuid": "860ea4fa-55b4-4570-a888-60a5bac94eb2",
+      "version": [
+        1,
+        0,
+        0
+      ]
+    }
+  ]
+}
