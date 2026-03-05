@@ -5,7 +5,7 @@ colorFrom: blue
 colorTo: indigo
 sdk: docker
 app_port: 7860
-pinned: false
+pinned: true
 ---
 
 A preview is available here: https://jasonmdong-baobuilder.hf.space/
