@@ -17,7 +17,7 @@ A powerful, web-based tool for creating Minecraft Bedrock Edition Add-ons (Behav
 - **Interactive JSON Editor**: Customize mob properties like health, damage, speed, and collision boxes.
 - **AI-Powered Mob Design**: Integrated LLM assistant to help you rewrite and refine mob specifications using natural language.
 - **Multi-Mob Management**: Sidebar interface to manage multiple custom entities in a single bundle.
-- **Automated Bundling**: Instantly generate `.mcaddon`, `.mcworld`, and individual `.mcpack` files.
+- **Automated Bundling**: Instantly generate `.mcaddon`, `.mcworld`, and individual `.mcpack` files..
 - **Custom Textures**: Built-in Pixel Painter to design your mob skins directly in the browser.
 - **Pack Merging**: Upload existing packs to merge them into your custom project.
 
