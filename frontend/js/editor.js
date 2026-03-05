@@ -106,6 +106,13 @@ async function selectMob(name) {
   
   setStatus(`Loaded ${name} at ` + new Date().toLocaleTimeString());
   
+  // Show inspiration mobs if this was AI-generated
+  if (spec._inspiration_mobs && spec._inspiration_mobs.length > 0) {
+    const inspirationList = spec._inspiration_mobs.slice(0, 3).join(", ");
+    const more = spec._inspiration_mobs.length > 3 ? ` +${spec._inspiration_mobs.length - 3} more` : "";
+    setStatus(`${name} - inspired by: ${inspirationList}${more}`);
+  }
+  
   // Update UI active state
   document.querySelectorAll(".mob-item").forEach(el => {
     el.classList.toggle("active", el.querySelector(".mob-name").textContent === name);
