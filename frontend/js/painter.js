@@ -16,8 +16,10 @@ const painterWrapper = document.querySelector(".painter-canvas-wrapper");
 
 let isDrawing = false;
 let currentTool = "pencil";
-const GRID_SIZE = 64;
-const SCALE = canvas.width / GRID_SIZE;
+let gridWidth = 64;
+let gridHeight = 64;
+let scaleX = canvas ? canvas.width / gridWidth : 1;
+let scaleY = canvas ? canvas.height / gridHeight : 1;
 
 // Painter Logic
 function initPainter() {
@@ -34,15 +36,15 @@ function initPainter() {
   const draw = (e) => {
     if (!isDrawing) return;
     const rect = canvas.getBoundingClientRect();
-    const x = Math.floor((e.clientX - rect.left) / (rect.width / GRID_SIZE));
-    const y = Math.floor((e.clientY - rect.top) / (rect.height / GRID_SIZE));
+    const x = Math.floor((e.clientX - rect.left) / (rect.width / gridWidth));
+    const y = Math.floor((e.clientY - rect.top) / (rect.height / gridHeight));
 
     if (currentTool === "pencil") {
       ctx.fillStyle = painterColor.value;
-      ctx.fillRect(x * SCALE, y * SCALE, SCALE, SCALE);
+      ctx.fillRect(x * scaleX, y * scaleY, scaleX, scaleY);
     } else {
       ctx.fillStyle = "#ffffff";
-      ctx.fillRect(x * SCALE, y * SCALE, SCALE, SCALE);
+      ctx.fillRect(x * scaleX, y * scaleY, scaleX, scaleY);
     }
   };
 
@@ -88,13 +90,13 @@ function initPainter() {
     
     console.log('[Painter] Auto-saving texture for:', mobName);
     
-    // Create a temporary 64x64 canvas to export the actual image
+    // Create a temporary canvas at the actual texture dimensions to export
     const tempCanvas = document.createElement("canvas");
-    tempCanvas.width = GRID_SIZE;
-    tempCanvas.height = GRID_SIZE;
+    tempCanvas.width = gridWidth;
+    tempCanvas.height = gridHeight;
     const tempCtx = tempCanvas.getContext("2d");
     tempCtx.imageSmoothingEnabled = false;
-    tempCtx.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, GRID_SIZE, GRID_SIZE);
+    tempCtx.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, gridWidth, gridHeight);
     
     // Save to localStorage as base64
     const base64Data = tempCanvas.toDataURL("image/png");
@@ -160,6 +162,35 @@ function updateToolUI() {
   painterEraser.classList.toggle("secondary", currentTool !== "eraser");
 }
 
+// Update painter grid dimensions to match the geometry's texture size.
+// Called from editor.js when a mob is selected so the painter exports at the
+// correct resolution (e.g. 64x32 for chicken instead of always 64x64).
+function setPainterDimensions(w, h) {
+  if (!canvas) return;
+  gridWidth = w || 64;
+  gridHeight = h || 64;
+
+  // Resize the canvas element to maintain pixel-perfect aspect ratio.
+  // Keep the wider axis at 384px and scale the other proportionally.
+  const maxPx = 384;
+  if (gridWidth >= gridHeight) {
+    canvas.width = maxPx;
+    canvas.height = Math.round(maxPx * (gridHeight / gridWidth));
+  } else {
+    canvas.height = maxPx;
+    canvas.width = Math.round(maxPx * (gridWidth / gridHeight));
+  }
+
+  scaleX = canvas.width / gridWidth;
+  scaleY = canvas.height / gridHeight;
+
+  // Update the hint label
+  const hint = document.querySelector(".painter-layout")?.closest(".content-card")?.querySelector(".hint");
+  if (hint) hint.textContent = `Paint the ${gridWidth}x${gridHeight} skin for the selected mob.`;
+
+  console.log(`[Painter] Dimensions set to ${gridWidth}x${gridHeight}, canvas ${canvas.width}x${canvas.height}`);
+}
+
 async function loadTextureIntoPainter(name) {
   if (!name) return;
   
@@ -188,8 +219,34 @@ async function loadTextureIntoPainter(name) {
     return;
   }
   
-  // Fallback: Check if mob spec has a color_rgb defined
+  // Fallback: try to fetch vanilla texture from Mojang repo if mob has a template base
   const spec = getUserMob(name);
+  if (spec && typeof fetchTemplateTexture === 'function') {
+    const base = spec._template_base || (spec.short_name || name).replace(/_custom$/, '');
+    if (base) {
+      const remoteTex = await fetchTemplateTexture(base);
+      if (remoteTex) {
+        saveUserMobTexture(name, remoteTex);
+        const img = new Image();
+        img.onload = () => {
+          ctx.fillStyle = "#ffffff";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.imageSmoothingEnabled = false;
+          const scale = Math.min(canvas.width / img.width, canvas.height / img.height);
+          const dw = img.width * scale;
+          const dh = img.height * scale;
+          const dx = (canvas.width - dw) / 2;
+          const dy = (canvas.height - dh) / 2;
+          ctx.drawImage(img, 0, 0, img.width, img.height, dx, dy, dw, dh);
+          painterWrapper?.classList.add("texture-loaded");
+        };
+        img.src = remoteTex;
+        return;
+      }
+    }
+  }
+
+  // Fallback: Check if mob spec has a color_rgb defined
   if (spec && spec.color_rgb) {
     const [r, g, b] = spec.color_rgb;
     ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;

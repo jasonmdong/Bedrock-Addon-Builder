@@ -19,6 +19,7 @@ from backend.schemas.spec_utils import (
     validate_spec, SpecValidationError
 )
 from backend.llm.llm import llm_rewrite_spec, llm_generate_geometry
+from backend.llm.category_context import CATEGORIES, CATEGORY_LABELS
 from backend.core.packaging import build_addon
 from backend.core.builders import make_png_rgba
 
@@ -151,6 +152,53 @@ async def get_all_template_mob_names():
         raise HTTPException(status_code=500, detail=f"Failed to fetch mobs: {str(e)}")
 
 
+def _normalize_geometry(geometry_data: dict) -> dict:
+    """Convert old-format Bedrock geometry (geometry.X: {...}) to the modern
+    minecraft:geometry array format so all downstream code can use a single check.
+    Old format example:  {"format_version": "1.8.0", "geometry.bat": { ... }}
+    New format example:  {"format_version": "1.21.0", "minecraft:geometry": [{"description": {"identifier": "geometry.bat", ...}, "bones": [...]}]}
+    """
+    if "minecraft:geometry" in geometry_data:
+        return geometry_data  # already new format
+
+    converted_entries = []
+    for key, value in geometry_data.items():
+        if key == "format_version":
+            continue
+        if not key.startswith("geometry.") or not isinstance(value, dict):
+            continue
+        # Build a new-format entry from the old-format block
+        desc = {"identifier": key}
+        # Carry over description-level fields
+        for field in ("texturewidth", "texture_width"):
+            if field in value:
+                desc["texture_width"] = value[field]
+        for field in ("textureheight", "texture_height"):
+            if field in value:
+                desc["texture_height"] = value[field]
+        for field in ("visible_bounds_width", "visible_bounds_height", "visible_bounds_offset"):
+            if field in value:
+                desc[field] = value[field]
+        # Ensure texture dimensions are present (required for proper UV mapping)
+        if "texture_width" not in desc:
+            desc["texture_width"] = 64
+        if "texture_height" not in desc:
+            desc["texture_height"] = 64
+        entry = {"description": desc}
+        if "bones" in value:
+            entry["bones"] = value["bones"]
+        converted_entries.append(entry)
+
+    if not converted_entries:
+        return geometry_data  # nothing to convert
+
+    print(f"[GEOMETRY] Converted old-format geometry keys: {[e['description']['identifier'] for e in converted_entries]}")
+    return {
+        "format_version": geometry_data.get("format_version", "1.12.0"),
+        "minecraft:geometry": converted_entries
+    }
+
+
 async def generate_mob_from_similar(payload: dict = Body(...)):
     """Generate a new mob spec using AI based on similar mobs in the database.
     
@@ -212,6 +260,29 @@ async def generate_mob_from_similar(payload: dict = Body(...)):
         safe_name = custom_name.lower().replace(" ", "_").replace("-", "_")
         safe_name = ''.join(c for c in safe_name if c.isalnum() or c == '_')
         
+        # Use the most similar mob as the template base for geometry
+        template_base = None
+        template_geometry = "geometry.cow"  # fallback
+        if similar_mobs:
+            best_match = similar_mobs[0]  # highest similarity first
+            template_base = best_match.get("mob_name")
+            # Try to get geometry identifier from the similar mob
+            mob_geo = best_match.get("mob_geometry", {})
+            if isinstance(mob_geo, dict):
+                # Try minecraft:geometry format first
+                mc_geo = mob_geo.get("minecraft:geometry", [])
+                if mc_geo and len(mc_geo) > 0:
+                    geo_id = mc_geo[0].get("description", {}).get("identifier")
+                    if geo_id:
+                        template_geometry = geo_id
+                # Fallback to description.identifier
+                elif mob_geo.get("description", {}).get("identifier"):
+                    template_geometry = mob_geo["description"]["identifier"]
+            # If still no geometry, use geometry.{mob_name}
+            if template_geometry == "geometry.cow" and template_base:
+                template_geometry = f"geometry.{template_base}"
+            print(f"[AI-GEN] Using template base: {template_base}, geometry: {template_geometry}")
+        
         system_prompt = """You are a Minecraft Bedrock mob generator. Generate a valid mob specification JSON based on the user's description and the example mobs provided.
 
 The output must be a valid JSON object with these required fields:
@@ -222,15 +293,17 @@ The output must be a valid JSON object with these required fields:
 - damage: number (0-128)
 - speed: number (0-2)
 - collision_box: object with width (0.1-5) and height (0.5-5)
-- geometry: string (geometry identifier like "geometry.cow")
+- geometry: string (geometry identifier - DO NOT change this, use the provided value)
 - scale: number (0.2-5.0)
 - components: object (Bedrock behavior components)
 
-Use the example mobs as inspiration for appropriate stats and components. Match the complexity and style of similar creatures."""
+Use the example mobs as inspiration for appropriate stats and components. Match the complexity and style of similar creatures.
+IMPORTANT: Keep the geometry field exactly as provided - do not invent new geometry identifiers."""
 
         user_prompt = f"""Create a mob matching this description: "{query}"
 
 The mob should be named "{custom_name}" (short_name: "{safe_name}")
+The geometry is already set to: "{template_geometry}" - do not change this.
 
 Example similar mobs for reference:
 {json.dumps(examples_context, indent=2)}
@@ -242,6 +315,9 @@ Generate a complete mob specification JSON. Only output the JSON, no explanation
         base_spec["identifier"] = f"custom:{safe_name}"
         base_spec["display_name"] = custom_name.title()
         base_spec["short_name"] = safe_name
+        base_spec["geometry"] = template_geometry
+        if template_base:
+            base_spec["_template_base"] = template_base
         
         try:
             generated_spec = llm_rewrite_spec(
@@ -254,10 +330,13 @@ Generate a complete mob specification JSON. Only output the JSON, no explanation
             print(f"[AI-GEN] LLM generation failed: {llm_err}")
             generated_spec = base_spec
         
-        # Ensure the spec has the correct naming
+        # Ensure the spec has the correct naming and template base
         generated_spec["identifier"] = f"custom:{safe_name}"
         generated_spec["display_name"] = custom_name.title()
         generated_spec["short_name"] = safe_name
+        generated_spec["geometry"] = template_geometry  # Keep the matched geometry
+        if template_base:
+            generated_spec["_template_base"] = template_base  # For frontend geometry fetch
         
         return {
             "mob": generated_spec,
@@ -352,27 +431,66 @@ async def generate_complete_mob(payload: dict = Body(...)):
         
         print(f"[AI-COMPLETE] Found {len(similar_mobs)} similar mobs: {similar_names}")
         
-        # Step 2: AI "Thinking" - Analyze what features this mob should have
-        thinking_prompt = f"""Analyze the mob name "{mob_name}" and determine what features it should have.
+        # Step 2: AI "Thinking" - Analyze what features this mob should have based on real-world characteristics
+        thinking_prompt = f"""Analyze the mob name "{mob_name}" and determine what REAL-WORLD physical features it should have.
 
-Consider:
-1. What type of creature is this? (humanoid, quadruped, flying, aquatic, multi-limbed, etc.)
-2. What special abilities might it have based on the name?
-3. What stat ranges would be appropriate? (HP, damage, speed, scale)
-4. What Bedrock behavior components would fit?
-5. What body parts would it need in geometry? (head, body, limbs, wings, tail, etc.)
+Think about what this creature would look like in real life or fantasy:
+
+1. BODY STRUCTURE:
+   - What type of creature is this? (humanoid, quadruped, biped, flying, aquatic, insect, serpentine, etc.)
+   - How many legs does it have? (0, 2, 4, 6, 8, or more?)
+   - Does it have arms/front limbs separate from legs?
+   - What is its general body shape? (bulky, slender, round, elongated?)
+
+2. DISTINCTIVE FEATURES - What makes this creature UNIQUE and recognizable?
+   - Examples: elephants have long trunks and big ears, rhinos have horns, birds have beaks and wings
+   - Does it have a tail? What kind? (long thin tail, bushy tail, armored tail, etc.)
+   - Does it have horns, antlers, tusks, or spikes?
+   - Does it have wings, fins, or special appendages?
+   - Does it have a distinctive head shape? (long snout, beak, mandibles, multiple eyes?)
+   - Any special body parts? (shell, armor plates, tentacles, stinger, claws?)
+
+3. PROPORTIONS:
+   - Is the head large or small relative to body?
+   - Are the limbs long or short, thick or thin?
+   - What's the rough scale compared to a human? (tiny insect, cat-sized, human-sized, elephant-sized?)
+
+4. STATS & BEHAVIOR:
+   - HP (1-2048): Based on size and toughness
+   - Damage (0-128): Based on natural weapons
+   - Speed (0-2): Based on how fast it would move
+   - What Bedrock behavior components fit? (can_fly, shooter, explode, tameable, etc.)
 
 Similar mobs from database for reference:
 {json.dumps(examples_context, indent=2)}
 
-Output a JSON object with:
+Output a JSON object with DETAILED body part list:
 {{
-  "creature_type": "description of creature type",
-  "body_parts": ["list", "of", "body", "parts", "needed"],
-  "special_features": ["list", "of", "special", "features"],
+  "creature_type": "detailed description (e.g., 'large quadruped mammal with trunk')",
+  "body_parts": ["DETAILED list - include ALL distinct parts like: body, head, trunk, left_ear, right_ear, leg_front_left, leg_front_right, leg_back_left, leg_back_right, tail, tusk_left, tusk_right"],
+  "distinctive_features": {{
+    "has_trunk": false,
+    "has_tail": true,
+    "tail_type": "thin/bushy/armored",
+    "has_wings": false,
+    "has_horns": false,
+    "horn_count": 0,
+    "leg_count": 4,
+    "has_ears": true,
+    "ear_type": "normal/large/pointed",
+    "has_beak": false,
+    "has_shell": false,
+    "extra_features": ["any other unique parts"]
+  }},
+  "proportions": {{
+    "head_size": "small/medium/large relative to body",
+    "body_shape": "bulky/slender/round",
+    "limb_thickness": "thin/medium/thick",
+    "overall_scale": 1.0
+  }},
   "suggested_stats": {{"hp": number, "damage": number, "speed": number, "scale": number}},
   "behavior_components": ["list", "of", "minecraft:behavior", "components"],
-  "reasoning": "brief explanation of your analysis"
+  "reasoning": "explanation of why you chose these features based on real-world or fantasy inspiration"
 }}"""
 
         analysis = None
@@ -390,9 +508,28 @@ Output a JSON object with:
         except Exception as e:
             print(f"[AI-COMPLETE] Analysis step failed: {e}, using defaults")
             analysis = {
-                "creature_type": "quadruped",
-                "body_parts": ["body", "head", "leg0", "leg1", "leg2", "leg3"],
-                "special_features": [],
+                "creature_type": "generic quadruped creature",
+                "body_parts": ["root", "body", "head", "leg_front_left", "leg_front_right", "leg_back_left", "leg_back_right", "tail"],
+                "distinctive_features": {
+                    "has_trunk": False,
+                    "has_tail": True,
+                    "tail_type": "thin",
+                    "has_wings": False,
+                    "has_horns": False,
+                    "horn_count": 0,
+                    "leg_count": 4,
+                    "has_ears": True,
+                    "ear_type": "normal",
+                    "has_beak": False,
+                    "has_shell": False,
+                    "extra_features": []
+                },
+                "proportions": {
+                    "head_size": "medium",
+                    "body_shape": "medium",
+                    "limb_thickness": "medium",
+                    "overall_scale": 1.0
+                },
                 "suggested_stats": {"hp": 20, "damage": 4, "speed": 0.3, "scale": 1.0},
                 "behavior_components": [],
                 "reasoning": "Using default quadruped structure"
@@ -458,27 +595,60 @@ Generate a complete mob specification JSON with appropriate components for this 
         generated_spec["short_name"] = safe_name
         generated_spec["geometry"] = f"geometry.{safe_name}"
         
-        # Step 4: Generate geometry JSON
+        # Step 4: Generate geometry JSON with detailed body parts
         body_parts = analysis.get("body_parts", ["body", "head"]) if analysis else ["body", "head"]
         creature_type = analysis.get("creature_type", "quadruped") if analysis else "quadruped"
+        distinctive_features = analysis.get("distinctive_features", {}) if analysis else {}
+        proportions = analysis.get("proportions", {}) if analysis else {}
         
-        geometry_prompt = f"""Generate Minecraft Bedrock geometry JSON for a "{display_name}" mob.
+        geometry_prompt = f"""Generate detailed Minecraft Bedrock geometry JSON for a "{display_name}" mob.
 
-Creature type: {creature_type}
-Required body parts: {body_parts}
+=== CREATURE ANALYSIS ===
+Type: {creature_type}
+Body parts to create: {body_parts}
 Scale: {generated_spec.get('scale', 1.0)}
-Special features: {analysis.get('special_features', []) if analysis else []}
 
-The geometry identifier should be "geometry.{safe_name}".
+=== DISTINCTIVE FEATURES ===
+{json.dumps(distinctive_features, indent=2)}
 
-Example bone structures from similar mobs:
+=== PROPORTIONS ===
+{json.dumps(proportions, indent=2)}
+
+=== GEOMETRY REQUIREMENTS ===
+The geometry identifier MUST be "geometry.{safe_name}".
+
+Create a bone for EACH body part listed above. Examples:
+- For an elephant: body, head, trunk (multiple segments), left_ear, right_ear, 4 legs, tail, tusks
+- For a spider: body, head, 8 legs, fangs, abdomen
+- For a dragon: body, head, neck, 4 legs, 2 wings (with wing segments), tail (multiple segments), horns
+
+=== BONE HIERARCHY RULES ===
+1. Start with a "root" bone at pivot [0, 0, 0]
+2. "body" is a child of "root" - this is the main torso
+3. "head" is a child of "body" (or "neck" if it has one)
+4. Legs are children of "body" - name them: leg_front_left, leg_front_right, leg_back_left, leg_back_right (or leg0, leg1, etc.)
+5. Arms/wings attach to "body" near the top
+6. Tail attaches to "body" at the back
+7. Special features (horns, ears, trunk) attach to their parent part
+
+=== CUBE SIZING GUIDELINES ===
+- Body: largest cube, typically 8-16 units wide
+- Head: 4-8 units, proportional to body
+- Legs: 2-4 units wide, length based on creature height
+- Tail: starts thick (2-3 units), tapers to thin (1 unit)
+- Trunk/tentacles: multiple segments, each smaller than the last
+- Wings: flat and wide, 1-2 units thick but 8-16 units span
+- Ears: thin (1-2 units thick), size based on ear_type
+
+=== SIMILAR MOB BONE STRUCTURES FOR REFERENCE ===
 {json.dumps(geometry_examples[:3], indent=2)}
 
-Create a complete, valid minecraft:geometry JSON with appropriate bones and cubes for this creature.
-- Use proper parent-child bone hierarchy
-- Include realistic sizes and pivots
-- Add cubes with proper UV coordinates
-- Make proportions match a {creature_type} body type"""
+Output ONLY valid minecraft:geometry JSON with:
+- format_version: "1.12.0"
+- texture_width/height: 64 or 128 (larger for complex mobs)
+- A bone with cubes for EVERY body part listed
+- Proper pivot points so parts rotate naturally
+- UV coordinates that don't overlap (spread across the texture)"""
 
         try:
             generated_geometry = llm_generate_geometry(
@@ -499,7 +669,7 @@ Create a complete, valid minecraft:geometry JSON with appropriate bones and cube
             print(f"[AI-COMPLETE] Geometry generated successfully")
         except Exception as e:
             print(f"[AI-COMPLETE] Geometry generation failed: {e}, using fallback")
-            # Fallback to basic geometry
+            # Fallback to a proper quadruped geometry with 4 legs and tail
             generated_geometry = {
                 "format_version": "1.12.0",
                 "minecraft:geometry": [{
@@ -507,16 +677,26 @@ Create a complete, valid minecraft:geometry JSON with appropriate bones and cube
                         "identifier": f"geometry.{safe_name}",
                         "texture_width": 64,
                         "texture_height": 64,
-                        "visible_bounds_width": 2,
-                        "visible_bounds_height": 2,
+                        "visible_bounds_width": 3,
+                        "visible_bounds_height": 2.5,
                         "visible_bounds_offset": [0, 1, 0]
                     },
                     "bones": [
                         {"name": "root", "pivot": [0, 0, 0]},
-                        {"name": "body", "parent": "root", "pivot": [0, 12, 0], 
-                         "cubes": [{"origin": [-4, 8, -3], "size": [8, 8, 6], "uv": [0, 0]}]},
-                        {"name": "head", "parent": "body", "pivot": [0, 16, -3],
-                         "cubes": [{"origin": [-3, 16, -6], "size": [6, 6, 6], "uv": [0, 14]}]}
+                        {"name": "body", "parent": "root", "pivot": [0, 13, 0], 
+                         "cubes": [{"origin": [-5, 10, -7], "size": [10, 8, 14], "uv": [0, 0]}]},
+                        {"name": "head", "parent": "body", "pivot": [0, 18, -7],
+                         "cubes": [{"origin": [-4, 14, -13], "size": [8, 8, 8], "uv": [0, 22]}]},
+                        {"name": "leg_front_left", "parent": "body", "pivot": [-3, 10, -5],
+                         "cubes": [{"origin": [-5, 0, -6], "size": [4, 10, 4], "uv": [40, 0]}]},
+                        {"name": "leg_front_right", "parent": "body", "pivot": [3, 10, -5],
+                         "cubes": [{"origin": [1, 0, -6], "size": [4, 10, 4], "uv": [40, 14]}]},
+                        {"name": "leg_back_left", "parent": "body", "pivot": [-3, 10, 5],
+                         "cubes": [{"origin": [-5, 0, 4], "size": [4, 10, 4], "uv": [0, 38]}]},
+                        {"name": "leg_back_right", "parent": "body", "pivot": [3, 10, 5],
+                         "cubes": [{"origin": [1, 0, 4], "size": [4, 10, 4], "uv": [16, 38]}]},
+                        {"name": "tail", "parent": "body", "pivot": [0, 14, 7],
+                         "cubes": [{"origin": [-1, 12, 7], "size": [2, 2, 6], "uv": [32, 38]}]}
                     ]
                 }]
             }
@@ -546,6 +726,8 @@ async def fetch_mob_geometry(mob_name: str):
     Searches for all .geo.json files containing the mob_name (with version numbers/descriptors),
     and fetches the most recently updated one. Results are cached locally to avoid
     burning through the GitHub API rate limit (60 req/hr unauthenticated).
+    Old-format geometry files are automatically normalized to the modern
+    minecraft:geometry array format.
     """
     if not mob_name:
         raise HTTPException(status_code=400, detail="mob_name is required")
@@ -579,6 +761,7 @@ async def fetch_mob_geometry(mob_name: str):
                     except (json.JSONDecodeError, ValueError):
                         continue
 
+                    geometry_data = _normalize_geometry(geometry_data)
                     result = {
                         "geometry": geometry_data,
                         "url": raw_url,
@@ -620,7 +803,7 @@ async def fetch_mob_geometry(mob_name: str):
             if response.status_code != 200:
                 raise HTTPException(status_code=response.status_code, detail="Failed to fetch geometry file")
 
-            geometry_data = response.json()
+            geometry_data = _normalize_geometry(response.json())
             result = {
                 "geometry": geometry_data,
                 "url": raw_url,
@@ -740,33 +923,48 @@ def llm_spec_editor(payload: dict = Body(...)):
         raise HTTPException(status_code=400, detail="prompt is required")
     provider = data.get("provider")
     api_key = data.get("api_key")
+    category = data.get("category", "entity_logic_ai")
     current = data.get("current_spec") or data.get("spec")
     if not current:
         current = read_current_spec()
 
-    print(f"[LLM] provider={provider} prompt_len={len(str(prompt).strip())}")
+    print(f"[LLM] provider={provider} category={category} prompt_len={len(str(prompt).strip())}")
 
     # if server running in local dev mode prefer mock to avoid external calls
     if LOCAL_LLM_DEV and not provider:
         return llm_spec_mock(payload)
 
     try:
-        updated = llm_rewrite_spec(prompt, current, provider, api_key)
+        updated = llm_rewrite_spec(prompt, current, provider, api_key, category=category)
     except SpecValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except RuntimeError as exc:
         print(f"[LLM] error: {exc}")
         raise HTTPException(status_code=500, detail=str(exc))
 
+    # Extract internal metadata before saving (don't persist it)
+    mcp_meta = updated.pop("_mcp_meta", None) if updated else None
+    texture_b64 = updated.pop("_texture_b64", "") if updated else ""
+
     if data.get("save"):
         try:
             name = updated.get("short_name") or "current"
             saved = write_mob_spec(name, updated)
-            return {"spec": saved, "saved": True}
+            result = {"spec": saved, "saved": True}
+            if mcp_meta:
+                result["mcp"] = mcp_meta
+            if texture_b64:
+                result["texture_b64"] = texture_b64
+            return result
         except SpecValidationError as exc:
             raise HTTPException(status_code=422, detail=str(exc))
 
-    return {"spec": updated, "saved": False}
+    result = {"spec": updated, "saved": False}
+    if mcp_meta:
+        result["mcp"] = mcp_meta
+    if texture_b64:
+        result["texture_b64"] = texture_b64
+    return result
 
 
 def llm_geometry_generate(payload: dict = Body(...)):
@@ -775,23 +973,31 @@ def llm_geometry_generate(payload: dict = Body(...)):
     prompt = data.get("prompt") or ""
     if not prompt or not str(prompt).strip():
         raise HTTPException(status_code=400, detail="prompt is required")
-    
+
     provider = data.get("provider")
     api_key = data.get("api_key")
     current_geometry = data.get("current_geometry")
-    
-    print(f"[LLM-GEOMETRY] provider={provider} prompt_len={len(str(prompt).strip())}")
-    
+    mob_name = data.get("mob_name", "custom_mob")
+
+    print(f"[LLM-GEOMETRY] provider={provider} prompt_len={len(str(prompt).strip())} mob={mob_name}")
+
     try:
-        geometry = llm_generate_geometry(prompt, current_geometry, provider, api_key)
+        geometry = llm_generate_geometry(prompt, current_geometry, provider, api_key, mob_name=mob_name)
     except RuntimeError as exc:
         print(f"[LLM-GEOMETRY] error: {exc}")
         raise HTTPException(status_code=500, detail=str(exc))
     except Exception as exc:
         print(f"[LLM-GEOMETRY] unexpected error: {exc}")
         raise HTTPException(status_code=500, detail=str(exc))
-    
-    return {"geometry": geometry}
+
+    texture_b64 = geometry.pop("_texture_b64", "") if geometry else ""
+    mcp_design = geometry.pop("_mcp_design", False) if geometry else False
+
+    result = {"geometry": geometry}
+    if texture_b64:
+        result["texture_b64"] = texture_b64
+        result["mcp_texture"] = True
+    return result
 
 def llm_spec_mock(payload: dict = Body(...)):
     data = payload or {}
@@ -886,6 +1092,14 @@ def serve_js(filename: str):
 def healthz():
     """Health check endpoint."""
     return PlainTextResponse("ok")
+
+
+def get_llm_categories():
+    """Return available LLM content categories for the frontend dropdown."""
+    return {"categories": [
+        {"id": cat, "label": CATEGORY_LABELS.get(cat, cat)}
+        for cat in CATEGORIES
+    ]}
 
 
 def build_form(resource: Optional[UploadFile] = File(None),

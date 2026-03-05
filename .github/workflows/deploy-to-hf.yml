@@ -21,5 +21,5 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git push https://jasonmdong:${HF_TOKEN}@huggingface.co/spaces/jasonmdong/baobuilder main --force
+          git push https://CrpMsftNerds:${HF_TOKEN}@huggingface.co/spaces/CrpMsftNerds/baobuilder main --force
 

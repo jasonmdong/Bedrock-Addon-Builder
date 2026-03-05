@@ -67,14 +67,16 @@ async function loadMobList() {
     mobListEl.appendChild(li);
   });
   
-  // If current mob is gone, pick another
+  // If current mob is gone, update the variable but don't call selectMob here —
+  // loadSpec() handles initial selection and avoids double geometry fetches.
   if (mobNames.length > 0 && !mobNames.includes(currentMobName)) {
-    selectMob(mobNames[0]);
+    currentMobName = mobNames[0];
   }
 }
 
 async function selectMob(name) {
   currentMobName = name;
+  localStorage.setItem("builder_current_mob", name);
   setStatus(`Loading ${name}...`);
   
   const spec = getUserMob(name);
@@ -104,10 +106,32 @@ async function selectMob(name) {
   
   setStatus(`Loaded ${name} at ` + new Date().toLocaleTimeString());
   
+  // Show inspiration mobs if this was AI-generated
+  if (spec._inspiration_mobs && spec._inspiration_mobs.length > 0) {
+    const inspirationList = spec._inspiration_mobs.slice(0, 3).join(", ");
+    const more = spec._inspiration_mobs.length > 3 ? ` +${spec._inspiration_mobs.length - 3} more` : "";
+    setStatus(`${name} - inspired by: ${inspirationList}${more}`);
+  }
+  
   // Update UI active state
   document.querySelectorAll(".mob-item").forEach(el => {
     el.classList.toggle("active", el.querySelector(".mob-name").textContent === name);
   });
+
+  // Extract texture dimensions from geometry and update painter canvas size
+  try {
+    const geoJson = spec.geometry_json;
+    if (geoJson && geoJson["minecraft:geometry"] && geoJson["minecraft:geometry"][0]) {
+      const desc = geoJson["minecraft:geometry"][0].description || {};
+      const tw = desc.texture_width || 64;
+      const th = desc.texture_height || 64;
+      setPainterDimensions(tw, th);
+    } else {
+      setPainterDimensions(64, 64);
+    }
+  } catch (e) {
+    setPainterDimensions(64, 64);
+  }
 
   // Load texture into painter automatically
   loadTextureIntoPainter(name);
