@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Mob Forge — Create custom Minecraft Bedrock mobs with AI">
+    <title>⚒️ Mob Forge — Minecraft Mob Creator</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+
+<body>
+    <!-- ─── Background Particles ─── -->
+    <div class="bg-particles" id="bgParticles"></div>
+
+    <!-- ─── Header ─── -->
+    <header class="app-header">
+        <div class="header-content">
+            <div class="logo">
+                <span class="logo-icon">⚒️</span>
+                <h1>Mob Forge</h1>
+                <span class="logo-badge">BEDROCK</span>
+            </div>
+            <nav class="tabs" id="mainTabs">
+                <button class="tab active" data-tab="create" id="tabCreate">
+                    <span class="tab-icon">✨</span>
+                    <span class="tab-label">Create</span>
+                </button>
+                <button class="tab" data-tab="gallery" id="tabGallery">
+                    <span class="tab-icon">🖼️</span>
+                    <span class="tab-label">Gallery</span>
+                    <span class="tab-count" id="galleryCount">0</span>
+                </button>
+                <button class="tab" data-tab="textures" id="tabTextures">
+                    <span class="tab-icon">🎨</span>
+                    <span class="tab-label">Textures</span>
+                </button>
+                <button class="tab" data-tab="build" id="tabBuild">
+                    <span class="tab-icon">📦</span>
+                    <span class="tab-label">Build Pack</span>
+                </button>
+            </nav>
+        </div>
+    </header>
+
+    <!-- ─── Main Content ─── -->
+    <main class="app-main">
+
+        <!-- ─── Create Tab ─── -->
+        <section class="tab-content active" id="contentCreate">
+            <div class="create-container">
+                <div class="create-prompt-zone">
+                    <h2 class="section-title">Forge a New Mob</h2>
+                    <p class="section-desc">Describe your dream Minecraft mob. Our AI will generate a complete Bedrock
+                        entity with behaviors, stats, and textures.</p>
+
+                    <div class="prompt-card">
+                        <div class="prompt-input-wrapper">
+                            <textarea id="mobDescription"
+                                placeholder="A fire-breathing dragon that flies, has 100 HP, and drops diamonds..."
+                                rows="3"></textarea>
+                        </div>
+                        <div class="prompt-controls">
+                            <div class="difficulty-selector">
+                                <label>Difficulty</label>
+                                <div class="difficulty-buttons">
+                                    <button class="diff-btn" data-diff="easy" id="diffEasy">Easy</button>
+                                    <button class="diff-btn active" data-diff="medium" id="diffMedium">Medium</button>
+                                    <button class="diff-btn" data-diff="hard" id="diffHard">Hard</button>
+                                </div>
+                            </div>
+                            <button class="btn btn-primary btn-forge" id="btnGenerate">
+                                <span class="btn-icon">⚒️</span>
+                                <span>Forge Mob</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Loading state -->
+                    <div class="loading-state hidden" id="createLoading">
+                        <div class="forge-animation">
+                            <div class="anvil">⚒️</div>
+                            <div class="sparks">
+                                <span>✦</span><span>✦</span><span>✦</span>
+                            </div>
+                        </div>
+                        <p class="loading-text">Forging your mob...</p>
+                    </div>
+
+                    <!-- Quick Prompts -->
+                    <div class="quick-prompts">
+                        <span class="quick-label">Try:</span>
+                        <button class="quick-btn"
+                            data-prompt="A giant ice golem with 200 HP that freezes enemies on touch">🧊 Ice
+                            Golem</button>
+                        <button class="quick-btn" data-prompt="A tiny mushroom creature that heals nearby players">🍄
+                            Shroom Buddy</button>
+                        <button class="quick-btn" data-prompt="A shadowy wraith that teleports and attacks at night">👻
+                            Shadow Wraith</button>
+                        <button class="quick-btn" data-prompt="A fire-breathing dragon that flies and drops diamonds">🐉
+                            Fire Dragon</button>
+                    </div>
+                </div>
+
+                <!-- Result area -->
+                <div class="create-results" id="createResults">
+                    <!-- Mob cards will be inserted here -->
+                </div>
+            </div>
+        </section>
+
+        <!-- ─── Gallery Tab ─── -->
+        <section class="tab-content" id="contentGallery">
+            <div class="gallery-header">
+                <h2 class="section-title">Mob Gallery</h2>
+                <p class="section-desc">All your generated mobs. Click on a mob to see its full details.</p>
+            </div>
+            <div class="gallery-grid" id="galleryGrid">
+                <div class="gallery-empty" id="galleryEmpty">
+                    <span class="empty-icon">🏗️</span>
+                    <p>No mobs yet. Go to <strong>Create</strong> to forge your first mob!</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- ─── Textures Tab ─── -->
+        <section class="tab-content" id="contentTextures">
+            <div class="texture-studio">
+                <h2 class="section-title">Texture Studio</h2>
+                <p class="section-desc">Generate and preview pixel-art textures for your mobs.</p>
+
+                <div class="texture-layout">
+                    <div class="texture-controls-panel">
+                        <div class="form-group">
+                            <label for="texMobSelect">Select Mob</label>
+                            <select id="texMobSelect">
+                                <option value="">-- Choose a mob --</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="texStyle">Body Style</label>
+                            <select id="texStyle">
+                                <option value="biped">Biped (humanoid)</option>
+                                <option value="quadruped">Quadruped (4 legs)</option>
+                                <option value="dragon">Dragon (winged)</option>
+                                <option value="slime">Slime (blobby)</option>
+                                <option value="spider">Spider (8 legs)</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Color Palette</label>
+                            <div class="color-palette" id="colorPalette">
+                                <input type="color" class="color-pick" value="#4A7023" data-index="0">
+                                <input type="color" class="color-pick" value="#2E4F1E" data-index="1">
+                                <input type="color" class="color-pick" value="#1A2E0F" data-index="2">
+                                <button class="btn btn-sm btn-add-color" id="btnAddColor">+</button>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Size</label>
+                            <div class="size-buttons">
+                                <button class="size-btn active" data-size="16" id="size16">16×16</button>
+                                <button class="size-btn" data-size="32" id="size32">32×32</button>
+                            </div>
+                        </div>
+                        <button class="btn btn-primary" id="btnGenTexture">
+                            <span class="btn-icon">🎨</span>
+                            Generate Texture
+                        </button>
+                    </div>
+
+                    <div class="texture-preview-panel">
+                        <div class="texture-canvas-wrapper">
+                            <canvas id="textureCanvas" width="256" height="256"></canvas>
+                            <div class="texture-placeholder" id="texPlaceholder">
+                                <span>🎨</span>
+                                <p>Generate a texture to see a preview</p>
+                            </div>
+                        </div>
+                        <div class="texture-info" id="textureInfo"></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ─── Build Pack Tab ─── -->
+        <section class="tab-content" id="contentBuild">
+            <div class="build-container">
+                <h2 class="section-title">Build Addon Pack</h2>
+                <p class="section-desc">Select mobs from your gallery to package into downloadable <code>.mcpack</code>
+                    files for Minecraft Bedrock.</p>
+
+                <div class="build-layout">
+                    <div class="build-select-panel">
+                        <div class="form-group">
+                            <label for="packName">Pack Name</label>
+                            <input type="text" id="packName" placeholder="my_awesome_mobs" value="custom_mobs">
+                        </div>
+                        <h3 class="build-subtitle">Select Mobs</h3>
+                        <div class="build-mob-list" id="buildMobList">
+                            <div class="gallery-empty">
+                                <p>No mobs available. Create some mobs first!</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="build-action-panel">
+                        <div class="build-summary" id="buildSummary">
+                            <div class="summary-stat">
+                                <span class="stat-value" id="selectedCount">0</span>
+                                <span class="stat-label">Mobs Selected</span>
+                            </div>
+                        </div>
+                        <button class="btn btn-primary btn-large" id="btnBuildPack" disabled>
+                            <span class="btn-icon">📦</span>
+                            Build .mcpack
+                        </button>
+                        <div class="build-result hidden" id="buildResult">
+                            <div class="build-success">
+                                <span class="success-icon">✅</span>
+                                <p>Pack built successfully!</p>
+                                <div id="buildDownloads" style="display:flex; flex-direction:column; gap:8px;"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- ─── Mob Detail Modal ─── -->
+    <div class="modal-overlay hidden" id="mobModal">
+        <div class="modal-content">
+            <button class="modal-close" id="modalClose">✕</button>
+            <div class="modal-body" id="modalBody">
+                <!-- Populated by JS -->
+            </div>
+        </div>
+    </div>
+
+    <!-- ─── Toast Notifications ─── -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script src="/static/app.js"></script>
+</body>
+
+</html>

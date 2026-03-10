@@ -1,0 +1,23 @@
+# Minecraft Mob Forge — Task Breakdown
+
+## Phase 1: MCP Server
+- [ ] Set up project structure and `requirements.txt`
+- [ ] Implement `server.py` with FastMCP tool registration
+- [ ] Implement `generate_mob` tool (LLM call + Bedrock validation)
+- [ ] Implement `build_mob_pack` tool (.mcaddon ZIP generation)
+- [ ] Implement `generate_texture` tool (algorithmic pixel-art PNG)
+- [ ] Add `.vscode/mcp.json` for IDE integration
+
+## Phase 2: Web App Backend
+- [ ] Create FastAPI backend that acts as MCP client
+- [ ] Expose REST endpoints: `/api/generate-mob`, `/api/build-pack`, `/api/generate-texture`
+- [ ] Implement in-memory mob gallery storage
+
+## Phase 3: Web App Frontend
+- [ ] Build main HTML structure (SPA with tabbed navigation)
+- [ ] Design CSS (dark mode, glassmorphism, animations)
+- [ ] Implement JS — Mob Creator, Gallery, Texture Studio, Pack Builder
+
+## Phase 4: Integration & Polish
+- [ ] End-to-end test: generate mob → preview → build pack → download
+- [ ] Polish UI animations and responsiveness
