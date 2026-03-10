@@ -7,6 +7,129 @@ from backend.core.core import DEFAULTS, COLOR_WORDS
 from backend.schemas.spec_utils import default_spec, validate_spec
 
 
+def _write_text(path: Path, content: str):
+    """Write text with Unix line endings (LF only). Windows defaults to CRLF
+    which can break Minecraft's mcfunction and JSON parsers."""
+    path.write_bytes(content.encode("utf-8"))
+
+
+def _fix_geometry_uv(geo_data: dict) -> dict:
+    """Fix UV overflow in geometry: expand texture_width/texture_height to fit all cubes.
+
+    LLM-generated geometry often has cubes whose box-UV mappings extend beyond
+    the declared texture atlas dimensions.  When this happens Minecraft silently
+    fails to render those bones, making the mob invisible.  This function
+    calculates the minimum atlas size needed and rounds up to a power of two.
+    """
+    import math
+    for geo_entry in geo_data.get("minecraft:geometry", []):
+        desc = geo_entry.get("description", {})
+        tw = desc.get("texture_width", 64)
+        th = desc.get("texture_height", 64)
+
+        max_u = tw
+        max_v = th
+        for bone in geo_entry.get("bones", []):
+            for cube in bone.get("cubes", []):
+                uv = cube.get("uv")
+                sz = cube.get("size")
+                if not uv or not sz or not isinstance(uv, (list, tuple)):
+                    continue
+                # Per-face UV (dict) doesn't overflow the atlas the same way
+                if isinstance(uv, dict):
+                    continue
+                w, h, d = float(sz[0]), float(sz[1]), float(sz[2])
+                u0, v0 = float(uv[0]), float(uv[1])
+                # Box UV layout: width = 2*d + 2*w, height = d + h
+                needed_u = u0 + 2 * d + 2 * w
+                needed_v = v0 + d + h
+                max_u = max(max_u, needed_u)
+                max_v = max(max_v, needed_v)
+
+        if max_u > tw or max_v > th:
+            # Round up to next power of two for clean texture mapping
+            new_tw = 1 << math.ceil(math.log2(max(max_u, 1)))
+            new_th = 1 << math.ceil(math.log2(max(max_v, 1)))
+            new_tw = max(new_tw, 16)
+            new_th = max(new_th, 16)
+            desc["texture_width"] = new_tw
+            desc["texture_height"] = new_th
+            print(f"[BUILD] Fixed UV overflow: texture atlas {tw}x{th} -> {new_tw}x{new_th}")
+    return geo_data
+
+
+# Cache for fetched vanilla geometry (avoids re-downloading during the same process)
+_vanilla_geo_cache: dict[str, dict | None] = {}
+
+
+def _fetch_vanilla_geometry(geometry_ref: str) -> dict | None:
+    """Fetch vanilla geometry JSON from Mojang's bedrock-samples repo.
+
+    Given a geometry reference like 'geometry.chicken', extracts 'chicken'
+    and downloads the .geo.json from GitHub. Returns the normalized geometry
+    dict or None if not found.
+    """
+    import urllib.request
+    import urllib.error
+
+    # Extract mob name from geometry ref: "geometry.chicken" -> "chicken"
+    parts = geometry_ref.split(".")
+    if len(parts) < 2:
+        return None
+    mob_name = parts[1].lower()  # e.g. "chicken", "cow", "zombie"
+
+    if mob_name in _vanilla_geo_cache:
+        return _vanilla_geo_cache[mob_name]
+
+    base_url = "https://raw.githubusercontent.com/Mojang/bedrock-samples/main/resource_pack/models/entity"
+    candidates = [
+        f"{mob_name}.geo.json",
+        f"{mob_name}_v2.geo.json",
+        f"{mob_name}_v1.geo.json",
+    ]
+
+    for filename in candidates:
+        url = f"{base_url}/{filename}"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "BedrockAddonBuilder/1.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                # Normalize old-format geometry to modern format
+                if "minecraft:geometry" not in data:
+                    # Old format: {"geometry.mob": {...}} -> {"minecraft:geometry": [...]}
+                    geo_entries = []
+                    for key, val in data.items():
+                        if key.startswith("geometry.") and isinstance(val, dict):
+                            entry = dict(val)
+                            desc = entry.setdefault("description", {})
+                            desc.setdefault("identifier", key)
+                            if "texturewidth" in entry:
+                                desc.setdefault("texture_width", entry.pop("texturewidth"))
+                            if "textureheight" in entry:
+                                desc.setdefault("texture_height", entry.pop("textureheight"))
+                            if "visible_bounds_width" in entry:
+                                desc.setdefault("visible_bounds_width", entry.pop("visible_bounds_width"))
+                            if "visible_bounds_height" in entry:
+                                desc.setdefault("visible_bounds_height", entry.pop("visible_bounds_height"))
+                            if "visible_bounds_offset" in entry:
+                                desc.setdefault("visible_bounds_offset", entry.pop("visible_bounds_offset"))
+                            geo_entries.append(entry)
+                    if geo_entries:
+                        data = {"format_version": "1.12.0", "minecraft:geometry": geo_entries}
+                    else:
+                        continue
+
+                _vanilla_geo_cache[mob_name] = data
+                print(f"[GEOMETRY] Fetched vanilla geometry '{filename}' for '{geometry_ref}'")
+                return data
+        except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, OSError) as e:
+            continue
+
+    print(f"[GEOMETRY] Could not fetch vanilla geometry for '{geometry_ref}'")
+    _vanilla_geo_cache[mob_name] = None
+    return None
+
+
 def make_uuid() -> str:
     """Generate a UUID string."""
     return str(uuid.uuid4())
@@ -68,9 +191,6 @@ def patch_resource_pack(res_root: Path, specs: list[dict], textures_dir: Path = 
     geo_dir = res_root / "models" / "entity"
     geo_dir.mkdir(parents=True, exist_ok=True)
 
-    rc_dir = res_root / "render_controllers"
-    rc_dir.mkdir(parents=True, exist_ok=True)
-
     texts_dir = res_root / "texts"
     texts_dir.mkdir(parents=True, exist_ok=True)
     lang_file = texts_dir / "en_US.lang"
@@ -86,31 +206,24 @@ def patch_resource_pack(res_root: Path, specs: list[dict], textures_dir: Path = 
         "texture_data": {}
     }
 
-    # Create a truly generic render controller for custom geometries
-    generic_rc_path = rc_dir / "custom_mob.render_controller.json"
-    generic_rc = {
-        "format_version": "1.8.0",
-        "render_controllers": {
-            "controller.render.custom_mob": {
-                "geometry": "Geometry.default",
-                "materials": [ { "*": "Material.default" } ],
-                "textures": [ "Texture.default" ]
-            }
-        }
-    }
-    generic_rc_path.write_text(json.dumps(generic_rc, indent=2), encoding="utf-8")
+    # Use the vanilla built-in controller.render.default — it already maps
+    # Geometry.default, Material.default, and Texture.default which is all we need.
+    # Writing a custom render controller file was unreliable (pack load order issues).
 
     first_png = None
 
     for spec in specs:
-        client_file = ent_dir / f"{spec['short_name']}.client.entity.json"
+        client_file = ent_dir / f"{spec['short_name']}.entity.json"
         
         # Handle custom geometry
         actual_geometry = spec.get("geometry", DEFAULTS["geometry"])
         actual_rc = spec.get("render_controller", DEFAULTS["render_controller"])
         
         custom_geo = spec.get("geometry_json")
-        if custom_geo and isinstance(custom_geo, dict) and "minecraft:geometry" in custom_geo:
+        has_custom_geo = (custom_geo and isinstance(custom_geo, dict)
+                          and "minecraft:geometry" in custom_geo)
+
+        if has_custom_geo:
             # Deep-copy to avoid mutating the original spec dict
             import copy
             custom_geo = copy.deepcopy(custom_geo)
@@ -121,16 +234,59 @@ def patch_resource_pack(res_root: Path, specs: list[dict], textures_dir: Path = 
             unique_geo_id = f"geometry.{spec['short_name']}.custom"
             try:
                 custom_geo["minecraft:geometry"] = [custom_geo["minecraft:geometry"][0]]
-                custom_geo["minecraft:geometry"][0]["description"]["identifier"] = unique_geo_id
+                geo_desc = custom_geo["minecraft:geometry"][0]["description"]
+                geo_desc["identifier"] = unique_geo_id
+                # Ensure visible bounds exist — without them Minecraft culls
+                # the entity and it appears completely invisible in-game.
+                cbox = spec.get("collision_box", {})
+                cbox_w = float(cbox.get("width", 1))
+                cbox_h = float(cbox.get("height", 1))
+                scale = float(spec.get("scale", 1.0))
+                if "visible_bounds_width" not in geo_desc:
+                    geo_desc["visible_bounds_width"] = max(cbox_w * scale + 1, 4)
+                if "visible_bounds_height" not in geo_desc:
+                    geo_desc["visible_bounds_height"] = max(cbox_h * scale + 1, 4)
+                if "visible_bounds_offset" not in geo_desc:
+                    geo_desc["visible_bounds_offset"] = [0, cbox_h * scale / 2, 0]
                 actual_geometry = unique_geo_id
-                actual_rc = "controller.render.custom_mob"
+                actual_rc = "controller.render.default"
             except (KeyError, IndexError):
                 pass
                 
+            custom_geo = _fix_geometry_uv(custom_geo)
             geo_file = geo_dir / f"{spec['short_name']}.geo.json"
-            geo_file.write_text(json.dumps(custom_geo, indent=2), encoding="utf-8")
+            _write_text(geo_file, json.dumps(custom_geo, indent=2))
+
+        elif actual_geometry and actual_geometry.startswith("geometry."):
+            # No custom geometry_json — fetch the vanilla geometry from Mojang's
+            # repo so the .geo.json file is included in the pack.  Without it
+            # Minecraft can't resolve the geometry ID and the mob is invisible.
+            vanilla_geo = _fetch_vanilla_geometry(actual_geometry)
+            if vanilla_geo:
+                import copy
+                vanilla_geo = copy.deepcopy(vanilla_geo)
+                unique_geo_id = f"geometry.{spec['short_name']}.custom"
+                try:
+                    # Use only the first geometry entry and rename its identifier
+                    vanilla_geo["minecraft:geometry"] = [vanilla_geo["minecraft:geometry"][0]]
+                    geo_desc = vanilla_geo["minecraft:geometry"][0]["description"]
+                    geo_desc["identifier"] = unique_geo_id
+                    # Ensure visible bounds
+                    if "visible_bounds_width" not in geo_desc:
+                        geo_desc["visible_bounds_width"] = 4
+                    if "visible_bounds_height" not in geo_desc:
+                        geo_desc["visible_bounds_height"] = 4
+                    if "visible_bounds_offset" not in geo_desc:
+                        geo_desc["visible_bounds_offset"] = [0, 1, 0]
+                    actual_geometry = unique_geo_id
+                    actual_rc = "controller.render.default"
+                except (KeyError, IndexError):
+                    pass
+                geo_file = geo_dir / f"{spec['short_name']}.geo.json"
+                _write_text(geo_file, json.dumps(vanilla_geo, indent=2))
+                print(f"[BUILD] Included vanilla geometry for {spec['short_name']}")
         
-        mob_textures_dir = res_root / "textures" / "entity" / spec["short_name"]
+        mob_textures_dir = res_root / "textures" / "entity"
         mob_textures_dir.mkdir(parents=True, exist_ok=True)
 
         png_path = mob_textures_dir / f"{spec['short_name']}.png"
@@ -150,15 +306,19 @@ def patch_resource_pack(res_root: Path, specs: list[dict], textures_dir: Path = 
 
         if not png_path.exists():
             col = spec.get("color_rgb", COLOR_WORDS.get("red"))
-            # Use texture dimensions from geometry if available, else default 64x64
+            # Read actual atlas size from the .geo.json we just wrote (which
+            # has been through _fix_geometry_uv and may be larger than the
+            # original spec's geometry_json dimensions).
             tex_w, tex_h = 64, 64
-            try:
-                geo = spec.get("geometry_json", {})
-                desc = geo.get("minecraft:geometry", [{}])[0].get("description", {})
-                tex_w = int(desc.get("texture_width", 64))
-                tex_h = int(desc.get("texture_height", 64))
-            except (IndexError, KeyError, TypeError, ValueError):
-                pass
+            written_geo = geo_dir / f"{spec['short_name']}.geo.json"
+            if written_geo.exists():
+                try:
+                    wg = json.loads(written_geo.read_bytes())
+                    desc = wg["minecraft:geometry"][0]["description"]
+                    tex_w = int(desc.get("texture_width", 64))
+                    tex_h = int(desc.get("texture_height", 64))
+                except (IndexError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+                    pass
             png = make_png_rgba(tex_w, tex_h, *col, 255)
             png_path.write_bytes(png)
 
@@ -173,15 +333,19 @@ def patch_resource_pack(res_root: Path, specs: list[dict], textures_dir: Path = 
                 "description": {
                     "identifier": spec["identifier"],
                     "materials": {"default": "entity_alphatest"},
-                    "textures": {"default": f"textures/entity/{spec['short_name']}/{spec['short_name']}"},
+                    "textures": {"default": f"textures/entity/{spec['short_name']}"},
                     "geometry": {"default": actual_geometry},
-                    "render_controllers": [actual_rc]
+                    "render_controllers": [actual_rc],
+                    "spawn_egg": {
+                        "base_color": spec.get("egg_base", DEFAULTS["egg_base"]),
+                        "overlay_color": spec.get("egg_overlay", DEFAULTS["egg_overlay"])
+                    }
                 }
             }
         }
         if abs(scale - 1.0) > 1e-6:
             client["minecraft:client_entity"]["description"]["scale"] = scale
-        client_file.write_text(json.dumps(client, indent=2), encoding="utf-8")
+        _write_text(client_file, json.dumps(client, indent=2))
 
         # Add names to lang file
         display_name = spec.get("display_name", spec["short_name"].capitalize())
@@ -190,14 +354,14 @@ def patch_resource_pack(res_root: Path, specs: list[dict], textures_dir: Path = 
 
         # Map the spawn egg texture to the entity icon (optional but good)
         item_texture["texture_data"][f"spawn_egg_{spec['short_name']}"] = {
-            "textures": f"textures/entity/{spec['short_name']}/{spec['short_name']}"
+            "textures": f"textures/entity/{spec['short_name']}"
         }
 
     if lang_lines:
-        lang_file.write_text("\n".join(lang_lines), encoding="utf-8")
+        _write_text(lang_file, "\n".join(lang_lines) + "\n")
 
     if item_texture["texture_data"]:
-        item_tex_file.write_text(json.dumps(item_texture, indent=2), encoding="utf-8")
+        _write_text(item_tex_file, json.dumps(item_texture, indent=2))
 
     # Use the first spec for the main manifest info
     main_spec = specs[0] if specs else validate_spec(default_spec())
@@ -211,7 +375,7 @@ def patch_resource_pack(res_root: Path, specs: list[dict], textures_dir: Path = 
     manifest["header"]["name"] = f"{main_spec['display_name']} Resources"
     manifest["header"]["uuid"] = make_uuid()
     manifest["header"]["version"] = [1, 0, 0]
-    ensure_min_engine(manifest, main_spec["engine_min"])
+    ensure_min_engine(manifest, [1, 16, 0])
     manifest["modules"] = [{
         "description": "resources",
         "type": "resources",
@@ -223,7 +387,7 @@ def patch_resource_pack(res_root: Path, specs: list[dict], textures_dir: Path = 
             (res_root / "pack_icon.png").write_bytes(first_png.read_bytes())
     except Exception:
         pass
-    man.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    _write_text(man, json.dumps(manifest, indent=2))
     return manifest
 
 
@@ -238,7 +402,7 @@ def patch_behavior_pack(beh_root: Path, specs: list[dict]):
     lang_lines = []
 
     for spec in specs:
-        ent_file = ent_dir / f"{spec['short_name']}.entity.json"
+        ent_file = ent_dir / f"{spec['short_name']}.json"
 
         # Add names to lang file for behavior pack too (helps with some registries)
         display_name = spec.get("display_name", spec["short_name"].capitalize())
@@ -246,17 +410,13 @@ def patch_behavior_pack(beh_root: Path, specs: list[dict]):
 
         # --- Hostile, pursuit-oriented mob ---
         entity = {
-            "format_version": "1.21.10",
+            "format_version": "1.16.0",
             "minecraft:entity": {
                 "description": {
                     "identifier": spec["identifier"],
                     "is_spawnable": True,
                     "is_summonable": True,
-                    "is_experimental": False,
-                    "spawn_egg": {
-                        "base_color": spec.get("egg_base", DEFAULTS["egg_base"]),
-                        "overlay_color": spec.get("egg_overlay", DEFAULTS["egg_overlay"])
-                    }
+                    "is_experimental": False
                 },
                 "components": {
                     "minecraft:type_family": {"family": [spec["short_name"], "monster"]},
@@ -264,27 +424,24 @@ def patch_behavior_pack(beh_root: Path, specs: list[dict]):
                     "minecraft:movement.basic": {},
                     "minecraft:jump.static": {},
                     "minecraft:movement": {"value": float(spec.get("speed", 0.30))},
-                    "minecraft:attack": {"damage": float(spec["damage"])},
+                    "minecraft:attack": {"damage": int(spec["damage"])},
                     "minecraft:physics": {},
                     "minecraft:collision_box": spec["collision_box"],
                     "minecraft:navigation.walk": {
                         "can_walk": True,
-                        "can_pass_doors": True,
-                        "avoid_water": True
+                        "can_pass_doors": True
                     },
-                    "minecraft:knockback_resistance": {"value": 0.5},
                     "minecraft:pushable": {"is_pushable": True, "is_pushable_by_piston": True},
+                    "minecraft:behavior.float": {"priority": 0},
                     "minecraft:behavior.hurt_by_target": {"priority": 1},
                     "minecraft:behavior.nearest_attackable_target": {
                         "priority": 2,
-                        "within_radius": 25,
-                        "reselect_targets": True,
                         "entity_types": [
                             {
                                 "filters": {
-                                    "any_of": [
-                                        {"test": "is_family", "subject": "other", "value": "player"}
-                                    ]
+                                    "test": "is_family",
+                                    "subject": "other",
+                                    "value": "player"
                                 },
                                 "max_dist": 35
                             }
@@ -292,11 +449,10 @@ def patch_behavior_pack(beh_root: Path, specs: list[dict]):
                     },
                     "minecraft:behavior.melee_attack": {
                         "priority": 3,
-                        "speed_multiplier": 1.0,
-                        "track_target": True
+                        "speed_multiplier": 1.0
                     },
-                    "minecraft:behavior.look_at_player": {"priority": 7, "look_distance": 6.0, "probability": 0.02},
-                    "minecraft:behavior.random_look_around": {"priority": 8},
+                    "minecraft:behavior.look_at_player": {"priority": 8, "look_distance": 6.0},
+                    "minecraft:behavior.random_look_around": {"priority": 9},
                     "minecraft:behavior.random_stroll": {"priority": 6, "speed_multiplier": 1.0}
                 }
             }
@@ -312,29 +468,69 @@ def patch_behavior_pack(beh_root: Path, specs: list[dict]):
                 else:
                     entity["minecraft:entity"]["components"][k] = v
 
-        ent_file.write_text(json.dumps(entity, indent=2), encoding="utf-8")
+        comps = entity["minecraft:entity"]["components"]
+
+        # If mob has ranged attack (shooter), remove melee_attack so it
+        # actually fires projectiles instead of always running up to melee.
+        if "minecraft:shooter" in comps and "minecraft:behavior.ranged_attack" in comps:
+            comps.pop("minecraft:behavior.melee_attack", None)
+
+        # Normalize shooter projectile: minecraft:fireball (ghast) is unreliable
+        # for custom entities. Use minecraft:small_fireball (blaze) which always works.
+        if "minecraft:shooter" in comps:
+            shooter = comps["minecraft:shooter"]
+            proj = shooter.get("def", "")
+            if proj in ("minecraft:fireball", "minecraft:dragon_fireball"):
+                shooter["def"] = "minecraft:small_fireball"
+
+        # Strip invalid ranged_attack params the LLM may hallucinate.
+        # Only keep Bedrock-valid keys to prevent silent component failure.
+        if "minecraft:behavior.ranged_attack" in comps:
+            ra = comps["minecraft:behavior.ranged_attack"]
+            valid_ra_keys = {
+                "priority", "speed_multiplier", "attack_interval_min",
+                "attack_interval_max", "attack_radius", "attack_radius_min",
+                "burst_shots", "burst_interval", "charge_charged_trigger",
+                "charge_shoot_trigger", "x_max_rotation", "y_max_head_rotation",
+            }
+            bad_keys = [k for k in ra if k not in valid_ra_keys]
+            for k in bad_keys:
+                del ra[k]
+            # Ensure valid defaults
+            ra.setdefault("priority", 3)
+            ra.setdefault("attack_interval_min", 3.0)
+            ra.setdefault("attack_interval_max", 5.0)
+            ra.setdefault("attack_radius", 16.0)
+
+        # If mob uses fly movement, remove conflicting walk components
+        if "minecraft:movement.fly" in comps:
+            comps.pop("minecraft:movement.basic", None)
+        if "minecraft:navigation.fly" in comps:
+            comps.pop("minecraft:navigation.walk", None)
+
+        _write_text(ent_file, json.dumps(entity, indent=2))
 
     if lang_lines:
-        lang_file.write_text("\n".join(lang_lines), encoding="utf-8")
+        _write_text(lang_file, "\n".join(lang_lines) + "\n")
 
-    # Add tick function so entities auto-spawn when pack is used (mcpack, mcaddon, or mcworld).
-    # Delay 40 ticks (2s) then spawn right on the player (~ ~ ~).
+    # One-shot summon via player tag.
+    # tick.json calls startup every tick; startup uses a player tag as a
+    # one-shot gate. Uses OLD Bedrock execute syntax which works on ALL
+    # versions: execute <selector> <x> <y> <z> <command>
     functions_dir = beh_root / "functions"
     functions_dir.mkdir(parents=True, exist_ok=True)
-    spawn_lines = [
-        "scoreboard objectives add addon_spawn dummy",
-        "scoreboard players add @a[tag=!mob_spawned] addon_spawn 1",
-    ]
+    startup_lines = []
     for i, spec in enumerate(specs):
-        spawn_lines.append(
-            f'execute @a[tag=!mob_spawned,scores={{addon_spawn=40..}},c=1] ~ ~ ~ '
-            f'summon {spec["identifier"]} ~ ~ ~'
+        offset_x = 2 + (i * 4)
+        startup_lines.append(
+            f"execute @a[tag=!mf_spawned] ~ ~ ~ summon {spec['identifier']} ~{offset_x} ~ ~2"
         )
-    spawn_lines.append("tag @a[scores={addon_spawn=40..}] add mob_spawned")
-    (functions_dir / "spawn_mobs.mcfunction").write_text("\n".join(spawn_lines), encoding="utf-8")
-    (functions_dir / "tick.json").write_text(
-        json.dumps({"values": ["spawn_mobs"]}, indent=2), encoding="utf-8"
+    startup_lines.append(
+        'execute @a[tag=!mf_spawned] ~ ~ ~ tellraw @a {"rawtext":[{"text":"§aAddon Builder: §fCustom mobs summoned near you!"}]}'
     )
+    startup_lines.append("tag @a add mf_spawned")
+    _write_text(functions_dir / "startup.mcfunction", "\n".join(startup_lines) + "\n")
+    _write_text(functions_dir / "tick.json", json.dumps({"values": ["startup"]}, indent=2))
 
     main_spec = specs[0] if specs else validate_spec(default_spec())
     man = beh_root / "manifest.json"
@@ -346,12 +542,12 @@ def patch_behavior_pack(beh_root: Path, specs: list[dict]):
     manifest["header"]["name"] = f"{main_spec['display_name']} Behavior"
     manifest["header"]["uuid"] = make_uuid()
     manifest["header"]["version"] = [1, 0, 0]
-    ensure_min_engine(manifest, main_spec["engine_min"])
+    ensure_min_engine(manifest, [1, 16, 0])
     manifest["modules"] = [{
         "description": "behavior",
         "type": "data",
         "uuid": make_uuid(),
         "version": [1, 0, 0]
     }]
-    man.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    _write_text(man, json.dumps(manifest, indent=2))
     return manifest

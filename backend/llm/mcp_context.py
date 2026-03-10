@@ -371,15 +371,21 @@ class DesignModelResult:
 MCP_DESIGN_MODEL_TIMEOUT = 30.0
 
 
-def _geometry_to_design(geometry: dict, model_id: str, prompt: str) -> dict:
+def _geometry_to_design(
+    geometry: dict,
+    model_id: str,
+    prompt: str,
+    color_rgb: Optional[list] = None,
+    display_name: str = "",
+) -> dict:
     """Convert Bedrock geometry JSON into a designModel-compatible design.
 
     The LLM produces standard Bedrock geometry (format_version, minecraft:geometry,
     bones with cubes). designModel expects a similar but slightly different schema
     with per-face texture hints. We convert and add default face textures based on
-    the prompt description so MCP can generate a matching texture.
+    color_rgb (from LLM spec), prompt keywords, or display_name.
     """
-    design: dict = {"identifier": model_id, "bones": []}
+    design: dict = {"identifier": model_id, "bones": [], "pixelsPerUnit": 4}
 
     geo_list = geometry.get("minecraft:geometry", [])
     if not geo_list:
@@ -387,14 +393,51 @@ def _geometry_to_design(geometry: dict, model_id: str, prompt: str) -> dict:
 
     geo_def = geo_list[0]
     desc = geo_def.get("description", {})
-    tex_w = desc.get("texture_width", 64)
-    tex_h = desc.get("texture_height", 64)
-    design["textureSize"] = [tex_w, tex_h]
 
-    prompt_lower = prompt.lower()
-    base_colors = _pick_colors_from_prompt(prompt_lower)
+    # Set visible bounds large enough so Minecraft doesn't cull the entity
+    design["visibleBoundsSize"] = [
+        desc.get("visible_bounds_width", 4),
+        desc.get("visible_bounds_height", 4),
+    ]
+    design["visibleBoundsOffset"] = desc.get("visible_bounds_offset", [0, 1, 0])
 
+    # Prefer LLM's color_rgb (it understands "rhino" → gray, "dragon" → purple, etc.)
+    if color_rgb and isinstance(color_rgb, (list, tuple)) and len(color_rgb) >= 3:
+        base_colors = [_rgb_to_hex(color_rgb)]
+    else:
+        base_colors = _pick_colors_from_prompt(prompt.lower(), display_name.lower())
+
+    # Create slightly darker/lighter variants for visual variety per bone
+    darker_colors = [_darken_hex(c, 0.75) for c in base_colors]
+    lighter_colors = [_lighten_hex(c, 0.3) for c in base_colors]
+
+    # Bone name patterns for shade variation
+    dark_keywords = ("leg", "foot", "arm", "limb", "tail", "hoof")
+    light_keywords = ("head", "ear", "horn", "tusk", "snout", "eye")
+
+    bone_idx = 0
     for bone in geo_def.get("bones", []):
+        if not bone.get("cubes"):
+            # Still include parent-only bones (like "root") so hierarchy is preserved.
+            # Give them a tiny transparent cube so MCP doesn't drop them.
+            design_bone: dict = {"name": bone["name"]}
+            if "parent" in bone:
+                design_bone["parent"] = bone["parent"]
+            if "pivot" in bone:
+                design_bone["pivot"] = bone["pivot"]
+            if "rotation" in bone:
+                design_bone["rotation"] = bone["rotation"]
+            design_bone["cubes"] = [{
+                "origin": [0, 0, 0],
+                "size": [0, 0, 0],
+                "faces": {
+                    face: {"background": {"type": "solid", "colors": ["#00000000"]}}
+                    for face in ["north", "south", "east", "west", "up", "down"]
+                },
+            }]
+            design["bones"].append(design_bone)
+            continue
+
         design_bone: dict = {"name": bone["name"]}
         if "parent" in bone:
             design_bone["parent"] = bone["parent"]
@@ -402,6 +445,15 @@ def _geometry_to_design(geometry: dict, model_id: str, prompt: str) -> dict:
             design_bone["pivot"] = bone["pivot"]
         if "rotation" in bone:
             design_bone["rotation"] = bone["rotation"]
+
+        # Pick shade based on bone name
+        bone_lower = bone["name"].lower()
+        if any(kw in bone_lower for kw in dark_keywords):
+            colors = darker_colors
+        elif any(kw in bone_lower for kw in light_keywords):
+            colors = lighter_colors
+        else:
+            colors = base_colors
 
         design_cubes = []
         for cube in bone.get("cubes", []):
@@ -412,26 +464,62 @@ def _geometry_to_design(geometry: dict, model_id: str, prompt: str) -> dict:
             if "inflate" in cube:
                 design_cube["inflate"] = cube["inflate"]
 
+            # Use deterministic seed per bone for consistent noise
             design_cube["faces"] = {
                 face: {
                     "background": {
                         "type": "stipple_noise",
-                        "colors": base_colors,
+                        "colors": colors,
+                        "seed": bone_idx * 6 + fi,
                     }
                 }
-                for face in ["north", "south", "east", "west", "up", "down"]
+                for fi, face in enumerate(
+                    ["north", "south", "east", "west", "up", "down"]
+                )
             }
             design_cubes.append(design_cube)
 
-        if design_cubes:
-            design_bone["cubes"] = design_cubes
+        design_bone["cubes"] = design_cubes
         design["bones"].append(design_bone)
+        bone_idx += 1
 
     return design
 
 
-def _pick_colors_from_prompt(prompt: str) -> list[str]:
-    """Pick texture colors based on keywords in the prompt."""
+def _darken_hex(hex_color: str, factor: float) -> str:
+    """Darken a hex color by a factor (0-1)."""
+    hex_color = hex_color.lstrip("#")
+    r = int(int(hex_color[0:2], 16) * factor)
+    g = int(int(hex_color[2:4], 16) * factor)
+    b = int(int(hex_color[4:6], 16) * factor)
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def _lighten_hex(hex_color: str, factor: float) -> str:
+    """Lighten a hex color by a factor (0-1, blends toward white)."""
+    hex_color = hex_color.lstrip("#")
+    r = int(int(hex_color[0:2], 16) + (255 - int(hex_color[0:2], 16)) * factor)
+    g = int(int(hex_color[2:4], 16) + (255 - int(hex_color[2:4], 16)) * factor)
+    b = int(int(hex_color[4:6], 16) + (255 - int(hex_color[4:6], 16)) * factor)
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def _rgb_to_hex(rgb: list | tuple) -> str:
+    """Convert [R, G, B] (0-255) to hex."""
+    if not rgb or len(rgb) < 3:
+        return "#808080"
+    r, g, b = int(rgb[0]), int(rgb[1]), int(rgb[2])
+    r = max(0, min(255, r))
+    g = max(0, min(255, g))
+    b = max(0, min(255, b))
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def _pick_colors_from_prompt(prompt: str, display_name: str = "") -> list[str]:
+    """Pick texture colors based on keywords in the prompt or display_name.
+
+    Checks both prompt and display_name so 'Rhino' in the spec still matches.
+    """
     color_map = {
         "zombie": ["#4a7a3a", "#3d6630"],
         "skeleton": ["#c8c8c8", "#a0a0a0"],
@@ -456,9 +544,22 @@ def _pick_colors_from_prompt(prompt: str) -> list[str]:
         "gold": ["#ffd700", "#daa520"],
         "diamond": ["#4aedd9", "#2cc5b8"],
         "iron": ["#d0d0d0", "#b8b8b8"],
+        # Large animals
+        "rhino": ["#808080", "#696969", "#a0a0a0"],
+        "elephant": ["#8b7355", "#6b5344", "#a08060"],
+        "hippo": ["#a08060", "#8b7355", "#6b5344"],
+        "bear": ["#5c4033", "#3d2b1f", "#7a5540"],
+        "lion": ["#d4a84b", "#c49440", "#e8c080"],
+        "tiger": ["#ff8c42", "#e67e30", "#d4a574"],
+        # Other creatures
+        "unicorn": ["#ffffff", "#e8e0f0", "#d0c8e0"],
+        "phoenix": ["#ff6600", "#ff3300", "#ffaa00"],
+        "blaze": ["#ffcc00", "#ff9900", "#ff6600"],
+        "ghast": ["#f0f0f0", "#e0e0e0", "#ffffff"],
     }
+    combined = f"{prompt} {display_name}".lower()
     for keyword, colors in color_map.items():
-        if keyword in prompt:
+        if keyword in combined:
             return colors
     return ["#808080", "#707070"]
 
@@ -468,14 +569,18 @@ async def mcp_design_model(
     model_id: str,
     prompt: str,
     usage: str = "entity",
+    color_rgb: Optional[list] = None,
+    display_name: str = "",
 ) -> DesignModelResult:
     """Call MCP designModel to generate geometry + texture from a design.
 
     Takes LLM-generated geometry and a prompt, converts to a designModel-
     compatible design with face textures, and returns the generated PNG.
 
-    The geometry itself comes from the LLM (which is better at creative
-    structure). MCP handles the texture rendering (which LLMs can't do).
+    color_rgb: Optional [R,G,B] from the LLM spec — used when available for
+        accurate colors (LLM understands "rhino" → gray, etc.).
+    display_name: Mob display name — used for keyword fallback when color_rgb
+        is not provided.
     """
     from backend.mctools.client import call_tool, MCTOOLS_ENABLED
 
@@ -485,7 +590,11 @@ async def mcp_design_model(
     project_dir = None
     try:
         project_dir = Path(tempfile.mkdtemp(prefix="mcp_design_"))
-        design = _geometry_to_design(geometry, model_id, prompt)
+        design = _geometry_to_design(
+            geometry, model_id, prompt,
+            color_rgb=color_rgb,
+            display_name=display_name,
+        )
 
         log.info("[mcp_context] Calling designModel for %s (project=%s)", model_id, project_dir)
         start = time.time()
@@ -512,43 +621,48 @@ async def mcp_design_model(
                 preview_b64 = item.get("data", "")
                 break
 
-        # Read the generated texture PNG from disk
-        usage_dirs = {
-            "entity": "textures/entity",
-            "block": "textures/blocks",
-            "item": "textures/items",
-        }
-        tex_subdir = usage_dirs.get(usage, "textures/entity")
-        tex_path = project_dir / tex_subdir / f"{model_id}.png"
-
+        # Read the generated texture PNG from disk.
+        # MCP creates a nested resource pack folder inside projectPath,
+        # so the texture may be at e.g. projectPath/rp/textures/entity/rhino.png
+        # instead of projectPath/textures/entity/rhino.png.  Search by filename.
         texture_b64 = ""
-        if tex_path.exists():
-            raw = tex_path.read_bytes()
+        tex_filename = f"{model_id}.png"
+        tex_match = None
+        for candidate in project_dir.rglob(tex_filename):
+            # Must be under a textures/ directory (not .mct/previews/ etc.)
+            if "textures" in candidate.parts and ".mct" not in str(candidate):
+                tex_match = candidate
+                break
+        if tex_match:
+            raw = tex_match.read_bytes()
             texture_b64 = f"data:image/png;base64,{base64.b64encode(raw).decode()}"
-            log.info("[mcp_context] Read texture from %s (%d bytes)", tex_path, len(raw))
+            log.info("[mcp_context] Read texture from %s (%d bytes)", tex_match, len(raw))
         else:
-            log.warning("[mcp_context] Texture not found at %s", tex_path)
-            for png in project_dir.rglob("*.png"):
-                if ".mct" not in str(png):
-                    raw = png.read_bytes()
-                    texture_b64 = f"data:image/png;base64,{base64.b64encode(raw).decode()}"
-                    log.info("[mcp_context] Found texture at fallback %s (%d bytes)", png, len(raw))
-                    break
+            log.warning("[mcp_context] Texture %s not found under %s", tex_filename, project_dir)
 
-        # Read geometry JSON from disk (MCP may have modified it)
-        geo_dirs = {
-            "entity": "models/entity",
-            "block": "models/blocks",
-            "item": "models/item",
-        }
-        geo_subdir = geo_dirs.get(usage, "models/entity")
-        geo_path = project_dir / geo_subdir / f"{model_id}.geo.json"
-
+        # Read geometry JSON from disk (MCP may have modified it).
+        # Same nested-folder issue: search by filename.
         out_geometry = geometry
-        if geo_path.exists():
+        geo_filename = f"{model_id}.geo.json"
+        geo_match = None
+        for candidate in project_dir.rglob(geo_filename):
+            if ".mct" not in str(candidate):
+                geo_match = candidate
+                break
+        if geo_match:
             try:
-                out_geometry = json.loads(geo_path.read_text(encoding="utf-8"))
-                log.info("[mcp_context] Read geometry from %s", geo_path)
+                out_geometry = json.loads(geo_match.read_text(encoding="utf-8"))
+                log.info("[mcp_context] Read geometry from %s", geo_match)
+                # Ensure visible bounds are large enough so Minecraft renders the entity.
+                # MCP may default to tiny bounds (1x1) which causes invisible mobs.
+                for geo_entry in out_geometry.get("minecraft:geometry", []):
+                    d = geo_entry.get("description", {})
+                    if d.get("visible_bounds_width", 0) < 4:
+                        d["visible_bounds_width"] = 4
+                    if d.get("visible_bounds_height", 0) < 4:
+                        d["visible_bounds_height"] = 4
+                    if "visible_bounds_offset" not in d:
+                        d["visible_bounds_offset"] = [0, 1, 0]
             except Exception:
                 pass
 
@@ -576,6 +690,8 @@ def mcp_design_model_sync(
     model_id: str,
     prompt: str,
     usage: str = "entity",
+    color_rgb: Optional[list] = None,
+    display_name: str = "",
 ) -> DesignModelResult:
     """Synchronous wrapper for mcp_design_model."""
     from backend.mctools.client import MCTOOLS_ENABLED
@@ -586,7 +702,11 @@ def mcp_design_model_sync(
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
             future = pool.submit(
                 asyncio.run,
-                mcp_design_model(geometry, model_id, prompt, usage),
+                mcp_design_model(
+                    geometry, model_id, prompt, usage,
+                    color_rgb=color_rgb,
+                    display_name=display_name,
+                ),
             )
             return future.result(timeout=MCP_DESIGN_MODEL_TIMEOUT + 5)
     except Exception as e:

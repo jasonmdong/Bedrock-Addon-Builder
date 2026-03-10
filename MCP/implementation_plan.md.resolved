@@ -1,0 +1,242 @@
+# 🧟 Minecraft Mob Forge — Refined Implementation Plan
+
+## Overview
+
+Build a custom MCP server (Python, using `FastMCP`) with 3 tools for generating Minecraft Bedrock mobs, then a full-stack web app (FastAPI + vanilla HTML/CSS/JS) that connects to it as an MCP client. Users can describe mobs in natural language, see generated mob cards with stats and textures, and download ready-to-use `.mcaddon` packs for Minecraft Bedrock Edition.
+
+## User Review Required
+
+> [!IMPORTANT]
+> **LLM API Choice**: The `generate_mob` tool calls an LLM to produce Bedrock entity JSON. I'll default to **Google Gemini** (`google-genai` SDK) since it has a generous free tier. You'll need a `GOOGLE_API_KEY` environment variable. Should I use OpenAI instead, or support both?
+
+> [!IMPORTANT]
+> **Texture Generation**: The `generate_mob_texture` tool will use **algorithmic pixel-art generation** (no AI image API needed). It generates a 64×32 Minecraft skin-layout PNG from a color palette + mob style using pattern algorithms (body, limbs, head regions). This keeps it free and self-contained. Is that acceptable, or do you want AI-generated textures (which would need an image generation API)?
+
+> [!NOTE]
+> **Scope**: The `.mcaddon` packs generated will be structurally valid Bedrock addon ZIPs with proper manifests, entity behavior definitions, and resource pack textures. They should load in Minecraft Bedrock, though complex component interactions may need manual tuning for gameplay balance.
+
+---
+
+## Proposed Changes
+
+### MCP Server (`mcp_server/`)
+
+The server uses the `FastMCP` framework from the official `mcp` Python SDK. It registers 3 tools and runs over stdio transport.
+
+---
+
+#### [NEW] [server.py](file:///c:/Users/luale/OneDrive/Documents/MCP/mcp_server/server.py)
+
+Main entry point. Creates a `FastMCP` server instance, imports and registers the 3 tools, runs on stdio.
+
+```python
+from mcp.server.fastmcp import FastMCP
+mcp = FastMCP("Mob Forge")
+# Import tool modules which register themselves via @mcp.tool()
+```
+
+---
+
+#### [NEW] [generate_mob.py](file:///c:/Users/luale/OneDrive/Documents/MCP/mcp_server/tools/generate_mob.py)
+
+**Tool 1: `generate_mob`**
+
+- **Input**: `description` (str), `difficulty` (str: "easy"/"medium"/"hard")
+- **Process**:
+  1. Builds a system prompt with Minecraft Bedrock entity schema rules (valid components, stat ranges, format version)
+  2. Calls Gemini API with the user's description
+  3. Parses the LLM response as JSON
+  4. **Validates**: HP (1–2048), speed (0.0–2.0), required fields (`identifier`, `components`, `format_version`), valid component names
+  5. Auto-corrects out-of-range values by clamping
+- **Output**: Complete Bedrock entity JSON + metadata (name, description, stats summary)
+
+---
+
+#### [NEW] [build_mob_pack.py](file:///c:/Users/luale/OneDrive/Documents/MCP/mcp_server/tools/build_mob_pack.py)
+
+**Tool 2: `build_mob_pack`**
+
+- **Input**: `mobs` (list of mob entity JSON objects), `pack_name` (str)
+- **Process**:
+  1. Generates UUIDs for behavior & resource pack manifests
+  2. Creates behavior pack structure: `manifest.json`, `entities/<mob>.json` for each mob
+  3. Creates resource pack structure: `manifest.json`, `entity/<mob>.entity.json` (client entity), `textures/entity/<mob>.png`
+  4. Zips everything into a `.mcaddon` file (which is a ZIP containing both packs)
+- **Output**: Base64-encoded `.mcaddon` file content + filename
+
+---
+
+#### [NEW] [generate_texture.py](file:///c:/Users/luale/OneDrive/Documents/MCP/mcp_server/tools/generate_texture.py)
+
+**Tool 3: `generate_mob_texture`**
+
+- **Input**: `mob_name` (str), `style` (str: "biped"/"quadruped"/"dragon"/"slime"/"spider"), `colors` (list of hex color strings)
+- **Process**:
+  1. Creates a 64×32 pixel PNG (standard Minecraft skin layout)
+  2. Uses algorithmic patterns based on style — different body region templates for bipeds vs quadrupeds vs dragons
+  3. Applies gradient/noise within color palette to create texture depth
+  4. Uses `Pillow` (PIL) for image generation
+- **Output**: Base64-encoded PNG + dimensions
+
+---
+
+#### [NEW] [requirements.txt](file:///c:/Users/luale/OneDrive/Documents/MCP/mcp_server/requirements.txt)
+
+```
+mcp[cli]>=1.0.0
+google-genai>=1.0.0
+Pillow>=10.0.0
+```
+
+---
+
+### Web App Backend (`mob_forge_app/`)
+
+FastAPI server that acts as an **MCP client** — it uses the `mcp` SDK's client class to spawn the MCP server as a subprocess and call tools over stdio.
+
+---
+
+#### [NEW] [app.py](file:///c:/Users/luale/OneDrive/Documents/MCP/mob_forge_app/app.py)
+
+- **MCP Client**: Uses `mcp.client.stdio` to launch `mcp_server/server.py` as a subprocess
+- **REST Endpoints**:
+  - `POST /api/generate-mob` — calls `generate_mob` tool, stores result in gallery
+  - `POST /api/generate-texture` — calls `generate_mob_texture` tool
+  - `POST /api/build-pack` — calls `build_mob_pack` tool, returns downloadable file
+  - `GET /api/gallery` — returns all generated mobs
+  - `DELETE /api/gallery/{id}` — remove a mob from gallery
+- **In-memory storage**: Dictionary of generated mobs (keyed by UUID), persists for the session
+- **Static file serving**: Serves the frontend from `static/`
+
+---
+
+#### [NEW] [requirements.txt](file:///c:/Users/luale/OneDrive/Documents/MCP/mob_forge_app/requirements.txt)
+
+```
+fastapi>=0.100.0
+uvicorn>=0.20.0
+mcp[cli]>=1.0.0
+```
+
+---
+
+### Web App Frontend (`mob_forge_app/static/`)
+
+Single-page application with 4 tabs, dark mode, glassmorphism cards, and smooth animations.
+
+---
+
+#### [NEW] [index.html](file:///c:/Users/luale/OneDrive/Documents/MCP/mob_forge_app/static/index.html)
+
+- Tab navigation: **Create** | **Gallery** | **Textures** | **Build Pack**
+- **Create tab**: Chat-style input, mob result cards with stats
+- **Gallery tab**: Grid of generated mobs with texture preview and actions
+- **Textures tab**: Color picker, style selector, live texture preview
+- **Build Pack tab**: Select mobs, name pack, download button
+
+---
+
+#### [NEW] [styles.css](file:///c:/Users/luale/OneDrive/Documents/MCP/mob_forge_app/static/styles.css)
+
+- Dark theme with Minecraft-inspired accent colors (emerald green, diamond blue)
+- Glassmorphism card effects with backdrop-filter
+- CSS animations for loading states, card reveals, tab transitions
+- Responsive grid layout
+- Google Fonts (Inter/Outfit)
+
+---
+
+#### [NEW] [app.js](file:///c:/Users/luale/OneDrive/Documents/MCP/mob_forge_app/static/app.js)
+
+- Tab routing and state management
+- API calls to FastAPI backend
+- Dynamic card rendering for mobs
+- Texture preview canvas rendering
+- File download handling for `.mcaddon`
+
+---
+
+### IDE Configuration
+
+#### [NEW] [mcp.json](file:///c:/Users/luale/OneDrive/Documents/MCP/.vscode/mcp.json)
+
+VS Code MCP configuration for Copilot Agent mode integration.
+
+```json
+{
+  "servers": {
+    "mob-forge": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["mcp_server/server.py"]
+    }
+  }
+}
+```
+
+---
+
+## Project Structure
+
+```
+MCP/
+├── mcp_server/
+│   ├── server.py                  # FastMCP server entry point
+│   ├── tools/
+│   │   ├── __init__.py
+│   │   ├── generate_mob.py        # Tool 1: LLM mob generation
+│   │   ├── build_mob_pack.py      # Tool 2: .mcaddon packaging
+│   │   └── generate_texture.py    # Tool 3: Pixel art textures
+│   └── requirements.txt
+│
+├── mob_forge_app/
+│   ├── app.py                     # FastAPI backend (MCP client)
+│   ├── static/
+│   │   ├── index.html
+│   │   ├── styles.css
+│   │   └── app.js
+│   └── requirements.txt
+│
+├── .vscode/
+│   └── mcp.json
+└── README.md
+```
+
+---
+
+## Verification Plan
+
+### Automated Tests
+
+1. **MCP Server tool validation** — Run a Python script that imports the tool functions directly and tests:
+   ```
+   cd c:\Users\luale\OneDrive\Documents\MCP
+   python -m pytest tests/test_tools.py -v
+   ```
+   - `generate_mob`: Mock the LLM call, verify output JSON structure and validation (clamping HP, speed)
+   - `build_mob_pack`: Pass sample mob data, verify ZIP structure contains correct manifest + entity files
+   - `generate_texture`: Generate textures in each style, verify PNG dimensions and non-empty output
+
+2. **MCP Server stdio protocol** — Test the server responds correctly to JSON-RPC tool calls:
+   ```
+   cd c:\Users\luale\OneDrive\Documents\MCP
+   python tests/test_mcp_server.py
+   ```
+
+3. **Web App API** — Start the FastAPI server, hit endpoints with `curl`/`httpx`:
+   ```
+   cd c:\Users\luale\OneDrive\Documents\MCP
+   python -m uvicorn mob_forge_app.app:app --port 8000
+   # In another terminal:
+   curl -X POST http://localhost:8000/api/generate-mob -H "Content-Type: application/json" -d "{\"description\": \"test mob\", \"difficulty\": \"easy\"}"
+   ```
+
+### Manual Verification (Browser)
+
+1. Start the web app: `python -m uvicorn mob_forge_app.app:app --port 8000`
+2. Open `http://localhost:8000` in browser
+3. **Create tab**: Type a mob description, verify a mob card appears with stats
+4. **Gallery tab**: Verify the generated mob shows up in the grid
+5. **Textures tab**: Pick colors and style, verify a pixel-art texture preview renders
+6. **Build Pack tab**: Select mobs, build pack, verify `.mcaddon` file downloads
+7. **Minecraft test**: (Optional) Import the `.mcaddon` into Minecraft Bedrock and verify the mob loads

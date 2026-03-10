@@ -98,66 +98,130 @@ def create_mcworld(out_dir: Path,
                    beh_root: Path,
                    beh_manifest: dict,
                    specs: list[dict]) -> Path:
-    """Create a .mcworld file from resource and behavior packs."""
+    """Create a .mcworld file by delegating to MCP's proven build_mcworld.
+
+    Translates our spec format to MCP's mob format, then calls its
+    build_mcworld function which is known to produce visible mobs.
+    """
+    import asyncio
+    import base64
+    import copy
+    import sys
+
+    # Ensure MCP tools are importable
+    mcp_root = Path(__file__).resolve().parents[2] / "MCP" / "mcp_server"
+    if str(mcp_root) not in sys.path:
+        sys.path.insert(0, str(mcp_root))
+
+    from tools.build_mcworld import build_mcworld as _mcp_build
+    from backend.core.builders import _fix_geometry_uv
+
     main_spec = specs[0] if specs else validate_spec(default_spec())
-    world_root = out_dir / f"{main_spec['short_name']}_world"
-    copy_world_template(world_root)
+    safe_name = main_spec["short_name"]
 
-    # Remove any existing pack folders and link files from the template
-    # to ensure a clean link to our new packs.
-    for folder in ["behavior_packs", "resource_packs"]:
-        p = world_root / folder
-        if p.exists():
-            shutil.rmtree(p, ignore_errors=True)
-        p.mkdir(parents=True, exist_ok=True)
+    # Translate our specs to MCP mob format
+    mcp_mobs = []
+    for spec in specs:
+        identifier = spec["identifier"]
+        mob_name = identifier.split(":")[-1]
 
-    # Remove existing icons to avoid confusion
-    for icon in ["world_icon.png", "world_icon.jpeg", "world_icon.jpg"]:
-        (world_root / icon).unlink(missing_ok=True)
+        # Read the actual behavior entity JSON from beh_root (written by
+        # patch_behavior_pack with all LLM-generated components like
+        # minecraft:shooter, minecraft:behavior.ranged_attack, etc.)
+        beh_entity_file = beh_root / "entities" / f"{mob_name}.json"
+        if beh_entity_file.exists():
+            entity_data = json.loads(beh_entity_file.read_bytes())
+            print(f"[WORLD] Using LLM-generated behavior entity from {beh_entity_file.name}")
+        else:
+            # Fallback: build a minimal entity
+            entity_data = {
+                "format_version": "1.16.0",
+                "minecraft:entity": {
+                    "description": {
+                        "identifier": identifier,
+                        "is_spawnable": True,
+                        "is_summonable": True,
+                        "is_experimental": False
+                    },
+                    "components": {
+                        "minecraft:type_family": {"family": [mob_name, "monster"]},
+                        "minecraft:health": {"value": int(spec.get("hp", 20)), "max": int(spec.get("hp", 20))},
+                        "minecraft:movement.basic": {},
+                        "minecraft:jump.static": {},
+                        "minecraft:movement": {"value": float(spec.get("speed", 0.30))},
+                        "minecraft:attack": {"damage": int(spec.get("damage", 3))},
+                        "minecraft:physics": {},
+                        "minecraft:collision_box": spec.get("collision_box", {"width": 1, "height": 1}),
+                        "minecraft:navigation.walk": {"can_walk": True, "can_pass_doors": True},
+                        "minecraft:pushable": {"is_pushable": True, "is_pushable_by_piston": True},
+                        "minecraft:behavior.float": {"priority": 0},
+                        "minecraft:behavior.hurt_by_target": {"priority": 1},
+                        "minecraft:behavior.nearest_attackable_target": {
+                            "priority": 2,
+                            "entity_types": [{
+                                "filters": {"test": "is_family", "subject": "other", "value": "player"},
+                                "max_dist": 35
+                            }]
+                        },
+                        "minecraft:behavior.melee_attack": {"priority": 3, "speed_multiplier": 1.0},
+                        "minecraft:behavior.random_stroll": {"priority": 6, "speed_multiplier": 1.0},
+                        "minecraft:behavior.look_at_player": {"priority": 8, "look_distance": 6.0},
+                        "minecraft:behavior.random_look_around": {"priority": 9},
+                    }
+                }
+            }
+            print(f"[WORLD] No behavior entity file found, using fallback")
 
-    # Copy our combined packs into the world
-    shutil.copytree(beh_root, world_root / "behavior_packs" / "custom_addon_beh", dirs_exist_ok=True)
-    shutil.copytree(res_root, world_root / "resource_packs" / "custom_addon_res", dirs_exist_ok=True)
+        # Geometry: fix UV overflow, then pass to MCP build
+        geometry_data = None
+        geo_json = spec.get("geometry_json")
+        if geo_json and isinstance(geo_json, dict) and geo_json.get("minecraft:geometry"):
+            geometry_data = _fix_geometry_uv(copy.deepcopy(geo_json))
 
-    (world_root / "levelname.txt").write_text(f"Add-on: {main_spec['display_name']}", encoding="utf-8")
+        # Texture: read from res_root if available, else None
+        texture_b64 = None
+        tex_path = res_root / "textures" / "entity" / f"{mob_name}.png"
+        if tex_path.exists():
+            texture_b64 = base64.b64encode(tex_path.read_bytes()).decode("utf-8")
 
-    # Write link files.
-    beh_links = [{
-        "pack_id": beh_manifest["header"]["uuid"],
-        "version": _manifest_version(beh_manifest)
-    }]
-    res_links = [{
-        "pack_id": res_manifest["header"]["uuid"],
-        "version": _manifest_version(res_manifest)
-    }]
+        # Egg colors
+        egg_base = spec.get("egg_base", "#4A7023")
+        egg_overlay = spec.get("egg_overlay", "#2E4F1E")
 
-    (world_root / "world_behavior_packs.json").write_text(json.dumps(beh_links), encoding="utf-8")
-    (world_root / "world_resource_packs.json").write_text(json.dumps(res_links), encoding="utf-8")
+        # Scale
+        scale = float(spec.get("scale", 1.0))
 
-    icon_src = res_root / "pack_icon.png"
-    if icon_src.exists():
-        shutil.copyfile(icon_src, world_root / "world_icon.png")
+        mcp_mobs.append({
+            "entity": entity_data,
+            "metadata": {
+                "display_name": spec.get("display_name", mob_name.replace("_", " ").title()),
+                "suggested_style": "zombie",
+                "suggested_colors": [egg_base, egg_overlay],
+                "scale": scale,
+            },
+            "texture_base64": texture_b64,
+            "geometry_data": geometry_data,
+        })
 
-    # Enable cheats so tick.json commands (summon) actually work
-    _enable_cheats_in_world(world_root)
+    # Call MCP's build_mcworld (async def but contains no await calls).
+    # Run in a new thread to avoid conflicts with FastAPI's event loop.
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor() as pool:
+        result_json = pool.submit(
+            asyncio.run, _mcp_build(mcp_mobs, safe_name)
+        ).result()
 
-    # Spawn entities in the world
-    _spawn_entities_in_world(world_root, specs)
+    result = json.loads(result_json)
+    mcworld_bytes = base64.b64decode(result["file_base64"])
 
-    mcworld = out_dir / f"{main_spec['short_name']}.mcworld"
-    with zipfile.ZipFile(mcworld, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        all_files = []
-        for p in world_root.rglob("*"):
-            if p.is_file():
-                all_files.append(p)
+    mcworld_path = out_dir / f"{safe_name}.mcworld"
+    mcworld_path.write_bytes(mcworld_bytes)
 
-        all_files.sort(key=lambda x: (x.name != "level.dat", x.name != "levelname.txt", x.name))
-        for p in all_files:
-            arc = p.relative_to(world_root).as_posix()
-            zf.write(p, arcname=arc)
+    for ident in result.get("mob_identifiers", []):
+        print(f"[WORLD] Will auto-spawn {ident} near player on world load")
+    print(f"[WORLD] Generated .mcworld via MCP pipeline")
 
-    shutil.rmtree(world_root, ignore_errors=True)
-    return mcworld
+    return mcworld_path
 
 
 def build_addon(specs: list[dict], out_dir: Path, res_src: Optional[Path], beh_src: Optional[Path], textures_dir: Optional[Path] = None):
@@ -168,6 +232,7 @@ def build_addon(specs: list[dict], out_dir: Path, res_src: Optional[Path], beh_s
     logs = io.StringIO()
     try:
         logs.write(f"Building bundle with {len(specs)} mobs: {[s.get('short_name') for s in specs]}\n")
+        print(f"[BUILD] Overriding specs with: {[s.get('short_name') for s in specs]}")
         res_root = work / "res"
         beh_root = work / "beh"
         if res_src and res_src.exists():
@@ -183,6 +248,29 @@ def build_addon(specs: list[dict], out_dir: Path, res_src: Optional[Path], beh_s
 
         res_manifest = patch_resource_pack(res_root, specs, textures_dir=textures_dir)
         beh_manifest = patch_behavior_pack(beh_root, specs)
+
+        # Cross-link manifests: behavior pack depends on resource pack and vice versa.
+        # Without this, Minecraft treats them as unrelated packs and the client
+        # entity definition (geometry, textures, render controller) never applies
+        # to the server entity — making the mob invisible in-game.
+        res_uuid = res_manifest.get("header", {}).get("uuid", "")
+        res_ver = res_manifest.get("header", {}).get("version", [1, 0, 0])
+        beh_uuid = beh_manifest.get("header", {}).get("uuid", "")
+        beh_ver = beh_manifest.get("header", {}).get("version", [1, 0, 0])
+
+        if res_uuid and beh_uuid:
+            beh_manifest.setdefault("dependencies", [])
+            beh_manifest["dependencies"].append({"uuid": res_uuid, "version": res_ver})
+            (beh_root / "manifest.json").write_bytes(
+                json.dumps(beh_manifest, indent=2).encode("utf-8")
+            )
+
+            res_manifest.setdefault("dependencies", [])
+            res_manifest["dependencies"].append({"uuid": beh_uuid, "version": beh_ver})
+            (res_root / "manifest.json").write_bytes(
+                json.dumps(res_manifest, indent=2).encode("utf-8")
+            )
+            logs.write("Linked resource ↔ behavior pack dependencies\n")
 
         out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -209,11 +297,12 @@ def build_addon(specs: list[dict], out_dir: Path, res_src: Optional[Path], beh_s
         try:
             mcworld = create_mcworld(out_dir, res_root, res_manifest, beh_root, beh_manifest, specs)
         except Exception as exc:
+            import traceback; traceback.print_exc()
             print(f"[WARN] Failed to create .mcworld: {exc}")
-            logs.write(f"Warning: .mcworld could not be created because no base world template was found.\n")
+            logs.write(f"Warning: .mcworld could not be created.\n")
 
         spec_json_path = out_dir / "specs.json"
-        spec_json_path.write_text(json.dumps(specs, indent=2), encoding="utf-8")
+        spec_json_path.write_bytes(json.dumps(specs, indent=2).encode("utf-8"))
 
         with zipfile.ZipFile(bundle_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             zf.write(res_mcpack, arcname=res_mcpack.name)
@@ -236,96 +325,211 @@ def build_addon(specs: list[dict], out_dir: Path, res_src: Optional[Path], beh_s
         shutil.rmtree(work, ignore_errors=True)
 
 
-def _enable_cheats_in_world(world_root: Path):
-    """Patch level.dat to enable cheats/commands so tick.json summon works.
+# ─── Bedrock Little-Endian NBT Writer (ported from MCP) ──────────────────────
 
-    Bedrock level.dat format: 8-byte header (4-byte version LE + 4-byte
-    payload length LE) followed by little-endian NBT compound.
+_TAG_END = 0
+_TAG_BYTE = 1
+_TAG_SHORT = 2
+_TAG_INT = 3
+_TAG_LONG = 4
+_TAG_FLOAT = 5
+_TAG_STRING = 8
+_TAG_LIST = 9
+_TAG_COMPOUND = 10
+
+
+def _nbt_write_tag_name(buf: io.BytesIO, tag_type: int, name: str):
+    """Write tag type byte + name (little-endian short length + utf-8)."""
+    buf.write(struct.pack("<B", tag_type))
+    encoded = name.encode("utf-8")
+    buf.write(struct.pack("<H", len(encoded)))
+    buf.write(encoded)
+
+
+def _nbt_write_string(buf: io.BytesIO, value: str):
+    encoded = value.encode("utf-8")
+    buf.write(struct.pack("<H", len(encoded)))
+    buf.write(encoded)
+
+
+def _nbt_write_compound(buf: io.BytesIO, data: dict):
+    """Recursively write a compound tag in Bedrock little-endian NBT."""
+    for key, value in data.items():
+        if isinstance(value, dict):
+            if "_type" in value:
+                t = value["_type"]
+                v = value["_value"]
+                if t == "byte":
+                    _nbt_write_tag_name(buf, _TAG_BYTE, key)
+                    buf.write(struct.pack("<b", v))
+                elif t == "short":
+                    _nbt_write_tag_name(buf, _TAG_SHORT, key)
+                    buf.write(struct.pack("<h", v))
+                elif t == "int":
+                    _nbt_write_tag_name(buf, _TAG_INT, key)
+                    buf.write(struct.pack("<i", v))
+                elif t == "long":
+                    _nbt_write_tag_name(buf, _TAG_LONG, key)
+                    buf.write(struct.pack("<q", v))
+                elif t == "float":
+                    _nbt_write_tag_name(buf, _TAG_FLOAT, key)
+                    buf.write(struct.pack("<f", v))
+                elif t == "string":
+                    _nbt_write_tag_name(buf, _TAG_STRING, key)
+                    _nbt_write_string(buf, v)
+                elif t == "int_list":
+                    _nbt_write_tag_name(buf, _TAG_LIST, key)
+                    buf.write(struct.pack("<B", _TAG_INT))
+                    buf.write(struct.pack("<i", len(v)))
+                    for item in v:
+                        buf.write(struct.pack("<i", item))
+            else:
+                _nbt_write_tag_name(buf, _TAG_COMPOUND, key)
+                _nbt_write_compound(buf, value)
+        elif isinstance(value, str):
+            _nbt_write_tag_name(buf, _TAG_STRING, key)
+            _nbt_write_string(buf, value)
+        elif isinstance(value, bool):
+            _nbt_write_tag_name(buf, _TAG_BYTE, key)
+            buf.write(struct.pack("<b", 1 if value else 0))
+        elif isinstance(value, int):
+            _nbt_write_tag_name(buf, _TAG_INT, key)
+            buf.write(struct.pack("<i", value))
+        elif isinstance(value, float):
+            _nbt_write_tag_name(buf, _TAG_FLOAT, key)
+            buf.write(struct.pack("<f", value))
+        elif isinstance(value, list):
+            _nbt_write_tag_name(buf, _TAG_LIST, key)
+            if len(value) > 0 and isinstance(value[0], int):
+                buf.write(struct.pack("<B", _TAG_INT))
+                buf.write(struct.pack("<i", len(value)))
+                for item in value:
+                    buf.write(struct.pack("<i", item))
+            else:
+                buf.write(struct.pack("<B", _TAG_END))
+                buf.write(struct.pack("<i", 0))
+    buf.write(struct.pack("<B", _TAG_END))
+
+
+def _build_level_dat(world_name: str) -> bytes:
+    """Build a minimal Bedrock level.dat binary from scratch.
+
+    8-byte header (version=10, payload_length) + little-endian NBT compound.
+    Ported from MCP's build_mcworld tool.
     """
-    level_dat = world_root / "level.dat"
-    if not level_dat.exists():
-        print("[WORLD] No level.dat found, cannot enable cheats")
-        return
+    import time as _time
 
-    try:
-        import nbtlib
+    flat_layers = json.dumps({
+        "biome_id": 1,
+        "block_layers": [
+            {"block_name": "minecraft:bedrock", "count": 1},
+            {"block_name": "minecraft:dirt", "count": 2},
+            {"block_name": "minecraft:grass_block", "count": 1}
+        ],
+        "encoding_version": 6,
+        "structure_options": None,
+        "world_version": "version.post_1_18"
+    })
 
-        raw = level_dat.read_bytes()
-        if len(raw) < 8:
-            print("[WORLD] level.dat too small")
-            return
+    nbt_data = {
+        "abilities": {
+            "attackmobs": {"_type": "byte", "_value": 1},
+            "attackplayers": {"_type": "byte", "_value": 1},
+            "build": {"_type": "byte", "_value": 1},
+            "doorsandswitches": {"_type": "byte", "_value": 1},
+            "flying": {"_type": "byte", "_value": 0},
+            "flySpeed": {"_type": "float", "_value": 0.05},
+            "instabuild": {"_type": "byte", "_value": 0},
+            "invulnerable": {"_type": "byte", "_value": 0},
+            "lightning": {"_type": "byte", "_value": 0},
+            "mayfly": {"_type": "byte", "_value": 1},
+            "mine": {"_type": "byte", "_value": 1},
+            "op": {"_type": "byte", "_value": 1},
+            "opencontainers": {"_type": "byte", "_value": 1},
+            "teleport": {"_type": "byte", "_value": 1},
+            "walkSpeed": {"_type": "float", "_value": 0.1},
+        },
+        "baseGameVersion": "*",
+        "cheatsEnabled": {"_type": "byte", "_value": 1},
+        "commandblockoutput": {"_type": "byte", "_value": 1},
+        "commandblocksenabled": {"_type": "byte", "_value": 1},
+        "commandsEnabled": {"_type": "byte", "_value": 1},
+        "currentTick": {"_type": "long", "_value": 1},
+        "Difficulty": 1,
+        "dodaylightcycle": {"_type": "byte", "_value": 1},
+        "doentitydrops": {"_type": "byte", "_value": 1},
+        "dofiretick": {"_type": "byte", "_value": 1},
+        "doimmediaterespawn": {"_type": "byte", "_value": 0},
+        "doinsomnia": {"_type": "byte", "_value": 1},
+        "domobloot": {"_type": "byte", "_value": 1},
+        "domobspawning": {"_type": "byte", "_value": 1},
+        "dotiledrops": {"_type": "byte", "_value": 1},
+        "doweathercycle": {"_type": "byte", "_value": 1},
+        "drowningdamage": {"_type": "byte", "_value": 1},
+        "falldamage": {"_type": "byte", "_value": 1},
+        "firedamage": {"_type": "byte", "_value": 1},
+        "FlatWorldLayers": flat_layers,
+        "ForceGameType": {"_type": "byte", "_value": 0},
+        "functioncommandlimit": 10000,
+        "GameType": 1,  # Creative
+        "Generator": 2,  # Flat
+        "hasBeenLoadedInCreative": {"_type": "byte", "_value": 1},
+        "immutableWorld": {"_type": "byte", "_value": 0},
+        "InventoryVersion": "1.20.0",
+        "keepinventory": {"_type": "byte", "_value": 1},
+        "LANBroadcast": {"_type": "byte", "_value": 1},
+        "LANBroadcastIntent": {"_type": "byte", "_value": 1},
+        "lastOpenedWithVersion": [1, 20, 0, 0, 0],
+        "LastPlayed": {"_type": "long", "_value": int(_time.time())},
+        "LevelName": world_name,
+        "lightningLevel": {"_type": "float", "_value": 0.0},
+        "lightningTime": 0,
+        "LimitedWorldOriginX": 0,
+        "LimitedWorldOriginY": 32767,
+        "LimitedWorldOriginZ": 0,
+        "maxcommandchainlength": 65535,
+        "MinimumCompatibleClientVersion": [1, 20, 0, 0, 0],
+        "mobgriefing": {"_type": "byte", "_value": 1},
+        "MultiplayerGame": {"_type": "byte", "_value": 1},
+        "MultiplayerGameIntent": {"_type": "byte", "_value": 1},
+        "naturalregeneration": {"_type": "byte", "_value": 1},
+        "NetherScale": 8,
+        "NetworkVersion": 594,
+        "permissionsLevel": 1,
+        "Platform": 2,
+        "PlatformBroadcastIntent": 3,
+        "pvp": {"_type": "byte", "_value": 1},
+        "rainLevel": {"_type": "float", "_value": 0.0},
+        "rainTime": 0,
+        "RandomSeed": {"_type": "long", "_value": 12345},
+        "randomtickspeed": 1,
+        "sendcommandfeedback": {"_type": "byte", "_value": 1},
+        "serverChunkTickRange": 4,
+        "showcoordinates": {"_type": "byte", "_value": 1},
+        "showdeathmessages": {"_type": "byte", "_value": 1},
+        "spawnMobs": {"_type": "byte", "_value": 1},
+        "spawnradius": 5,
+        "SpawnX": 0,
+        "SpawnY": 4,
+        "SpawnZ": 0,
+        "startWithMapEnabled": {"_type": "byte", "_value": 0},
+        "StorageVersion": 10,
+        "texturePacksRequired": {"_type": "byte", "_value": 0},
+        "Time": {"_type": "long", "_value": 0},
+        "tntexplodes": {"_type": "byte", "_value": 1},
+        "useMsaGamertagsOnly": {"_type": "byte", "_value": 0},
+        "WorldVersion": 1,
+        "XBLBroadcastIntent": 3,
+        "experiments": {
+            "experiments_ever_used": {"_type": "byte", "_value": 0},
+            "saved_with_toggled_experiments": {"_type": "byte", "_value": 0},
+        },
+    }
 
-        # Parse the 8-byte Bedrock header
-        header_version, payload_len = struct.unpack_from("<II", raw, 0)
-        nbt_bytes = raw[8:]
+    payload = io.BytesIO()
+    _nbt_write_tag_name(payload, _TAG_COMPOUND, "")
+    _nbt_write_compound(payload, nbt_data)
+    nbt_bytes = payload.getvalue()
 
-        # Write NBT payload to a temp file so nbtlib can load it
-        tmp_nbt = level_dat.parent / "_level_nbt.tmp"
-        tmp_nbt.write_bytes(nbt_bytes)
-
-        nbt_file = nbtlib.load(tmp_nbt, byteorder="little")
-        tmp_nbt.unlink(missing_ok=True)
-
-        # Enable cheats and commands
-        root = nbt_file
-        if "" in root:
-            root = root[""]
-
-        root["commandsEnabled"] = nbtlib.Byte(1)
-        root["commandblocksenabled"] = nbtlib.Byte(1)
-        root["cheatsEnabled"] = nbtlib.Byte(1)
-        root["commandblockoutput"] = nbtlib.Byte(0)
-
-        # Write modified NBT to temp file
-        nbt_file.save(tmp_nbt, byteorder="little")
-        new_nbt = tmp_nbt.read_bytes()
-        tmp_nbt.unlink(missing_ok=True)
-
-        # Rebuild level.dat with Bedrock header
-        new_header = struct.pack("<II", header_version, len(new_nbt))
-        level_dat.write_bytes(new_header + new_nbt)
-        print("[WORLD] Enabled cheats/commands in level.dat")
-
-    except ImportError:
-        print("[WORLD] nbtlib not available, cannot enable cheats")
-    except Exception as e:
-        print(f"[WORLD] Failed to patch level.dat: {e}")
-
-
-def _spawn_entities_in_world(world_root: Path, specs: list[dict]):
-    """Auto-spawn entities by adding tick functions to the behavior pack.
-
-    Uses a 40-tick (2s) delay then summons right on the player (~ ~ ~).
-    """
-    beh_pack = world_root / "behavior_packs" / "custom_addon_beh"
-    if not beh_pack.exists():
-        print("[WORLD] No behavior pack found in world, cannot spawn entities")
-        return
-
-    functions_dir = beh_pack / "functions"
-    functions_dir.mkdir(parents=True, exist_ok=True)
-
-    # --- spawn_mobs.mcfunction ---
-    # Delay 40 ticks (2s) then spawn right on the player (~ ~ ~).
-    lines = [
-        "scoreboard objectives add addon_spawn dummy",
-        "scoreboard players add @a[tag=!mob_spawned] addon_spawn 1",
-    ]
-    for i, spec in enumerate(specs):
-        lines.append(
-            f'execute as @a[tag=!mob_spawned,scores={{addon_spawn=40..}},c=1] at @s run '
-            f'summon {spec["identifier"]} ~ ~ ~'
-        )
-    lines.append("tag @a[scores={addon_spawn=40..}] add mob_spawned")
-
-    spawn_fn = functions_dir / "spawn_mobs.mcfunction"
-    spawn_fn.write_text("\n".join(lines), encoding="utf-8")
-
-    # --- tick.json ---
-    tick_json = {"values": ["spawn_mobs"]}
-    (functions_dir / "tick.json").write_text(
-        json.dumps(tick_json, indent=2), encoding="utf-8"
-    )
-
-    for spec in specs:
-        print(f"[WORLD] Will auto-spawn {spec['identifier']} near player on world load")
+    header = struct.pack("<II", 10, len(nbt_bytes))
+    return header + nbt_bytes

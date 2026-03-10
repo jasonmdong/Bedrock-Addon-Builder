@@ -232,9 +232,45 @@ function parseBedrock(geometryData) {
 // Note: left and back faces are mirrored horizontally
 // Note: bottom face is mirrored vertically
 
+function applyPerFaceUV(geometry, uvFaces, size, textureWidth, textureHeight) {
+  // Per-face UV format from MCP designModel:
+  // { "north": { "uv": [x, y], "uv_size": [w, h] }, ... }
+  const toU = (x) => x / textureWidth;
+  const toV = (y) => 1 - (y / textureHeight);
+
+  const uvArray = [];
+
+  // Three.js BoxGeometry face order: right(+x), left(-x), top(+y), bottom(-y), front(+z), back(-z)
+  // Bedrock per-face names mapped to Three.js face indices:
+  const faceOrder = ["east", "west", "up", "down", "south", "north"];
+
+  for (const faceName of faceOrder) {
+    const face = uvFaces[faceName];
+    if (face && face.uv && face.uv_size) {
+      const fu = face.uv[0];
+      const fv = face.uv[1];
+      const fw = face.uv_size[0];
+      const fh = face.uv_size[1];
+
+      const u1 = toU(fu);
+      const u2 = toU(fu + fw);
+      const v1 = toV(fv + fh); // bottom (after Y-flip)
+      const v2 = toV(fv);      // top (after Y-flip)
+
+      // 4 vertices: BL, BR, TL, TR
+      uvArray.push(u1, v1, u2, v1, u1, v2, u2, v2);
+    } else {
+      // No UV for this face — map to 0,0 (transparent/blank)
+      uvArray.push(0, 0, 0, 0, 0, 0, 0, 0);
+    }
+  }
+
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvArray, 2));
+}
+
 function applyBoxUV(geometry, uv, size, textureWidth, textureHeight) {
-  // Handle missing UV data
-  if (!uv || uv.length < 2) {
+  // Handle missing or non-array UV data
+  if (!uv || !Array.isArray(uv) || uv.length < 2) {
     return;
   }
   
@@ -293,7 +329,7 @@ function createCubeMesh(cube, bonePivot, colorIndex, texture, textureWidth = 64,
   const inflate = cube.inflate || 0;
   const cubeRotation = cube.rotation || [0, 0, 0];
   const cubePivot = cube.pivot || null;
-  const uv = cube.uv || [0, 0];
+  const uv = cube.uv;
   
   // Apply inflation
   const adjustedSize = [
@@ -307,7 +343,13 @@ function createCubeMesh(cube, bonePivot, colorIndex, texture, textureWidth = 64,
   
   // Apply UV mapping if texture is available
   if (texture && uv) {
-    applyBoxUV(geometry, uv, size, textureWidth, textureHeight);
+    if (typeof uv === "object" && !Array.isArray(uv)) {
+      // Per-face UV format from MCP designModel
+      applyPerFaceUV(geometry, uv, size, textureWidth, textureHeight);
+    } else {
+      // Classic box UV format [x, y]
+      applyBoxUV(geometry, uv, size, textureWidth, textureHeight);
+    }
   }
   
   // Use texture material if available, otherwise use colored material

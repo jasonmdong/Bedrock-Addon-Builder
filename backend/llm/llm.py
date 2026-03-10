@@ -464,10 +464,17 @@ def llm_rewrite_spec(prompt: str, current: dict, provider: str,
                 print(f"[LLM] Mob type changed ({old_name} → {new_name}), "
                       f"generating MCP texture for {safe_id}")
                 try:
-                    design_result = mcp_design_model_sync(geo, safe_id, prompt)
+                    design_result = mcp_design_model_sync(
+                        geo, safe_id, prompt,
+                        color_rgb=output_spec.get("color_rgb"),
+                        display_name=output_spec.get("display_name", ""),
+                    )
                     if design_result.available and design_result.texture_b64:
                         texture_b64 = design_result.texture_b64
-                        print(f"[LLM] MCP texture generated ({len(texture_b64)} chars)")
+                        # Update geometry to match the texture (MCP uses per-face UVs)
+                        if design_result.geometry:
+                            output_spec["geometry_json"] = design_result.geometry
+                        print(f"[LLM] MCP texture + geometry generated ({len(texture_b64)} chars)")
                 except Exception as tex_exc:
                     log.warning("[LLM] MCP texture generation failed: %s", tex_exc)
 
@@ -629,7 +636,10 @@ def llm_generate_geometry(
     if output and isinstance(output, dict) and output.get("minecraft:geometry"):
         safe_name = mob_name.replace(":", "_").replace(" ", "_").lower()
         print(f"[LLM-GEOMETRY] Calling MCP designModel for texture (model={safe_name})")
-        design_result = mcp_design_model_sync(output, safe_name, prompt)
+        design_result = mcp_design_model_sync(
+            output, safe_name, prompt,
+            display_name=mob_name,
+        )
         if design_result.available and design_result.texture_b64:
             texture_b64 = design_result.texture_b64
             mcp_design_used = True
