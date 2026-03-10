@@ -132,6 +132,15 @@ def create_mcworld(out_dir: Path,
         if beh_entity_file.exists():
             entity_data = json.loads(beh_entity_file.read_bytes())
             print(f"[WORLD] Using LLM-generated behavior entity from {beh_entity_file.name}")
+            # Ensure minecraft:loot is wired if loot_drops exist
+            loot_drops = spec.get("loot_drops", [])
+            if loot_drops:
+                ent_comps = entity_data.get("minecraft:entity", {}).get("components", {})
+                if "minecraft:loot" not in ent_comps:
+                    ent_comps["minecraft:loot"] = {
+                        "table": f"loot_tables/entities/{mob_name}.json"
+                    }
+                    print(f"[WORLD] Auto-wired minecraft:loot for {mob_name}")
         else:
             # Fallback: build a minimal entity
             entity_data = {
@@ -191,14 +200,22 @@ def create_mcworld(out_dir: Path,
         # Scale
         scale = float(spec.get("scale", 1.0))
 
+        # Build metadata for MCP pipeline
+        mcp_metadata = {
+            "display_name": spec.get("display_name", mob_name.replace("_", " ").title()),
+            "suggested_style": "zombie",
+            "suggested_colors": [egg_base, egg_overlay],
+            "scale": scale,
+        }
+
+        # Pass loot_drops to MCP so _build_loot_table creates proper drops
+        loot_drops = spec.get("loot_drops", [])
+        if loot_drops and isinstance(loot_drops, list):
+            mcp_metadata["loot_drops"] = loot_drops
+
         mcp_mobs.append({
             "entity": entity_data,
-            "metadata": {
-                "display_name": spec.get("display_name", mob_name.replace("_", " ").title()),
-                "suggested_style": "zombie",
-                "suggested_colors": [egg_base, egg_overlay],
-                "scale": scale,
-            },
+            "metadata": mcp_metadata,
             "texture_base64": texture_b64,
             "geometry_data": geometry_data,
         })

@@ -285,24 +285,34 @@ function applyBoxUV(geometry, uv, size, textureWidth, textureHeight) {
   
   const uvArray = [];
   
-  // Three.js BoxGeometry face order: right(+x), left(-x), top(+y), bottom(-y), front(+z), back(-z)
-  // Each face: 4 vertices × 2 coords = 8 values
-  // Vertex order: bottom-left, bottom-right, top-left, top-right
+  // Standard Bedrock box UV layout:
+  //      u    u+d   u+d+w  u+2d+w
+  //  v   ┌─────┬──────┬──────┬──────┐
+  //      │     │ Top  │      │Bottom│
+  // v+d  ├─────┼──────┼──────┼──────┤
+  //      │Right│Front │ Left │ Back │
+  // v+d+h└─────┴──────┴──────┴──────┘
+  //
+  // Three.js BoxGeometry face order: +X, -X, +Y, -Y, +Z, -Z
+  // Bedrock: +X=East/Right, -X=West/Left, +Y=Top, -Y=Bottom,
+  //          +Z=South/Back, -Z=North/Front
+  // The viewer uses X-inversion for positions, so U-mirroring
+  // on the front face is NOT needed (inversion handles it).
   
-  // Face definitions: [u, v, width, height, mirrorU, mirrorV]
+  // Face definitions: [pixelU, pixelV, pixelW, pixelH, mirrorU, mirrorV]
   const faces = [
-    // Right face - to the left of front (negative U direction)
-    [u - d, v, d, h, true, false],
-    // Left face - to the right of front
-    [u + w, v, d, h, false, false],
-    // Top face - above front (negative V direction)
-    [u, v - d, w, d, false, false],
-    // Bottom face - below front area, mirrored V
-    [u + w, v - d, w, d, false, true],
-    // Front face - the anchor point
-    [u, v, w, h, false, false],
-    // Back face - further right, mirrored U
-    [u + w + d, v, w, h, true, false]
+    // +X = East/Right side
+    [u,             v + d,   d, h, true, false],
+    // -X = West/Left side
+    [u + d + w,     v + d,   d, h, false, false],
+    // +Y = Top
+    [u + d,         v,       w, d, false, false],
+    // -Y = Bottom
+    [u + d + w,     v,       w, d, false, true],
+    // +Z = South/Back
+    [u + 2*d + w,   v + d,   w, h, true, false],
+    // -Z = North/Front
+    [u + d,         v + d,   w, h, false, false]
   ];
   
   for (const [fu, fv, fw, fh, mirrorU, mirrorV] of faces) {
@@ -490,7 +500,7 @@ function createBoneGroup(bone, colorIndex) {
   return group;
 }
 
-function render3DGeometry(geometryData, mobName) {
+function render3DGeometry(geometryData, mobName, mobScale) {
   console.log("[3D] Rendering geometry with Blockbench-style transformations");
   
   if (!viewer3D) {
@@ -506,6 +516,15 @@ function render3DGeometry(geometryData, mobName) {
     viewer3D.scene.remove(viewer3D.mesh);
     viewer3D.bones = {};
   }
+  
+  // Resolve mob scale from parameter, spec, or default
+  if (!mobScale && mobName) {
+    try {
+      const spec = typeof getUserMob === 'function' ? getUserMob(mobName) : null;
+      if (spec && spec.scale) mobScale = parseFloat(spec.scale);
+    } catch (e) { /* ignore */ }
+  }
+  mobScale = mobScale || 1.0;
   
   // Get the texture for this mob
   const textureData = mobName ? getUserMobTexture(mobName) : null;
@@ -617,6 +636,12 @@ function render3DGeometry(geometryData, mobName) {
   }
   
   console.log(`[3D] Rendered ${cubeCount} cubes in ${boneCount} bones`);
+  
+  // Apply mob scale (elephants = 2.0+, mice = 0.5, etc.)
+  if (mobScale && mobScale !== 1.0) {
+    rootGroup.scale.set(mobScale, mobScale, mobScale);
+    console.log(`[3D] Applied mob scale: ${mobScale}x`);
+  }
   
   // Center and frame the model
   const box = new THREE.Box3().setFromObject(rootGroup);

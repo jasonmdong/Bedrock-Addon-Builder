@@ -145,6 +145,15 @@
       "description": "Optional custom Minecraft components for the mob behavior.",
       "additionalProperties": true,
       "default": {}
+    },
+    "loot_drops": {
+      "type": "array",
+      "description": "Items dropped on death. Each entry: {item, count_min, count_max, chance}.",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "default": []
     }
   }
 }

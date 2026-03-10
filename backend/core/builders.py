@@ -305,22 +305,49 @@ def patch_resource_pack(res_root: Path, specs: list[dict], textures_dir: Path = 
                 shutil.copyfile(persistent_png, png_path)
 
         if not png_path.exists():
-            col = spec.get("color_rgb", COLOR_WORDS.get("red"))
-            # Read actual atlas size from the .geo.json we just wrote (which
-            # has been through _fix_geometry_uv and may be larger than the
-            # original spec's geometry_json dimensions).
-            tex_w, tex_h = 64, 64
-            written_geo = geo_dir / f"{spec['short_name']}.geo.json"
-            if written_geo.exists():
+            # Try procedural UV-mapped texture first (body-part colors,
+            # eyes, patterns) then fall back to solid-color placeholder.
+            geo_for_tex = spec.get("geometry_json")
+            if not geo_for_tex:
+                written_geo = geo_dir / f"{spec['short_name']}.geo.json"
+                if written_geo.exists():
+                    try:
+                        geo_for_tex = json.loads(written_geo.read_bytes())
+                    except Exception:
+                        geo_for_tex = None
+
+            procedural_ok = False
+            if geo_for_tex and isinstance(geo_for_tex, dict) and geo_for_tex.get("minecraft:geometry"):
                 try:
-                    wg = json.loads(written_geo.read_bytes())
-                    desc = wg["minecraft:geometry"][0]["description"]
-                    tex_w = int(desc.get("texture_width", 64))
-                    tex_h = int(desc.get("texture_height", 64))
-                except (IndexError, KeyError, TypeError, ValueError, json.JSONDecodeError):
-                    pass
-            png = make_png_rgba(tex_w, tex_h, *col, 255)
-            png_path.write_bytes(png)
+                    from backend.llm.texture_gen import generate_mob_texture
+                    import base64 as _b64
+                    tex_b64 = generate_mob_texture(
+                        geometry_json=geo_for_tex,
+                        display_name=spec.get("display_name", ""),
+                        color_rgb=spec.get("color_rgb"),
+                        texture_hint=spec.get("texture_hint", ""),
+                        short_name=spec.get("short_name", "custom_mob"),
+                    )
+                    if tex_b64 and "," in tex_b64:
+                        raw = _b64.b64decode(tex_b64.split(",", 1)[1])
+                        png_path.write_bytes(raw)
+                        procedural_ok = True
+                        print(f"[BUILD] Procedural texture for {spec['short_name']}")
+                except Exception as tex_err:
+                    print(f"[BUILD] Procedural texture failed: {tex_err}")
+
+            if not procedural_ok:
+                col = spec.get("color_rgb", COLOR_WORDS.get("red"))
+                tex_w, tex_h = 64, 64
+                if geo_for_tex:
+                    try:
+                        desc = geo_for_tex["minecraft:geometry"][0]["description"]
+                        tex_w = int(desc.get("texture_width", 64))
+                        tex_h = int(desc.get("texture_height", 64))
+                    except (IndexError, KeyError, TypeError, ValueError):
+                        pass
+                png = make_png_rgba(tex_w, tex_h, *col, 255)
+                png_path.write_bytes(png)
 
         if not first_png:
             first_png = png_path
@@ -391,6 +418,71 @@ def patch_resource_pack(res_root: Path, specs: list[dict], textures_dir: Path = 
     return manifest
 
 
+def _generate_loot_table(spec: dict) -> dict:
+    """Generate a Bedrock loot table JSON from the mob spec.
+
+    Reads ``loot_drops`` from the spec. Each drop uses MCP-compatible format:
+      {"item": "minecraft:diamond", "count_min": 1, "count_max": 3, "chance": 1.0}
+
+    Falls back to bones if no loot_drops are specified.
+    """
+    # Common shorthand → full Bedrock item ID
+    _ITEM_MAP = {
+        "diamond": "minecraft:diamond", "diamonds": "minecraft:diamond",
+        "gold": "minecraft:gold_ingot", "gold_ingot": "minecraft:gold_ingot",
+        "iron": "minecraft:iron_ingot", "iron_ingot": "minecraft:iron_ingot",
+        "emerald": "minecraft:emerald", "emeralds": "minecraft:emerald",
+        "bone": "minecraft:bone", "bones": "minecraft:bone",
+        "leather": "minecraft:leather", "string": "minecraft:string",
+        "feather": "minecraft:feather", "gunpowder": "minecraft:gunpowder",
+        "blaze_rod": "minecraft:blaze_rod", "ender_pearl": "minecraft:ender_pearl",
+        "rotten_flesh": "minecraft:rotten_flesh", "spider_eye": "minecraft:spider_eye",
+        "nether_star": "minecraft:nether_star", "coal": "minecraft:coal",
+        "redstone": "minecraft:redstone", "arrow": "minecraft:arrow",
+        "fire_charge": "minecraft:fire_charge", "magma_cream": "minecraft:magma_cream",
+        "ghast_tear": "minecraft:ghast_tear", "egg": "minecraft:egg",
+    }
+
+    def _resolve_item(name: str) -> str:
+        key = name.lower().strip()
+        if key in _ITEM_MAP:
+            return _ITEM_MAP[key]
+        if ":" in key:
+            return key
+        return f"minecraft:{key.replace(' ', '_')}"
+
+    loot_drops = spec.get("loot_drops", [])
+    if not isinstance(loot_drops, list) or not loot_drops:
+        # Default: drop bones
+        loot_drops = [{"item": "minecraft:bone", "count_min": 1, "count_max": 2, "chance": 1.0}]
+
+    # Each drop becomes its own pool (matches MCP's _build_loot_table format)
+    pools = []
+    for drop in loot_drops:
+        if isinstance(drop, str):
+            drop = {"item": drop, "count_min": 1, "count_max": 3, "chance": 1.0}
+
+        item = _resolve_item(drop.get("item", "minecraft:bone"))
+        count_min = int(drop.get("count_min", drop.get("min", 1)))
+        count_max = int(drop.get("count_max", drop.get("max", 1)))
+        chance = float(drop.get("chance", 1.0))
+
+        entry = {"type": "item", "name": item, "weight": 1}
+        if count_max > 1:
+            entry["functions"] = [
+                {"function": "set_count", "count": {"min": count_min, "max": count_max}}
+            ]
+
+        pool = {"rolls": 1, "entries": [entry]}
+        if chance < 1.0:
+            pool["conditions"] = [
+                {"condition": "random_chance", "chance": chance}
+            ]
+        pools.append(pool)
+
+    return {"pools": pools}
+
+
 def patch_behavior_pack(beh_root: Path, specs: list[dict]):
     """Patch a behavior pack with custom mob entities and manifests."""
     ent_dir = beh_root / "entities"
@@ -458,6 +550,11 @@ def patch_behavior_pack(beh_root: Path, specs: list[dict]):
             }
         }
 
+        # Apply minecraft:scale from spec (elephants should be large, mice small)
+        scale = float(spec.get("scale", 1.0))
+        if abs(scale - 1.0) > 1e-6:
+            entity["minecraft:entity"]["components"]["minecraft:scale"] = {"value": scale}
+
         # Merge custom components from spec
         custom_components = spec.get("components", {})
         if custom_components:
@@ -507,6 +604,29 @@ def patch_behavior_pack(beh_root: Path, specs: list[dict]):
             comps.pop("minecraft:movement.basic", None)
         if "minecraft:navigation.fly" in comps:
             comps.pop("minecraft:navigation.walk", None)
+
+        # Loot table pipeline: ensure minecraft:loot is wired AND the
+        # actual loot table JSON file is created when loot_drops exists.
+        mob_name = spec["identifier"].split(":")[-1]
+        loot_drops = spec.get("loot_drops", [])
+
+        # Auto-wire minecraft:loot if loot_drops exists but component missing
+        if loot_drops and "minecraft:loot" not in comps:
+            comps["minecraft:loot"] = {
+                "table": f"loot_tables/entities/{mob_name}.json"
+            }
+            print(f"[BUILD] Auto-wired minecraft:loot for {mob_name}")
+
+        # Create loot table file
+        loot_comp = comps.get("minecraft:loot")
+        if loot_comp and isinstance(loot_comp, dict):
+            loot_path = loot_comp.get("table", "")
+            if loot_path:
+                loot_file = beh_root / loot_path
+                loot_file.parent.mkdir(parents=True, exist_ok=True)
+                loot_table = _generate_loot_table(spec)
+                _write_text(loot_file, json.dumps(loot_table, indent=2))
+                print(f"[BUILD] Created loot table: {loot_path} (drops={[d.get('item','?') for d in loot_drops] if loot_drops else 'default'})")
 
         _write_text(ent_file, json.dumps(entity, indent=2))
 
