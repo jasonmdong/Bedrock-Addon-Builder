@@ -16,6 +16,10 @@ from backend.llm.mcp_context import (
     retrieve_context_sync, mcp_validate_sync, is_retryable,
     mcp_design_model_sync,
 )
+from backend.llm.dynamic_context import (
+    DynamicContext, build_dynamic_context,
+)
+from backend.llm.texture_gen import generate_mob_texture
 
 log = logging.getLogger(__name__)
 
@@ -36,14 +40,87 @@ def _prepare_spec_for_llm(spec: dict) -> str:
     Strips bulky fields the LLM doesn't need (raw geometry data, internal
     metadata) to stay within token budgets.  Keeps the geometry *reference*
     (e.g. "geometry.ghast") so the LLM knows what model is active.
+    Includes a summary of custom geometry bones so the LLM knows NOT to
+    replace it with a vanilla geometry.
     """
     slim = {k: v for k, v in spec.items()
             if k not in ("geometry_json", "_template_base", "_texture_b64",
                          "_mcp_meta", "_mcp_design")}
-    # Note: geometry_json stripped — LLM uses "geometry" field for reference
-    if spec.get("geometry_json") and spec["geometry_json"].get("minecraft:geometry"):
-        slim["geometry_json"] = "(present — omitted for token budget)"
+    # Summarize custom geometry so the LLM knows it exists
+    geo = spec.get("geometry_json")
+    if geo and isinstance(geo, dict) and geo.get("minecraft:geometry"):
+        bones = []
+        for geom in geo["minecraft:geometry"]:
+            for bone in geom.get("bones", []):
+                bname = bone.get("name", "?")
+                cubes = bone.get("cubes", [])
+                bones.append(f"{bname}({len(cubes)} cubes)")
+        desc = geom.get("description", {}) if geo["minecraft:geometry"] else {}
+        geo_id = desc.get("identifier", "custom")
+        tw = desc.get("texture_width", 64)
+        th = desc.get("texture_height", 64)
+        slim["geometry_json"] = (
+            f"(CUSTOM GEOMETRY PRESENT — DO NOT REPLACE) "
+            f"id={geo_id}, atlas={tw}x{th}, "
+            f"bones=[{', '.join(bones)}]"
+        )
     return json.dumps(slim, indent=2)
+
+
+def _sanitize_geometry_json(candidate: dict) -> dict:
+    """Clean up geometry_json before validation.
+
+    If the LLM echoed back the placeholder string instead of a dict,
+    replace it with {} so validate_spec doesn't reject the spec.
+    The real geometry will be restored by _preserve_geometry later.
+    """
+    geo = candidate.get("geometry_json")
+    if isinstance(geo, str):
+        candidate["geometry_json"] = {}
+    return candidate
+
+
+def _has_custom_geometry(spec: dict) -> bool:
+    """Return True if the spec has a non-empty custom geometry_json."""
+    geo = spec.get("geometry_json")
+    return bool(geo and isinstance(geo, dict) and geo.get("minecraft:geometry"))
+
+
+def _preserve_geometry(output_spec: dict, input_spec: dict) -> dict:
+    """Carry forward custom geometry from input if the LLM dropped it.
+
+    The LLM doesn't receive the full geometry_json (too large for token
+    budget).  If the input spec had custom geometry and the LLM returned
+    an empty geometry_json (or echoed the placeholder string), we restore
+    the original geometry + geometry_json so the user's custom model
+    isn't lost during iterative edits.
+    """
+    if not _has_custom_geometry(input_spec):
+        return output_spec
+
+    # If the LLM echoed back the placeholder string, clear it so we restore below
+    out_geo = output_spec.get("geometry_json")
+    if isinstance(out_geo, str):
+        output_spec["geometry_json"] = {}
+
+    # If the LLM generated NEW custom geometry, keep it
+    if _has_custom_geometry(output_spec):
+        return output_spec
+
+    # LLM dropped the custom geometry — restore from input
+    output_spec["geometry_json"] = input_spec["geometry_json"]
+    # Also restore the geometry reference ID if the LLM changed it to
+    # a vanilla one (e.g. "geometry.chicken" instead of the original
+    # custom ID like "geometry.custom_fire_dragon")
+    input_geo_id = input_spec.get("geometry", "")
+    output_geo_id = output_spec.get("geometry", "")
+    if input_geo_id.startswith("geometry.custom") and not output_geo_id.startswith("geometry.custom"):
+        output_spec["geometry"] = input_geo_id
+        print(f"[LLM] Restored custom geometry: {input_geo_id} (LLM had changed to {output_geo_id})")
+    else:
+        print(f"[LLM] Preserved custom geometry_json from input spec")
+
+    return output_spec
 
 
 MAX_SYSTEM_PROMPT_CHARS = 25_000  # ~6K tokens — keeps total well under 80K
@@ -52,6 +129,7 @@ MAX_SYSTEM_PROMPT_CHARS = 25_000  # ~6K tokens — keeps total well under 80K
 def _get_full_system_prompt(
     category: str = "entity_logic_ai",
     mcp_context: Optional[MCPContext] = None,
+    dynamic_ctx: Optional[DynamicContext] = None,
 ) -> str:
     """Build a system prompt dynamically based on the content category.
 
@@ -61,6 +139,7 @@ def _get_full_system_prompt(
       3. Category-specific context (static examples, structure, rules)
       4. MCP model templates (dynamic, if geometry-related)
       5. Mob-spec schema (always included for entity category)
+      6. Dynamic context (prompt-analyzed behavior docs + vanilla examples)
     """
     prompt = LLM_SYSTEM_PROMPT
 
@@ -88,9 +167,17 @@ def _get_full_system_prompt(
     elif category == "entity_logic_ai" and SPEC_SCHEMA:
         prompt += f"\n\nSchema:\n{json.dumps(SPEC_SCHEMA, indent=2)}"
 
+    # Dynamic context — placed last for recency effect (LLMs attend more to end)
+    if dynamic_ctx and dynamic_ctx.has_content:
+        prompt += f"\n\n{dynamic_ctx.context_text}"
+
     mcp_tag = ""
     if mcp_context and mcp_context.has_content:
         mcp_tag = f", mcp_sources={mcp_context.source_tools}"
+    dyn_tag = ""
+    if dynamic_ctx and dynamic_ctx.has_content:
+        intent_names = [i.name for i in dynamic_ctx.intents]
+        dyn_tag = f", dynamic_intents={intent_names}"
 
     if len(prompt) > MAX_SYSTEM_PROMPT_CHARS:
         prompt = prompt[:MAX_SYSTEM_PROMPT_CHARS] + "\n... [system prompt truncated for token budget]"
@@ -99,7 +186,7 @@ def _get_full_system_prompt(
     print(f"[LLM] System prompt built for category={category} "
           f"(context={'yes' if cat_context else 'no'}, "
           f"schema={'yes' if (cat_schema or (category == 'entity_logic_ai' and SPEC_SCHEMA)) else 'no'}"
-          f"{mcp_tag})")
+          f"{mcp_tag}{dyn_tag})")
 
     return prompt
 
@@ -136,11 +223,12 @@ def _get_openai_client(api_key: Optional[str]):
 
 def _call_openai(prompt: str, current: dict, api_key: Optional[str],
                  category: str = "entity_logic_ai",
-                 mcp_context: Optional[MCPContext] = None) -> dict:
+                 mcp_context: Optional[MCPContext] = None,
+                 dynamic_ctx: Optional[DynamicContext] = None) -> dict:
     """Call OpenAI to rewrite a spec based on a user prompt."""
     print("[LLM] calling OpenAI model", LLM_MODEL_NAME)
     client = _get_openai_client(api_key)
-    sys_prompt = _get_full_system_prompt(category, mcp_context)
+    sys_prompt = _get_full_system_prompt(category, mcp_context, dynamic_ctx)
     user_content = f"Current spec:\n{_prepare_spec_for_llm(current)}\n\nInstruction:\n{prompt.strip()}"
     total_chars = len(sys_prompt) + len(user_content)
     print(f"[LLM] Request size: system={len(sys_prompt)} user={len(user_content)} total={total_chars} chars (~{total_chars//4} tokens)")
@@ -161,6 +249,7 @@ def _call_openai(prompt: str, current: dict, api_key: Optional[str],
         candidate = json.loads(content)
     except Exception as exc:
         raise RuntimeError(f"LLM returned invalid JSON: {exc}") from exc
+    _sanitize_geometry_json(candidate)
     if category == "entity_logic_ai":
         return validate_spec(candidate)
     return candidate
@@ -168,7 +257,8 @@ def _call_openai(prompt: str, current: dict, api_key: Optional[str],
 
 def _call_deepseek(prompt: str, current: dict, api_key: Optional[str],
                    category: str = "entity_logic_ai",
-                   mcp_context: Optional[MCPContext] = None) -> dict:
+                   mcp_context: Optional[MCPContext] = None,
+                   dynamic_ctx: Optional[DynamicContext] = None) -> dict:
     """Call DeepSeek to rewrite a spec based on a user prompt."""
     key = api_key or os.environ.get("DEEPSEEK_API_KEY")
     if not key:
@@ -183,7 +273,7 @@ def _call_deepseek(prompt: str, current: dict, api_key: Optional[str],
             messages=[
                 {
                     "role": "system",
-                    "content": _get_full_system_prompt(category, mcp_context)
+                    "content": _get_full_system_prompt(category, mcp_context, dynamic_ctx)
                 },
                 {
                     "role": "user",
@@ -195,6 +285,7 @@ def _call_deepseek(prompt: str, current: dict, api_key: Optional[str],
         )
         content = response.choices[0].message.content
         candidate = json.loads(content)
+        _sanitize_geometry_json(candidate)
         if category == "entity_logic_ai":
             return validate_spec(candidate)
         return candidate
@@ -205,7 +296,8 @@ def _call_deepseek(prompt: str, current: dict, api_key: Optional[str],
 
 def _call_gemini(prompt: str, current: dict, api_key: Optional[str],
                  category: str = "entity_logic_ai",
-                 mcp_context: Optional[MCPContext] = None) -> dict:
+                 mcp_context: Optional[MCPContext] = None,
+                 dynamic_ctx: Optional[DynamicContext] = None) -> dict:
     """Call Google Gemini to rewrite a spec based on a user prompt."""
     if not GENAI_AVAILABLE:
         raise RuntimeError("google-genai package is not installed. Run: pip install google-genai")
@@ -221,12 +313,13 @@ def _call_gemini(prompt: str, current: dict, api_key: Optional[str],
             model=GEMINI_MODEL_NAME,
             contents=f"Current spec:\n{_prepare_spec_for_llm(current)}\n\nInstruction:\n{prompt.strip()}",
             config={
-                "system_instruction": _get_full_system_prompt(category, mcp_context),
+                "system_instruction": _get_full_system_prompt(category, mcp_context, dynamic_ctx),
                 "response_mime_type": "application/json"
             }
         )
         content = response.text
         candidate = json.loads(content)
+        _sanitize_geometry_json(candidate)
         if category == "entity_logic_ai":
             return validate_spec(candidate)
         return candidate
@@ -237,7 +330,8 @@ def _call_gemini(prompt: str, current: dict, api_key: Optional[str],
 
 def _call_ollama(prompt: str, current: dict, api_key: Optional[str] = None,
                  category: str = "entity_logic_ai",
-                 mcp_context: Optional[MCPContext] = None) -> dict:
+                 mcp_context: Optional[MCPContext] = None,
+                 dynamic_ctx: Optional[DynamicContext] = None) -> dict:
     """Call local Ollama to rewrite a spec based on a user prompt.
     
     Ollama uses OpenAI-compatible API, so we use the OpenAI client with a custom base URL.
@@ -256,7 +350,7 @@ def _call_ollama(prompt: str, current: dict, api_key: Optional[str] = None,
         messages = [
             {
                 "role": "system",
-                "content": _get_full_system_prompt(category, mcp_context)
+                "content": _get_full_system_prompt(category, mcp_context, dynamic_ctx)
             },
             {
                 "role": "user",
@@ -278,6 +372,7 @@ def _call_ollama(prompt: str, current: dict, api_key: Optional[str] = None,
             content = content.split("```")[1].split("```")[0]
         
         candidate = json.loads(content.strip())
+        _sanitize_geometry_json(candidate)
         if category == "entity_logic_ai":
             return validate_spec(candidate)
         return candidate
@@ -288,7 +383,8 @@ def _call_ollama(prompt: str, current: dict, api_key: Optional[str] = None,
 
 def _call_claude(prompt: str, current: dict, api_key: Optional[str],
                  category: str = "entity_logic_ai",
-                 mcp_context: Optional[MCPContext] = None) -> dict:
+                 mcp_context: Optional[MCPContext] = None,
+                 dynamic_ctx: Optional[DynamicContext] = None) -> dict:
     """Call Anthropic Claude to rewrite a spec based on a user prompt."""
     if anthropic is None:
         raise RuntimeError("anthropic package is not installed.")
@@ -303,7 +399,7 @@ def _call_claude(prompt: str, current: dict, api_key: Optional[str],
         response = client.messages.create(
             model=CLAUDE_MODEL_NAME,
             max_tokens=2048,
-            system=_get_full_system_prompt(category, mcp_context),
+            system=_get_full_system_prompt(category, mcp_context, dynamic_ctx),
             messages=[
                 {
                     "role": "user",
@@ -318,6 +414,7 @@ def _call_claude(prompt: str, current: dict, api_key: Optional[str],
             content = content.split("```")[1].split("```")[0]
             
         candidate = json.loads(content)
+        _sanitize_geometry_json(candidate)
         if category == "entity_logic_ai":
             return validate_spec(candidate)
         return candidate
@@ -330,18 +427,19 @@ def _call_provider(
     prompt: str, current: dict, provider_key: str,
     api_key: Optional[str], category: str,
     mcp_context: Optional[MCPContext] = None,
+    dynamic_ctx: Optional[DynamicContext] = None,
 ) -> dict:
     """Route to the appropriate LLM provider."""
     if provider_key == "deepseek":
-        return _call_deepseek(prompt, current, api_key, category, mcp_context)
+        return _call_deepseek(prompt, current, api_key, category, mcp_context, dynamic_ctx)
     elif provider_key == "gemini":
-        return _call_gemini(prompt, current, api_key, category, mcp_context)
+        return _call_gemini(prompt, current, api_key, category, mcp_context, dynamic_ctx)
     elif provider_key == "claude":
-        return _call_claude(prompt, current, api_key, category, mcp_context)
+        return _call_claude(prompt, current, api_key, category, mcp_context, dynamic_ctx)
     elif provider_key == "ollama":
-        return _call_ollama(prompt, current, api_key, category, mcp_context)
+        return _call_ollama(prompt, current, api_key, category, mcp_context, dynamic_ctx)
     else:
-        return _call_openai(prompt, current, api_key, category, mcp_context)
+        return _call_openai(prompt, current, api_key, category, mcp_context, dynamic_ctx)
 
 
 def llm_rewrite_spec(prompt: str, current: dict, provider: str,
@@ -379,11 +477,19 @@ def llm_rewrite_spec(prompt: str, current: dict, provider: str,
 
     print(f"[LLM] category={category} (detected={detected_category})")
 
-    # --- Step 1: MCP context retrieval (additive, never blocking) ---
+    # --- Step 1a: MCP context retrieval (additive, never blocking) ---
     mcp_ctx = retrieve_context_sync(effective_prompt, category, current)
     if mcp_ctx and mcp_ctx.has_content:
         print(f"[LLM] MCP context retrieved in {mcp_ctx.retrieval_ms}ms "
               f"(sources={mcp_ctx.source_tools})")
+
+    # --- Step 1b: Dynamic context injection (prompt-analyzed) ---
+    dyn_ctx = build_dynamic_context(effective_prompt, category)
+    if dyn_ctx.has_content:
+        intent_names = [i.name for i in dyn_ctx.intents]
+        print(f"[LLM] Dynamic context: intents={intent_names}, "
+              f"examples={dyn_ctx.example_mobs_used}, "
+              f"chars={dyn_ctx.total_chars}")
 
     start_time = time.time()
     output_spec = None
@@ -395,9 +501,13 @@ def llm_rewrite_spec(prompt: str, current: dict, provider: str,
     try:
         # --- Step 2: LLM call with enriched prompt ---
         output_spec = _call_provider(
-            effective_prompt, current, provider_key, api_key, category, mcp_ctx,
+            effective_prompt, current, provider_key, api_key, category, mcp_ctx, dyn_ctx,
         )
-        
+
+        # --- Step 2b: Preserve custom geometry if LLM dropped it ---
+        if output_spec and category == "entity_logic_ai":
+            output_spec = _preserve_geometry(output_spec, current)
+
         # Run semantic consistency check
         if LOGGING_ENABLED and output_spec:
             score_result = check_semantic_consistency(output_spec)
@@ -424,7 +534,7 @@ def llm_rewrite_spec(prompt: str, current: dict, provider: str,
             try:
                 output_spec = _call_provider(
                     retry_prompt, output_spec, provider_key,
-                    api_key, category, mcp_ctx,
+                    api_key, category, mcp_ctx, dyn_ctx,
                 )
                 # Re-validate after retry
                 mcp_validation = mcp_validate_sync(output_spec)
@@ -452,38 +562,60 @@ def llm_rewrite_spec(prompt: str, current: dict, provider: str,
                 duration_ms=duration_ms
             )
     
-    # --- Step 5: MCP texture generation if mob type changed ---
+    # --- Step 5: Texture generation ---
+    # Always generate a texture for entity specs so the 3D viewer and
+    # painter have something to display.  Priority:
+    #   1. MCP designModel (best quality, requires mctools running)
+    #   2. Procedural UV-aware generator (always available, body-part
+    #      coloring, patterns, eyes, etc.)
     texture_b64 = ""
     if output_spec and category == "entity_logic_ai":
-        old_name = (current.get("display_name") or "").lower()
-        new_name = (output_spec.get("display_name") or "").lower()
-        if old_name and new_name and old_name != new_name:
-            geo = output_spec.get("geometry_json")
-            if geo and isinstance(geo, dict) and geo.get("minecraft:geometry"):
-                safe_id = (output_spec.get("short_name") or "custom_mob").replace(":", "_")
-                print(f"[LLM] Mob type changed ({old_name} → {new_name}), "
-                      f"generating MCP texture for {safe_id}")
-                try:
-                    design_result = mcp_design_model_sync(
-                        geo, safe_id, prompt,
-                        color_rgb=output_spec.get("color_rgb"),
-                        display_name=output_spec.get("display_name", ""),
-                    )
-                    if design_result.available and design_result.texture_b64:
-                        texture_b64 = design_result.texture_b64
-                        # Update geometry to match the texture (MCP uses per-face UVs)
-                        if design_result.geometry:
-                            output_spec["geometry_json"] = design_result.geometry
-                        print(f"[LLM] MCP texture + geometry generated ({len(texture_b64)} chars)")
-                except Exception as tex_exc:
-                    log.warning("[LLM] MCP texture generation failed: %s", tex_exc)
+        geo = output_spec.get("geometry_json")
+        has_geo = geo and isinstance(geo, dict) and geo.get("minecraft:geometry")
+
+        # Try MCP texture first
+        if has_geo:
+            safe_id = (output_spec.get("short_name") or "custom_mob").replace(":", "_")
+            try:
+                design_result = mcp_design_model_sync(
+                    geo, safe_id, prompt,
+                    color_rgb=output_spec.get("color_rgb"),
+                    display_name=output_spec.get("display_name", ""),
+                )
+                if design_result.available and design_result.texture_b64:
+                    texture_b64 = design_result.texture_b64
+                    if design_result.geometry:
+                        output_spec["geometry_json"] = design_result.geometry
+                    print(f"[LLM] MCP texture generated ({len(texture_b64)} chars)")
+            except Exception as tex_exc:
+                log.warning("[LLM] MCP texture generation failed: %s", tex_exc)
+
+        # Fallback: procedural UV-mapped texture
+        if not texture_b64 and has_geo:
+            try:
+                texture_b64 = generate_mob_texture(
+                    geometry_json=geo,
+                    display_name=output_spec.get("display_name", ""),
+                    color_rgb=output_spec.get("color_rgb"),
+                    texture_hint=output_spec.get("texture_hint", ""),
+                    short_name=output_spec.get("short_name", "custom_mob"),
+                )
+                if texture_b64:
+                    print(f"[LLM] Procedural texture generated ({len(texture_b64)} chars)")
+            except Exception as tex_exc:
+                log.warning("[LLM] Procedural texture generation failed: %s", tex_exc)
 
     # Attach MCP metadata to the spec for the route handler to surface
     if output_spec is not None:
         output_spec["_mcp_meta"] = {
-            "augmented": bool(mcp_ctx and mcp_ctx.has_content),
+            "augmented": bool(mcp_ctx and mcp_ctx.has_content) or bool(dyn_ctx and dyn_ctx.has_content),
             "context_sources": mcp_ctx.source_tools if mcp_ctx else [],
             "retrieval_ms": mcp_ctx.retrieval_ms if mcp_ctx else 0,
+            "dynamic_context": {
+                "intents": [i.name for i in dyn_ctx.intents] if dyn_ctx else [],
+                "examples_used": dyn_ctx.example_mobs_used if dyn_ctx else [],
+                "chars_injected": dyn_ctx.total_chars if dyn_ctx else 0,
+            },
             "validation": {
                 "ran": bool(mcp_validation and mcp_validation.available),
                 "valid": mcp_validation.valid if mcp_validation else True,
@@ -630,7 +762,8 @@ def llm_generate_geometry(
         duration_ms = int((time.time() - start_time) * 1000)
         print(f"[LLM] Geometry generation took {duration_ms}ms, provider={provider_key}")
 
-    # After LLM generates geometry, use MCP to create a matching texture
+    # After LLM generates geometry, create a matching texture
+    # Priority: MCP designModel → procedural generator
     texture_b64 = ""
     mcp_design_used = False
     if output and isinstance(output, dict) and output.get("minecraft:geometry"):
@@ -648,6 +781,19 @@ def llm_generate_geometry(
                 output = design_result.geometry
         elif design_result.error:
             print(f"[LLM-GEOMETRY] MCP texture failed: {design_result.error}")
+
+        # Fallback: procedural UV-mapped texture
+        if not texture_b64:
+            try:
+                texture_b64 = generate_mob_texture(
+                    geometry_json=output,
+                    display_name=mob_name,
+                    short_name=safe_name,
+                )
+                if texture_b64:
+                    print(f"[LLM-GEOMETRY] Procedural texture generated ({len(texture_b64)} chars)")
+            except Exception as tex_exc:
+                log.warning("[LLM-GEOMETRY] Procedural texture failed: %s", tex_exc)
 
     output["_texture_b64"] = texture_b64
     output["_mcp_design"] = mcp_design_used

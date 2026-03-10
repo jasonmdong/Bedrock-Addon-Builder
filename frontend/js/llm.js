@@ -340,11 +340,14 @@ async function requestLlm() {
     loadTextureIntoPainter(currentMobName);
     updateFileTree(payload.spec);
 
-    // Re-render 3D geometry if the geometry reference changed
-    const oldGeo = beforeSpec.geometry || "";
-    const newGeo = payload.spec.geometry || "";
+    // Always re-render 3D model after LLM response to pick up new
+    // textures, scale changes, and geometry updates.
     const hasNewGeometryJson = payload.spec.geometry_json
                             && payload.spec.geometry_json["minecraft:geometry"];
+    const oldGeo = beforeSpec.geometry || "";
+    const newGeo = payload.spec.geometry || "";
+    const textureChanged = !!payload.texture_b64;
+    const scaleChanged = (beforeSpec.scale || 1) !== (payload.spec.scale || 1);
 
     if (hasNewGeometryJson) {
       if (typeof render3DGeometry === "function") {
@@ -354,6 +357,12 @@ async function requestLlm() {
       const geoName = newGeo.replace("geometry.", "");
       if (typeof fetchAndDisplayGeometry === "function") {
         fetchAndDisplayGeometry(geoName, currentMobName);
+      }
+    } else if (textureChanged || scaleChanged) {
+      // Texture or scale changed but geometry didn't — re-render with current geometry
+      const currentGeoJson = payload.spec.geometry_json || beforeSpec.geometry_json;
+      if (currentGeoJson && currentGeoJson["minecraft:geometry"] && typeof render3DGeometry === "function") {
+        render3DGeometry(currentGeoJson, currentMobName);
       }
     }
   }

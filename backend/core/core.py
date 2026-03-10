@@ -21,7 +21,8 @@ DEFAULTS = {
     "scale": 1.0,
     "color_rgb": [255, 0, 0],
     "geometry_json": {},
-    "texture_instructions": []
+    "texture_instructions": [],
+    "loot_drops": []
 }
 
 # Named color palette for texture hints
@@ -107,6 +108,15 @@ GEOMETRY RULES:
   ]
 }
 
+LOOT DROPS:
+- When the user asks the mob to drop specific items on death, you MUST add TWO things:
+  1. In 'components': "minecraft:loot": {"table": "loot_tables/entities/<short_name>.json"}
+  2. A top-level 'loot_drops' array with STRUCTURED entries:
+     "loot_drops": [{"item": "minecraft:diamond", "count_min": 1, "count_max": 3, "chance": 1.0}]
+- Each entry MUST have: "item" (full Bedrock item ID like "minecraft:diamond"), "count_min" (int), "count_max" (int), "chance" (float 0.0-1.0)
+- Common item IDs: minecraft:diamond, minecraft:gold_ingot, minecraft:iron_ingot, minecraft:emerald, minecraft:bone, minecraft:leather, minecraft:blaze_rod, minecraft:ender_pearl, minecraft:nether_star, minecraft:coal, minecraft:redstone, minecraft:netherite_scrap, minecraft:arrow, minecraft:fire_charge, minecraft:magma_cream, minecraft:ghast_tear, minecraft:egg, minecraft:cooked_beef
+- ALWAYS include loot_drops when the user mentions drops/loot/items on death
+
 CRITICAL RULES:
 1. ALWAYS return a single VALID JSON object matching the schema.
 2. Include ALL required keys: identifier, display_name, short_name, engine_min, hp, damage, speed, collision_box, geometry, geometry_json, render_controller, texture_hint, texture_instructions, color_rgb, egg_base, egg_overlay, scale, components.
@@ -115,4 +125,5 @@ CRITICAL RULES:
 5. To delete a default component, set it to null in 'components'.
 6. For explosive behavior, you MUST have both "minecraft:behavior.swell" and "minecraft:explode".
 7. ALWAYS update color_rgb when changing the mob type — it controls the texture color.
+8. PRESERVE GEOMETRY ON ITERATION: If the current spec has geometry_json marked as "(CUSTOM GEOMETRY PRESENT — DO NOT REPLACE)", keep geometry and geometry_json EXACTLY as they are. Only change geometry if the user explicitly asks to change the mob's shape/model/body. For behavior-only changes (loot, damage, speed, abilities, etc.), keep the existing geometry and geometry_json unchanged. Set geometry_json to {} ONLY if switching to a vanilla geometry reference.
 """

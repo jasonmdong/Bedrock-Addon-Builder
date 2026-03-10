@@ -203,9 +203,9 @@ async function loadSpec() {
       spec.identifier = "custom:my_first_mob";
       
       saveUserMob(currentMobName, spec);
-      editor.value = JSON.stringify(spec, null, 2);
-      schemaView.textContent = JSON.stringify(data.schema || {}, null, 2);
       await loadMobList();
+      // Call selectMob to trigger full UI setup including geometry rendering
+      await selectMob(currentMobName);
       setStatus("Created your first mob! Edit it and click Save.");
     } catch (e) {
       setStatus("Could not load default spec from server.", true);
