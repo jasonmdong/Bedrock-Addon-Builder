@@ -327,6 +327,7 @@ def patch_resource_pack(res_root: Path, specs: list[dict], textures_dir: Path = 
                         color_rgb=spec.get("color_rgb"),
                         texture_hint=spec.get("texture_hint", ""),
                         short_name=spec.get("short_name", "custom_mob"),
+                        texture_instructions=spec.get("texture_instructions"),
                     )
                     if tex_b64 and "," in tex_b64:
                         raw = _b64.b64decode(tex_b64.split(",", 1)[1])

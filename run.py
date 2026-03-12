@@ -6,7 +6,11 @@ import sys
 import os
 from pathlib import Path
 
-# Add root directory to Python path so backend modules can be imported
+# Force unbuffered stdout/stderr so print() shows up immediately in the terminal
+# even when running inside uvicorn's reload subprocess.
+os.environ.setdefault("PYTHONUNBUFFERED", "1")
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
 root_dir = os.path.dirname(__file__)
 sys.path.insert(0, root_dir)
 
@@ -37,4 +41,4 @@ if __name__ == "__main__":
     else:
         print("⚠️ DATABASE_URL not set - database features will fail")
     
-    uvicorn.run("backend.core.app:app", host="127.0.0.1", port=port, reload=True)
+    uvicorn.run("backend.core.app:app", host="127.0.0.1", port=port, reload=False)

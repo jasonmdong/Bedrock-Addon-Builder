@@ -51,7 +51,7 @@ function initAddMobModal() {
     }
   });
   
-  // Create mob handler - uses full AI pipeline with thinking + custom geometry generation
+  // Create mob handler - creates a blank spec with just the name, no LLM call
   async function createNewMob() {
     const name = newMobInput.value.trim();
     if (!name) {
@@ -67,90 +67,28 @@ function initAddMobModal() {
       return;
     }
     
-    // Use full AI pipeline: thinking + RAG + custom geometry generation
+    // Build a blank spec from the backend default, then apply the name
     try {
-      // Show loading state
-      const createBtn = document.getElementById("create-mob-btn");
-      const originalText = createBtn?.textContent;
-      if (createBtn) {
-        createBtn.textContent = "AI Thinking...";
-        createBtn.disabled = true;
-      }
-      
-      // Get LLM settings from localStorage
-      const provider = localStorage.getItem("builder_llm_provider") || "openai";
-      const apiKey = localStorage.getItem("builder_llm_api_key") || "";
-      
-      // Call complete mob generation endpoint - AI thinks through traits then generates custom geometry
-      const res = await fetch("/api/mob/generate-complete", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          mob_name: name,
-          provider: provider,
-          api_key: apiKey
-        })
-      });
-      
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.detail || `Server error: ${res.status}`);
-      }
-      
-      const data = await res.json();
-      const spec = data.mob;
-      
-      // Store AI metadata in spec
-      if (data.similar_mobs && data.similar_mobs.length > 0) {
-        spec._inspiration_mobs = data.similar_mobs;
-        console.log(`[AI] Used ${data.similar_mobs.length} similar mobs as context:`, data.similar_mobs);
-      }
-      if (data.reasoning) {
-        spec._ai_reasoning = data.reasoning;
-        console.log(`[AI] Reasoning for ${name}:`, data.reasoning);
-      }
-      
-      // Apply the AI-generated custom geometry
-      if (data.geometry) {
-        spec.geometry_json = data.geometry;
-        // Extract geometry identifier
-        try {
-          const geoId = data.geometry["minecraft:geometry"]?.[0]?.description?.identifier;
-          if (geoId) spec.geometry = geoId;
-        } catch (e) { /* keep default */ }
-        console.log(`[AI] Generated custom geometry for ${name}`);
-      }
-      
+      const res = await fetch("/api/spec/default");
+      if (!res.ok) throw new Error(`Server error: ${res.status}`);
+      const spec = await res.json();
+
+      // Apply the user-provided name
+      spec.display_name = name;
+      spec.short_name = safeName;
+      spec.identifier = `custom:${safeName}`;
+
       saveUserMob(safeName, spec);
       currentMobName = safeName;
       await loadMobList();
       await selectMob(safeName);
-      
-      // Display inspiration mobs in status bar
-      if (data.similar_mobs && data.similar_mobs.length > 0) {
-        const inspirationList = data.similar_mobs.slice(0, 3).join(", ");
-        const more = data.similar_mobs.length > 3 ? ` +${data.similar_mobs.length - 3} more` : "";
-        setStatus(`Created "${name}" inspired by: ${inspirationList}${more}`);
-      } else {
-        setStatus(`Created "${name}" with AI-generated traits`);
-      }
-      
+
+      setStatus(`Created blank mob "${name}" — use the AI prompt below to generate traits.`);
+
       // Close modal
       addMobModalOverlay.classList.add("hidden");
       newMobInput.value = "";
-      
-      // Restore button state
-      if (createBtn) {
-        createBtn.textContent = originalText;
-        createBtn.disabled = false;
-      }
     } catch (err) {
-      // Restore button state on error
-      const createBtn = document.getElementById("create-mob-btn");
-      if (createBtn) {
-        createBtn.textContent = "Create";
-        createBtn.disabled = false;
-      }
       alert("Error creating mob: " + err.message);
     }
   }

@@ -189,39 +189,185 @@ def _perface_uv_rects(uv_dict: dict, cube_size: list) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Color word lookup for texture_instructions parsing
+# ---------------------------------------------------------------------------
+
+_COLOR_WORDS: dict[str, tuple] = {
+    "red": (200, 40, 40), "dark red": (140, 20, 20), "light red": (230, 100, 100),
+    "bright red": (240, 50, 50),
+    "blue": (40, 80, 200), "dark blue": (20, 40, 140), "light blue": (120, 170, 230),
+    "bright blue": (50, 100, 240),
+    "green": (40, 160, 40), "dark green": (20, 100, 20), "light green": (120, 210, 120),
+    "bright green": (50, 220, 50),
+    "yellow": (220, 210, 40), "gold": (210, 175, 30), "orange": (220, 130, 30),
+    "purple": (130, 40, 180), "pink": (220, 140, 170), "magenta": (180, 40, 140),
+    "brown": (120, 75, 35), "dark brown": (70, 40, 20), "light brown": (170, 130, 80),
+    "black": (25, 25, 25), "white": (240, 240, 240), "gray": (140, 140, 140),
+    "grey": (140, 140, 140), "dark gray": (80, 80, 80), "light gray": (200, 200, 200),
+    "cyan": (40, 190, 200), "teal": (40, 150, 150),
+    "crimson": (160, 20, 30), "scarlet": (200, 30, 30), "ivory": (230, 225, 210),
+    "silver": (190, 190, 200), "tan": (200, 170, 120), "olive": (120, 130, 40),
+}
+
+# Role aliases the LLM might use instead of exact role names
+_ROLE_ALIASES: dict[str, str] = {
+    "legs": "leg", "arms": "arm", "tails": "tail", "ears": "ear",
+    "wings": "arm", "wing": "arm", "claws": "arm",
+    "feet": "leg", "paws": "leg", "hooves": "leg",
+    "horns": "face", "snout": "face", "fangs": "face", "jaw": "face",
+    "torso": "body", "chest": "body", "belly": "body", "back": "body",
+}
+
+
+def _parse_hex_color(text: str) -> Optional[tuple]:
+    """Extract a hex color like #CC0000 or #c00 from text."""
+    import re
+    m = re.search(r'#([0-9a-fA-F]{6})\b', text)
+    if m:
+        h = m.group(1)
+        return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+    m = re.search(r'#([0-9a-fA-F]{3})\b', text)
+    if m:
+        h = m.group(1)
+        return (int(h[0]*2, 16), int(h[1]*2, 16), int(h[2]*2, 16))
+    return None
+
+
+def _find_color_in_text(text: str) -> Optional[tuple]:
+    """Find a color in text: tries hex first, then color words (longest first)."""
+    hex_color = _parse_hex_color(text)
+    if hex_color:
+        return hex_color
+    for cname in sorted(_COLOR_WORDS, key=len, reverse=True):
+        if cname in text:
+            return _COLOR_WORDS[cname]
+    return None
+
+
+def _parse_texture_instructions(
+    instructions: Optional[list],
+) -> tuple[dict[str, tuple], list[str]]:
+    """Parse texture_instructions into per-role color overrides and extra patterns.
+
+    Handles LLM output formats like:
+      - "red head"
+      - "Head area: bright red scales"
+      - "Body, legs, tail, wings: dark green scales"
+      - "scales"
+
+    Returns (role_overrides, extra_patterns) where:
+      - role_overrides: {"head": (r,g,b), "body": (r,g,b), ...}
+      - extra_patterns: ["stripes", "scales", ...]
+    """
+    if not instructions:
+        return {}, []
+
+    # Pre-process: split comma-separated entries that the LLM combined
+    # e.g. "Head: red, Body: green" → ["Head: red", "Body: green"]
+    expanded: list[str] = []
+    for instr in instructions:
+        if not isinstance(instr, str):
+            continue
+        # Split on commas but only if both sides contain a role-like word
+        parts = [p.strip() for p in instr.split(",")]
+        if len(parts) > 1:
+            expanded.extend(p for p in parts if p)
+        else:
+            expanded.append(instr)
+
+    role_overrides: dict[str, tuple] = {}
+    extra_patterns: list[str] = []
+    canonical_roles = set(_ROLE_KEYWORDS.keys())  # head, face, body, leg, arm, tail, ear
+
+    for instr in expanded:
+        if not isinstance(instr, str):
+            continue
+        text = instr.strip().lower()
+        if not text:
+            continue
+
+        # Find color in this instruction
+        color = _find_color_in_text(text)
+
+        # Find all roles mentioned (including aliases)
+        found_roles: list[str] = []
+        for role in canonical_roles:
+            if role in text:
+                found_roles.append(role)
+        for alias, canonical in _ROLE_ALIASES.items():
+            if alias in text and canonical not in found_roles:
+                found_roles.append(canonical)
+
+        if color and found_roles:
+            # Apply color to all mentioned roles
+            for role in found_roles:
+                role_overrides[role] = color
+        elif not found_roles:
+            # No role found — treat entire string as pattern/extra keywords
+            extra_patterns.append(text)
+        # If roles found but no color, ignore (just descriptive text)
+
+    return role_overrides, extra_patterns
+
+
+# ---------------------------------------------------------------------------
 # Pattern detection & application
 # ---------------------------------------------------------------------------
 
-def _detect_pattern(display_name: str, texture_hint: str) -> str:
+def _detect_patterns(display_name: str, texture_hint: str,
+                     extra_keywords: Optional[list] = None) -> list[str]:
+    """Detect all applicable patterns from name, hint, and extra keywords.
+
+    Returns a list of pattern names (may be empty).
+    """
     text = f"{display_name} {texture_hint}".lower()
-    if any(w in text for w in ["giraffe", "leopard", "cheetah", "dalmatian", "spotted"]):
-        return "spots"
-    if any(w in text for w in ["tiger", "zebra", "striped", "bee", "wasp"]):
-        return "stripes"
-    if any(w in text for w in ["cow", "patched", "piebald", "pinto"]):
-        return "patches"
+    if extra_keywords:
+        text += " " + " ".join(extra_keywords)
+
+    patterns = []
+    if any(w in text for w in ["giraffe", "leopard", "cheetah", "dalmatian",
+                                "spotted", "dotted", "freckled"]):
+        patterns.append("spots")
+    if any(w in text for w in ["tiger", "zebra", "striped", "bee", "wasp", "banded"]):
+        patterns.append("stripes")
+    if any(w in text for w in ["cow", "patched", "piebald", "pinto",
+                                "mossy", "cracked"]):
+        patterns.append("patches")
     if any(w in text for w in ["snake", "lizard", "dragon", "reptile", "scales",
                                 "crocodile", "alligator"]):
-        return "scales"
-    return "none"
+        patterns.append("scales")
+    if any(w in text for w in ["fur", "furry", "fluffy", "fuzzy", "hairy"]):
+        patterns.append("fur")
+    if any(w in text for w in ["glow", "glowing", "magma", "lava", "ember",
+                                "neon", "luminous"]):
+        patterns.append("glow")
+    if any(w in text for w in ["rocky", "stone", "rock", "cobble", "granite",
+                                "gravel"]):
+        patterns.append("rocky")
+    return patterns
 
 
-def _apply_pattern(pixels, rects, pattern, base_rgb, tex_w, tex_h):
-    """Apply a pattern over a list of UV rects."""
-    if pattern == "none":
-        return
-    for (fx, fy, fw, fh) in rects:
-        if fw < 3 or fh < 3:
-            continue
-        seed = fx * 997 + fy * 131
-        if pattern == "spots":
-            _paint_spots(pixels, fx, fy, fw, fh, base_rgb, tex_w, tex_h, seed)
-        elif pattern == "stripes":
-            _paint_stripes(pixels, fx, fy, fw, fh, base_rgb, tex_w, tex_h)
-        elif pattern == "patches":
-            _paint_patches(pixels, fx, fy, fw, fh, base_rgb, tex_w, tex_h, seed)
-        elif pattern == "scales":
-            _paint_scales(pixels, fx, fy, fw, fh, base_rgb, tex_w, tex_h)
+def _apply_patterns(pixels, rects, patterns: list[str], base_rgb, tex_w, tex_h):
+    """Apply one or more patterns over a list of UV rects."""
+    for pattern in patterns:
+        for (fx, fy, fw, fh) in rects:
+            if fw < 3 or fh < 3:
+                continue
+            seed = fx * 997 + fy * 131
+            if pattern == "spots":
+                _paint_spots(pixels, fx, fy, fw, fh, base_rgb, tex_w, tex_h, seed)
+            elif pattern == "stripes":
+                _paint_stripes(pixels, fx, fy, fw, fh, base_rgb, tex_w, tex_h)
+            elif pattern == "patches":
+                _paint_patches(pixels, fx, fy, fw, fh, base_rgb, tex_w, tex_h, seed)
+            elif pattern == "scales":
+                _paint_scales(pixels, fx, fy, fw, fh, base_rgb, tex_w, tex_h)
+            elif pattern == "fur":
+                _paint_fur(pixels, fx, fy, fw, fh, base_rgb, tex_w, tex_h, seed)
+            elif pattern == "glow":
+                _paint_glow(pixels, fx, fy, fw, fh, base_rgb, tex_w, tex_h)
+            elif pattern == "rocky":
+                _paint_rocky(pixels, fx, fy, fw, fh, base_rgb, tex_w, tex_h, seed)
 
 
 def _paint_spots(pixels, x, y, w, h, base_rgb, tw, th, seed):
@@ -278,6 +424,56 @@ def _paint_scales(pixels, x, y, w, h, base_rgb, tw, th):
                     pixels[py][px] = (*light, 255)
 
 
+def _paint_fur(pixels, x, y, w, h, base_rgb, tw, th, seed):
+    """Subtle directional noise simulating fur texture."""
+    rng = random.Random(seed)
+    light = _lighten(base_rgb, 1.15)
+    dark = _darken(base_rgb, 0.80)
+    for py in range(y, min(y + h, th)):
+        for px in range(x, min(x + w, tw)):
+            if 0 <= px < tw and 0 <= py < th:
+                # Vertical bias for fur direction
+                v = rng.random()
+                if v < 0.15:
+                    pixels[py][px] = (*light, 255)
+                elif v < 0.30:
+                    pixels[py][px] = (*dark, 255)
+
+
+def _paint_glow(pixels, x, y, w, h, base_rgb, tw, th):
+    """Lighter center per face, simulating inner glow / magma cracks."""
+    cx, cy = x + w // 2, y + h // 2
+    max_dist = math.sqrt((w / 2) ** 2 + (h / 2) ** 2) or 1
+    glow_color = _lighten(base_rgb, 1.5)
+    for py in range(y, min(y + h, th)):
+        for px in range(x, min(x + w, tw)):
+            if 0 <= px < tw and 0 <= py < th:
+                dist = math.sqrt((px - cx) ** 2 + (py - cy) ** 2)
+                t = 1.0 - min(dist / max_dist, 1.0)
+                if t > 0.3:
+                    blended = _blend(base_rgb, glow_color, t * 0.6)
+                    pixels[py][px] = (*blended, 255)
+
+
+def _paint_rocky(pixels, x, y, w, h, base_rgb, tw, th, seed):
+    """Irregular dark splotches for stone/rock textures."""
+    rng = random.Random(seed)
+    dark = _darken(base_rgb, 0.55)
+    mid = _darken(base_rgb, 0.75)
+    count = max(2, (w * h) // 12)
+    for _ in range(count):
+        sx = x + rng.randint(0, max(0, w - 1))
+        sy = y + rng.randint(0, max(0, h - 1))
+        size = rng.randint(1, max(1, min(w, h) // 4))
+        color = dark if rng.random() < 0.5 else mid
+        for dy in range(-size, size + 1):
+            for dx in range(-size, size + 1):
+                if rng.random() < 0.7 and abs(dx) + abs(dy) <= size + 1:
+                    px, py_ = sx + dx, sy + dy
+                    if 0 <= px < tw and 0 <= py_ < th:
+                        pixels[py_][px] = (*color, 255)
+
+
 # ---------------------------------------------------------------------------
 # Feature painters
 # ---------------------------------------------------------------------------
@@ -315,6 +511,7 @@ def generate_mob_texture(
     color_rgb: Optional[list] = None,
     texture_hint: str = "",
     short_name: str = "custom_mob",
+    texture_instructions: Optional[list] = None,
 ) -> str:
     """Generate a fully geometry-aware procedural texture.
 
@@ -344,7 +541,10 @@ def generate_mob_texture(
     else:
         base_rgb = _guess_base_color(display_name)
 
-    pattern = _detect_pattern(display_name, texture_hint)
+    # Parse texture_instructions for per-bone color overrides and extra patterns
+    role_overrides, extra_patterns = _parse_texture_instructions(texture_instructions)
+
+    patterns = _detect_patterns(display_name, texture_hint, extra_patterns)
 
     # Role → color mapping
     role_colors = {
@@ -356,6 +556,10 @@ def generate_mob_texture(
         "tail":  _darken(base_rgb, 0.85),
         "ear":   _lighten(base_rgb, 1.15),
     }
+
+    # Apply per-bone color overrides from texture_instructions
+    for role, color in role_overrides.items():
+        role_colors[role] = color
 
     # ── Step 1: Fill entire atlas with opaque base color ──
     # This guarantees NO transparent pixels anywhere. Even if a UV
@@ -411,7 +615,7 @@ def generate_mob_texture(
                     pattern_rects.append((fu, fv, fw, fh))
 
     # ── Step 3: Apply patterns over relevant UV regions ──
-    _apply_pattern(pixels, pattern_rects, pattern, base_rgb, tex_w, tex_h)
+    _apply_patterns(pixels, pattern_rects, patterns, base_rgb, tex_w, tex_h)
 
     # ── Step 4: Paint features (eyes on head) ──
     for (fx, fy, fw, fh) in head_fronts:

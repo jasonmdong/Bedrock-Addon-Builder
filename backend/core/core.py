@@ -60,7 +60,7 @@ LLM_MODEL_NAME = os.environ.get("LLM_MODEL", "openai/gpt-4.1")
 DEEPSEEK_MODEL_NAME = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
 GEMINI_MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview")
 CLAUDE_MODEL_NAME = os.environ.get("CLAUDE_MODEL", "claude-3-5-sonnet-20240620")
-OLLAMA_MODEL_NAME = os.environ.get("OLLAMA_MODEL", "llama3.2")
+OLLAMA_MODEL_NAME = os.environ.get("OLLAMA_MODEL", "llama3")
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 DEFAULT_LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "openai")
 # local dev flag toggle (need to fix server side sync still)
@@ -88,7 +88,14 @@ FIELDS OVERVIEW:
    - 'geometry_json' (object): ONLY use for truly custom/invented shapes that don't exist in vanilla Minecraft. Set to {} (empty object) when using a vanilla geometry reference.
 3. VISUALS:
    - 'color_rgb' (array): Set the base color [R, G, B]. IMPORTANT: Update this when changing mob type (e.g. ghast=[246,246,246], zombie=[76,122,58], creeper=[76,175,80], spider=[58,42,26], blaze=[245,205,50]).
-   - 'texture_instructions' (array): Describe the texture style (e.g. ["scales", "glowing eyes", "lava cracks"]).
+   - 'texture_instructions' (array): Per-bone color and pattern directives applied to the procedural texture.
+     IMPORTANT: Use ONE entry per body part or pattern. Do NOT combine multiple body parts in one string.
+     Format: ["<color> <body_part>", "<pattern>"] where body_part is head/body/leg/arm/tail/ear/face.
+     Color words: red, blue, green, yellow, orange, purple, pink, brown, black, white, gray, gold, cyan, dark red, light blue, bright red, etc. Or hex like #CC0000.
+     Pattern words: spots, stripes, scales, patches, fur, glow, rocky, dotted, banded.
+     GOOD: ["red head", "dark green body", "dark green legs", "scales"]
+     BAD:  ["Head: red, Body: green with scales"]  ← do NOT combine like this
+     Always include at least a pattern keyword entry when relevant.
 
 GEOMETRY RULES:
 - For VANILLA Minecraft mobs (ghast, cow, zombie, creeper, spider, chicken, pig, wolf, skeleton, blaze, enderman, slime, iron_golem, etc.), use the vanilla geometry reference and set geometry_json={}.

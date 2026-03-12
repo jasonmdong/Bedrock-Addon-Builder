@@ -19,7 +19,15 @@ from backend.llm.mcp_context import (
 from backend.llm.dynamic_context import (
     DynamicContext, build_dynamic_context,
 )
+from backend.llm.prompt_intents import (
+    PromptIntentProfile, extract_prompt_intents,
+)
+from backend.llm.orchestrator import (
+    build_plan, format_plan_for_prompt, should_use_orchestration,
+    plan_is_simple, apply_plan,
+)
 from backend.llm.texture_gen import generate_mob_texture
+from backend.llm.component_sanitizer import sanitize_spec
 
 log = logging.getLogger(__name__)
 
@@ -123,6 +131,92 @@ def _preserve_geometry(output_spec: dict, input_spec: dict) -> dict:
     return output_spec
 
 
+# ---------------------------------------------------------------------------
+# Geometry auto-fetch: database → GitHub vanilla → LLM generation
+# ---------------------------------------------------------------------------
+
+# Mobs whose geometry can be fetched from Mojang's bedrock-samples repo
+_VANILLA_GEOMETRY_NAMES = {
+    "bat", "bee", "blaze", "cat", "cave_spider", "chicken", "cod", "cow",
+    "creeper", "dolphin", "donkey", "drowned", "elder_guardian", "enderman",
+    "endermite", "evoker", "fox", "ghast", "goat", "guardian", "hoglin",
+    "horse", "husk", "iron_golem", "llama", "magma_cube", "mooshroom",
+    "mule", "ocelot", "panda", "parrot", "phantom", "pig", "piglin",
+    "pillager", "polar_bear", "pufferfish", "rabbit", "ravager", "salmon",
+    "sheep", "shulker", "silverfish", "skeleton", "slime", "snow_golem",
+    "spider", "squid", "stray", "strider", "trader_llama", "tropical_fish",
+    "turtle", "vex", "villager", "vindicator", "wandering_trader", "witch",
+    "wither", "wither_skeleton", "wolf", "zoglin", "zombie",
+    "zombie_pigman", "zombie_villager", "zombified_piglin",
+    "axolotl", "glow_squid", "warden", "allay", "frog", "tadpole",
+    "camel", "sniffer", "armadillo", "breeze", "bogged",
+}
+
+
+def _is_vanilla_mob(display_name: str, geometry_ref: str) -> bool:
+    """Check if the mob can be resolved from vanilla Bedrock geometry."""
+    name = display_name.lower().replace(" ", "_")
+    geo_name = geometry_ref.replace("geometry.", "").lower()
+    return name in _VANILLA_GEOMETRY_NAMES or geo_name in _VANILLA_GEOMETRY_NAMES
+
+
+
+def _auto_fetch_geometry(
+    output_spec: dict,
+    prompt: str,
+    provider_key: str,
+    api_key: Optional[str],
+) -> dict:
+    """If the LLM returned empty geometry_json for a non-vanilla mob, try to
+    fill it from the database or generate it.
+
+    Modifies output_spec in place and returns it.
+    """
+    # Skip if already has custom geometry
+    if _has_custom_geometry(output_spec):
+        print(f"[LLM-GEOFETCH] Skipping auto-fetch: spec already has custom geometry")
+        return output_spec
+
+    display_name = output_spec.get("display_name", "")
+    geometry_ref = output_spec.get("geometry", "")
+
+    # Skip vanilla mobs — frontend fetches their geometry from GitHub
+    if _is_vanilla_mob(display_name, geometry_ref):
+        print(f"[LLM-GEOFETCH] Skipping auto-fetch: '{display_name}' (geometry={geometry_ref}) is vanilla")
+        return output_spec
+
+    print(f"[LLM-GEOFETCH] Non-vanilla mob '{display_name}' (geometry={geometry_ref}) has no geometry, generating via LLM...")
+    try:
+        short_name = output_spec.get("short_name", "custom_mob")
+        geo_prompt = f"Create a {display_name} mob geometry"
+        geo_result = llm_generate_geometry(
+            prompt=geo_prompt,
+            current_geometry=None,
+            provider=provider_key,
+            api_key=api_key,
+            mob_name=short_name,
+        )
+        if geo_result and geo_result.get("minecraft:geometry"):
+            # Strip internal keys
+            clean_geo = {k: v for k, v in geo_result.items() if not k.startswith("_")}
+            output_spec["geometry_json"] = clean_geo
+            # Use texture from geometry generation if we don't have one yet
+            if geo_result.get("_texture_b64") and not output_spec.get("_texture_b64"):
+                output_spec["_texture_b64"] = geo_result["_texture_b64"]
+            # Update geometry reference
+            geo_list = clean_geo.get("minecraft:geometry", [])
+            if geo_list and isinstance(geo_list[0], dict):
+                geo_id = geo_list[0].get("description", {}).get("identifier", "")
+                if geo_id:
+                    output_spec["geometry"] = geo_id
+            print(f"[LLM] Auto-generated geometry for '{display_name}'")
+    except Exception as e:
+        log.warning("[LLM] Auto geometry generation failed: %s", e)
+        print(f"[LLM] Auto geometry generation failed for '{display_name}': {e}")
+
+    return output_spec
+
+
 MAX_SYSTEM_PROMPT_CHARS = 25_000  # ~6K tokens — keeps total well under 80K
 
 
@@ -130,6 +224,7 @@ def _get_full_system_prompt(
     category: str = "entity_logic_ai",
     mcp_context: Optional[MCPContext] = None,
     dynamic_ctx: Optional[DynamicContext] = None,
+    intent_profile: Optional[PromptIntentProfile] = None,
 ) -> str:
     """Build a system prompt dynamically based on the content category.
 
@@ -140,6 +235,7 @@ def _get_full_system_prompt(
       4. MCP model templates (dynamic, if geometry-related)
       5. Mob-spec schema (always included for entity category)
       6. Dynamic context (prompt-analyzed behavior docs + vanilla examples)
+      7. Structured user intent extraction
     """
     prompt = LLM_SYSTEM_PROMPT
 
@@ -170,6 +266,9 @@ def _get_full_system_prompt(
     # Dynamic context — placed last for recency effect (LLMs attend more to end)
     if dynamic_ctx and dynamic_ctx.has_content:
         prompt += f"\n\n{dynamic_ctx.context_text}"
+
+    if intent_profile and intent_profile.has_content:
+        prompt += f"\n\n{intent_profile.to_prompt_block()}"
 
     mcp_tag = ""
     if mcp_context and mcp_context.has_content:
@@ -224,11 +323,12 @@ def _get_openai_client(api_key: Optional[str]):
 def _call_openai(prompt: str, current: dict, api_key: Optional[str],
                  category: str = "entity_logic_ai",
                  mcp_context: Optional[MCPContext] = None,
-                 dynamic_ctx: Optional[DynamicContext] = None) -> dict:
+                 dynamic_ctx: Optional[DynamicContext] = None,
+                 intent_profile: Optional[PromptIntentProfile] = None) -> dict:
     """Call OpenAI to rewrite a spec based on a user prompt."""
     print("[LLM] calling OpenAI model", LLM_MODEL_NAME)
     client = _get_openai_client(api_key)
-    sys_prompt = _get_full_system_prompt(category, mcp_context, dynamic_ctx)
+    sys_prompt = _get_full_system_prompt(category, mcp_context, dynamic_ctx, intent_profile)
     user_content = f"Current spec:\n{_prepare_spec_for_llm(current)}\n\nInstruction:\n{prompt.strip()}"
     total_chars = len(sys_prompt) + len(user_content)
     print(f"[LLM] Request size: system={len(sys_prompt)} user={len(user_content)} total={total_chars} chars (~{total_chars//4} tokens)")
@@ -258,7 +358,8 @@ def _call_openai(prompt: str, current: dict, api_key: Optional[str],
 def _call_deepseek(prompt: str, current: dict, api_key: Optional[str],
                    category: str = "entity_logic_ai",
                    mcp_context: Optional[MCPContext] = None,
-                   dynamic_ctx: Optional[DynamicContext] = None) -> dict:
+                   dynamic_ctx: Optional[DynamicContext] = None,
+                   intent_profile: Optional[PromptIntentProfile] = None) -> dict:
     """Call DeepSeek to rewrite a spec based on a user prompt."""
     key = api_key or os.environ.get("DEEPSEEK_API_KEY")
     if not key:
@@ -273,7 +374,7 @@ def _call_deepseek(prompt: str, current: dict, api_key: Optional[str],
             messages=[
                 {
                     "role": "system",
-                    "content": _get_full_system_prompt(category, mcp_context, dynamic_ctx)
+                    "content": _get_full_system_prompt(category, mcp_context, dynamic_ctx, intent_profile)
                 },
                 {
                     "role": "user",
@@ -297,7 +398,8 @@ def _call_deepseek(prompt: str, current: dict, api_key: Optional[str],
 def _call_gemini(prompt: str, current: dict, api_key: Optional[str],
                  category: str = "entity_logic_ai",
                  mcp_context: Optional[MCPContext] = None,
-                 dynamic_ctx: Optional[DynamicContext] = None) -> dict:
+                 dynamic_ctx: Optional[DynamicContext] = None,
+                 intent_profile: Optional[PromptIntentProfile] = None) -> dict:
     """Call Google Gemini to rewrite a spec based on a user prompt."""
     if not GENAI_AVAILABLE:
         raise RuntimeError("google-genai package is not installed. Run: pip install google-genai")
@@ -313,7 +415,7 @@ def _call_gemini(prompt: str, current: dict, api_key: Optional[str],
             model=GEMINI_MODEL_NAME,
             contents=f"Current spec:\n{_prepare_spec_for_llm(current)}\n\nInstruction:\n{prompt.strip()}",
             config={
-                "system_instruction": _get_full_system_prompt(category, mcp_context, dynamic_ctx),
+                "system_instruction": _get_full_system_prompt(category, mcp_context, dynamic_ctx, intent_profile),
                 "response_mime_type": "application/json"
             }
         )
@@ -331,7 +433,8 @@ def _call_gemini(prompt: str, current: dict, api_key: Optional[str],
 def _call_ollama(prompt: str, current: dict, api_key: Optional[str] = None,
                  category: str = "entity_logic_ai",
                  mcp_context: Optional[MCPContext] = None,
-                 dynamic_ctx: Optional[DynamicContext] = None) -> dict:
+                 dynamic_ctx: Optional[DynamicContext] = None,
+                 intent_profile: Optional[PromptIntentProfile] = None) -> dict:
     """Call local Ollama to rewrite a spec based on a user prompt.
     
     Ollama uses OpenAI-compatible API, so we use the OpenAI client with a custom base URL.
@@ -350,7 +453,7 @@ def _call_ollama(prompt: str, current: dict, api_key: Optional[str] = None,
         messages = [
             {
                 "role": "system",
-                "content": _get_full_system_prompt(category, mcp_context, dynamic_ctx)
+                "content": _get_full_system_prompt(category, mcp_context, dynamic_ctx, intent_profile)
             },
             {
                 "role": "user",
@@ -384,7 +487,8 @@ def _call_ollama(prompt: str, current: dict, api_key: Optional[str] = None,
 def _call_claude(prompt: str, current: dict, api_key: Optional[str],
                  category: str = "entity_logic_ai",
                  mcp_context: Optional[MCPContext] = None,
-                 dynamic_ctx: Optional[DynamicContext] = None) -> dict:
+                 dynamic_ctx: Optional[DynamicContext] = None,
+                 intent_profile: Optional[PromptIntentProfile] = None) -> dict:
     """Call Anthropic Claude to rewrite a spec based on a user prompt."""
     if anthropic is None:
         raise RuntimeError("anthropic package is not installed.")
@@ -399,7 +503,7 @@ def _call_claude(prompt: str, current: dict, api_key: Optional[str],
         response = client.messages.create(
             model=CLAUDE_MODEL_NAME,
             max_tokens=2048,
-            system=_get_full_system_prompt(category, mcp_context, dynamic_ctx),
+            system=_get_full_system_prompt(category, mcp_context, dynamic_ctx, intent_profile),
             messages=[
                 {
                     "role": "user",
@@ -428,23 +532,64 @@ def _call_provider(
     api_key: Optional[str], category: str,
     mcp_context: Optional[MCPContext] = None,
     dynamic_ctx: Optional[DynamicContext] = None,
+    intent_profile: Optional[PromptIntentProfile] = None,
 ) -> dict:
     """Route to the appropriate LLM provider."""
     if provider_key == "deepseek":
-        return _call_deepseek(prompt, current, api_key, category, mcp_context, dynamic_ctx)
+        return _call_deepseek(prompt, current, api_key, category, mcp_context, dynamic_ctx, intent_profile)
     elif provider_key == "gemini":
-        return _call_gemini(prompt, current, api_key, category, mcp_context, dynamic_ctx)
+        return _call_gemini(prompt, current, api_key, category, mcp_context, dynamic_ctx, intent_profile)
     elif provider_key == "claude":
-        return _call_claude(prompt, current, api_key, category, mcp_context, dynamic_ctx)
+        return _call_claude(prompt, current, api_key, category, mcp_context, dynamic_ctx, intent_profile)
     elif provider_key == "ollama":
-        return _call_ollama(prompt, current, api_key, category, mcp_context, dynamic_ctx)
+        return _call_ollama(prompt, current, api_key, category, mcp_context, dynamic_ctx, intent_profile)
     else:
-        return _call_openai(prompt, current, api_key, category, mcp_context, dynamic_ctx)
+        return _call_openai(prompt, current, api_key, category, mcp_context, dynamic_ctx, intent_profile)
+
+
+def _short_summary(text: str, limit: int = 140) -> str:
+    text = " ".join((text or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
+
+
+def _stage_record(name: str, status: str, summary: str = "", **artifacts) -> dict:
+    stage = {
+        "name": name,
+        "status": status,
+        "summary": _short_summary(summary),
+    }
+    if artifacts:
+        stage["artifacts"] = artifacts
+    return stage
+
+
+def _build_repair_prompt(
+    original_prompt: str,
+    validation_errors: list[str],
+    intent_profile: Optional[PromptIntentProfile],
+) -> str:
+    lines = [
+        "Repair the current spec. Do not redesign it from scratch.",
+        f"Original instruction: {original_prompt.strip()}",
+    ]
+    if intent_profile and intent_profile.has_content:
+        lines.append("")
+        lines.append(intent_profile.to_prompt_block())
+    lines.append("")
+    lines.append("Validation issues to fix:")
+    for error in validation_errors[:10]:
+        lines.append(f"- {error}")
+    lines.append("")
+    lines.append("Return the corrected complete spec as JSON only.")
+    return "\n".join(lines)
 
 
 def llm_rewrite_spec(prompt: str, current: dict, provider: str,
                      api_key: Optional[str],
-                     category: str = "entity_logic_ai") -> dict:
+                     category: str = "entity_logic_ai",
+                     use_plan: bool = False) -> dict:
     """Route to appropriate LLM provider and rewrite a spec.
 
     Pipeline:
@@ -477,11 +622,48 @@ def llm_rewrite_spec(prompt: str, current: dict, provider: str,
 
     print(f"[LLM] category={category} (detected={detected_category})")
 
+    intent_profile = extract_prompt_intents(effective_prompt, category)
+    if intent_profile.has_content:
+        signal_names = [signal.name for signal in intent_profile.signals]
+        print(f"[LLM] Intent extraction: signals={signal_names}, template_hint={intent_profile.template_hint}")
+
+    pipeline_meta = {
+        "category": category,
+        "detected_category": detected_category,
+        "intent_profile": intent_profile.to_dict(),
+        "stages": [
+            _stage_record(
+                "intent_extraction",
+                "completed",
+                "Structured prompt facts extracted",
+                intent_profile=intent_profile.to_dict(),
+            )
+        ],
+    }
+    repair_meta = {
+        "attempted": False,
+        "succeeded": False,
+        "errors": [],
+    }
+
     # --- Step 1a: MCP context retrieval (additive, never blocking) ---
     mcp_ctx = retrieve_context_sync(effective_prompt, category, current)
     if mcp_ctx and mcp_ctx.has_content:
         print(f"[LLM] MCP context retrieved in {mcp_ctx.retrieval_ms}ms "
               f"(sources={mcp_ctx.source_tools})")
+        pipeline_meta["stages"].append(
+            _stage_record(
+                "mcp_context",
+                "completed",
+                f"Retrieved context from {', '.join(mcp_ctx.source_tools)}",
+                retrieval_ms=mcp_ctx.retrieval_ms,
+                sources=mcp_ctx.source_tools,
+            )
+        )
+    else:
+        pipeline_meta["stages"].append(
+            _stage_record("mcp_context", "skipped", "No MCP context retrieved")
+        )
 
     # --- Step 1b: Dynamic context injection (prompt-analyzed) ---
     dyn_ctx = build_dynamic_context(effective_prompt, category)
@@ -490,6 +672,20 @@ def llm_rewrite_spec(prompt: str, current: dict, provider: str,
         print(f"[LLM] Dynamic context: intents={intent_names}, "
               f"examples={dyn_ctx.example_mobs_used}, "
               f"chars={dyn_ctx.total_chars}")
+        pipeline_meta["stages"].append(
+            _stage_record(
+                "dynamic_context",
+                "completed",
+                f"Injected intent docs for {', '.join(intent_names)}",
+                intents=intent_names,
+                examples=dyn_ctx.example_mobs_used,
+                chars=dyn_ctx.total_chars,
+            )
+        )
+    else:
+        pipeline_meta["stages"].append(
+            _stage_record("dynamic_context", "skipped", "No dynamic context selected")
+        )
 
     start_time = time.time()
     output_spec = None
@@ -498,15 +694,107 @@ def llm_rewrite_spec(prompt: str, current: dict, provider: str,
     semantic_score = None
     mcp_validation: Optional[MCPValidationResult] = None
 
-    try:
-        # --- Step 2: LLM call with enriched prompt ---
-        output_spec = _call_provider(
-            effective_prompt, current, provider_key, api_key, category, mcp_ctx, dyn_ctx,
+    # --- Step 1c: Orchestration — plan then execute (auto for ollama, opt-in otherwise) ---
+    orchestrated_prompt = effective_prompt
+    orchestrator_meta = None
+    if should_use_orchestration(effective_prompt, provider_key, force=use_plan):
+        plan = build_plan(effective_prompt, current, provider_key, api_key, category)
+        if plan and plan.has_changes:
+            if plan_is_simple(plan):
+                # Direct apply — no Phase 2 LLM call needed
+                try:
+                    output_spec = apply_plan(plan, current)
+                    if category == "entity_logic_ai":
+                        output_spec = validate_spec(output_spec)
+                    orchestrator_meta = {
+                        "plan": plan.to_dict(),
+                        "applied_directly": True,
+                        "fell_back_to_llm": False,
+                    }
+                    pipeline_meta["stages"].append(
+                        _stage_record(
+                            "planning",
+                            "completed",
+                            "Plan applied directly without a second generation pass",
+                            plan=plan.to_dict(),
+                            applied_directly=True,
+                        )
+                    )
+                    print(f"[ORCHESTRATOR] Plan applied directly (no Phase 2)")
+                except Exception as exc:
+                    log.warning("[ORCHESTRATOR] Direct apply failed, falling back to Phase 2: %s", exc)
+                    output_spec = None  # reset so Phase 2 runs
+                    orchestrated_prompt = format_plan_for_prompt(effective_prompt, plan)
+                    orchestrator_meta = {
+                        "plan": plan.to_dict(),
+                        "applied_directly": False,
+                        "fell_back_to_llm": True,
+                    }
+                    pipeline_meta["stages"].append(
+                        _stage_record(
+                            "planning",
+                            "completed",
+                            "Simple plan generated; using guided rewrite fallback",
+                            plan=plan.to_dict(),
+                            applied_directly=False,
+                        )
+                    )
+            else:
+                # Complex plan — use Phase 2 (full LLM rewrite guided by plan)
+                orchestrated_prompt = format_plan_for_prompt(effective_prompt, plan)
+                orchestrator_meta = {
+                    "plan": plan.to_dict(),
+                    "applied_directly": False,
+                    "fell_back_to_llm": True,
+                }
+                pipeline_meta["stages"].append(
+                    _stage_record(
+                        "planning",
+                        "completed",
+                        "Complex plan generated for guided rewrite",
+                        plan=plan.to_dict(),
+                        applied_directly=False,
+                    )
+                )
+                print(f"[ORCHESTRATOR] Complex plan, using Phase 2 ({len(orchestrated_prompt)} chars)")
+        else:
+            pipeline_meta["stages"].append(
+                _stage_record("planning", "skipped", "Planner returned no actionable changes")
+            )
+            print("[ORCHESTRATOR] Plan empty or failed, using direct prompt")
+    else:
+        pipeline_meta["stages"].append(
+            _stage_record("planning", "skipped", "Planning disabled for this provider/prompt")
         )
+
+    try:
+        # --- Step 2: LLM call with enriched prompt (skip if plan was applied directly) ---
+        if output_spec is None:
+            output_spec = _call_provider(
+                orchestrated_prompt, current, provider_key, api_key, category, mcp_ctx, dyn_ctx, intent_profile,
+            )
+            pipeline_meta["stages"].append(
+                _stage_record(
+                    "generation",
+                    "completed",
+                    f"Generated spec with provider {provider_key}",
+                    provider=provider_key,
+                )
+            )
+        else:
+            pipeline_meta["stages"].append(
+                _stage_record("generation", "skipped", "Generation skipped because the plan was applied directly")
+            )
 
         # --- Step 2b: Preserve custom geometry if LLM dropped it ---
         if output_spec and category == "entity_logic_ai":
             output_spec = _preserve_geometry(output_spec, current)
+
+        # --- Step 2c: Auto-fetch geometry for non-vanilla mobs with empty geometry ---
+        if output_spec and category == "entity_logic_ai":
+            output_spec = _auto_fetch_geometry(
+                output_spec, prompt, provider_key, api_key,
+            )
 
         # Run semantic consistency check
         if LOGGING_ENABLED and output_spec:
@@ -517,29 +805,57 @@ def llm_rewrite_spec(prompt: str, current: dict, provider: str,
         # --- Step 3: MCP post-validation (advisory) ---
         if output_spec:
             mcp_validation = mcp_validate_sync(output_spec)
+            if mcp_validation and mcp_validation.available:
+                pipeline_meta["stages"].append(
+                    _stage_record(
+                        "validation",
+                        "completed" if mcp_validation.valid else "failed",
+                        "MCP validation completed",
+                        valid=mcp_validation.valid,
+                        errors=mcp_validation.errors[:5],
+                    )
+                )
+            else:
+                pipeline_meta["stages"].append(
+                    _stage_record("validation", "skipped", "MCP validation unavailable")
+                )
 
         # --- Step 4: Retry once if MCP found retryable errors ---
         if (mcp_validation and not mcp_validation.valid
                 and mcp_validation.available
                 and is_retryable(mcp_validation.errors)):
-            error_feedback = "\n".join(f"- {e}" for e in mcp_validation.errors[:10])
-            retry_prompt = (
-                f"Original instruction: {prompt}\n\n"
-                f"Your previous output had these validation errors from "
-                f"Minecraft Creator Tools:\n{error_feedback}\n\n"
-                f"Please fix these issues and return the corrected spec."
-            )
+            retry_prompt = _build_repair_prompt(prompt, mcp_validation.errors, intent_profile)
             print(f"[LLM] MCP validation found {len(mcp_validation.errors)} error(s), "
                   f"retrying with error feedback")
+            repair_meta["attempted"] = True
+            repair_meta["errors"] = mcp_validation.errors[:10]
             try:
                 output_spec = _call_provider(
                     retry_prompt, output_spec, provider_key,
-                    api_key, category, mcp_ctx, dyn_ctx,
+                    api_key, category, mcp_ctx, dyn_ctx, intent_profile,
                 )
                 # Re-validate after retry
                 mcp_validation = mcp_validate_sync(output_spec)
+                repair_meta["succeeded"] = bool(mcp_validation and mcp_validation.valid)
+                pipeline_meta["stages"].append(
+                    _stage_record(
+                        "repair",
+                        "completed" if repair_meta["succeeded"] else "failed",
+                        "Validation-driven repair pass completed",
+                        valid_after_repair=mcp_validation.valid if mcp_validation else None,
+                        errors=(mcp_validation.errors[:5] if mcp_validation else []),
+                    )
+                )
             except Exception as retry_exc:
                 log.warning("[LLM] Retry after MCP validation failed: %s", retry_exc)
+                repair_meta["errors"] = repair_meta["errors"] + [str(retry_exc)]
+                pipeline_meta["stages"].append(
+                    _stage_record("repair", "failed", str(retry_exc))
+                )
+        else:
+            pipeline_meta["stages"].append(
+                _stage_record("repair", "skipped", "No retryable validation errors")
+            )
 
     except SpecValidationError as exc:
         validation_passed = False
@@ -599,11 +915,21 @@ def llm_rewrite_spec(prompt: str, current: dict, provider: str,
                     color_rgb=output_spec.get("color_rgb"),
                     texture_hint=output_spec.get("texture_hint", ""),
                     short_name=output_spec.get("short_name", "custom_mob"),
+                    texture_instructions=output_spec.get("texture_instructions"),
                 )
                 if texture_b64:
                     print(f"[LLM] Procedural texture generated ({len(texture_b64)} chars)")
             except Exception as tex_exc:
                 log.warning("[LLM] Procedural texture generation failed: %s", tex_exc)
+
+    pipeline_meta["stages"].append(
+        _stage_record(
+            "texture",
+            "completed" if texture_b64 else "skipped",
+            "Generated entity texture" if texture_b64 else "No texture generated",
+            generated=bool(texture_b64),
+        )
+    )
 
     # Attach MCP metadata to the spec for the route handler to surface
     if output_spec is not None:
@@ -611,6 +937,7 @@ def llm_rewrite_spec(prompt: str, current: dict, provider: str,
             "augmented": bool(mcp_ctx and mcp_ctx.has_content) or bool(dyn_ctx and dyn_ctx.has_content),
             "context_sources": mcp_ctx.source_tools if mcp_ctx else [],
             "retrieval_ms": mcp_ctx.retrieval_ms if mcp_ctx else 0,
+            "intent_profile": intent_profile.to_dict(),
             "dynamic_context": {
                 "intents": [i.name for i in dyn_ctx.intents] if dyn_ctx else [],
                 "examples_used": dyn_ctx.example_mobs_used if dyn_ctx else [],
@@ -624,6 +951,17 @@ def llm_rewrite_spec(prompt: str, current: dict, provider: str,
         }
         if texture_b64:
             output_spec["_texture_b64"] = texture_b64
+        if orchestrator_meta:
+            output_spec["_orchestrator_meta"] = orchestrator_meta
+        output_spec["_pipeline_meta"] = {
+            **pipeline_meta,
+            "repair": repair_meta,
+        }
+
+    # Sanitize components: strip nulls, remove invalid fields, resolve conflicts,
+    # validate projectiles. This catches LLM hallucinations that Bedrock silently ignores.
+    if output_spec:
+        output_spec = sanitize_spec(output_spec)
 
     return output_spec
 
