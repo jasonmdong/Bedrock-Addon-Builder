@@ -849,7 +849,7 @@ code { font-family: ui-monospace, SFMono-Regular, Consolas, Menlo, monospace; }
 /* 3D Viewport Styles */
 .viewport-3d {
   width: 100%;
-  height: 500px;
+  height: 650px;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: #1a1a1a;
