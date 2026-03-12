@@ -95,7 +95,11 @@ function initializeViewer3D() {
   
   renderer.domElement.addEventListener("mousedown", (e) => {
     controls.previousMousePosition = { x: e.clientX, y: e.clientY };
-    if (e.button === 0) controls.isRotating = true;
+    const isPaintTool = ['paint', 'erase', 'pick'].includes(editor3DState.tool);
+    // Don't start orbit rotation when using paint tools and hovering a mesh
+    if (e.button === 0 && !(isPaintTool && editor3DState.hoverObject)) {
+      controls.isRotating = true;
+    }
     if (e.button === 2 || (e.button === 0 && e.shiftKey)) controls.isPanning = true;
     if (controls.isPanning) controls.isRotating = false;
   });
@@ -505,6 +509,7 @@ function render3DGeometry(geometryData, mobName, mobScale) {
   
   if (!viewer3D) {
     viewer3D = initializeViewer3D();
+    window.viewer3D = viewer3D;
     // Initialize editor features after viewer is created
     setupRaycasting();
   }
@@ -532,25 +537,47 @@ function render3DGeometry(geometryData, mobName, mobScale) {
   let textureWidth = 64;
   let textureHeight = 64;
   
+  // Create a canvas-backed texture so we can paint on it directly
+  const texCanvas = document.createElement('canvas');
+  texCanvas.width = textureWidth;
+  texCanvas.height = textureHeight;
+  const texCtx = texCanvas.getContext('2d', { willReadFrequently: true });
+  texCtx.fillStyle = '#ffffff';
+  texCtx.fillRect(0, 0, texCanvas.width, texCanvas.height);
+
   if (textureData) {
-    // Create texture from base64 data
     const img = new Image();
     img.src = textureData;
-    texture = new THREE.Texture(img);
-    texture.magFilter = THREE.NearestFilter;
-    texture.minFilter = THREE.NearestFilter;
-    texture.wrapS = THREE.ClampToEdgeWrapping;
-    texture.wrapT = THREE.ClampToEdgeWrapping;
     img.onload = function() {
-      texture.needsUpdate = true;
       textureWidth = img.width;
       textureHeight = img.height;
+      texCanvas.width = img.width;
+      texCanvas.height = img.height;
+      texCtx.drawImage(img, 0, 0);
+      texture.needsUpdate = true;
+      // Store dimensions for painting
+      viewer3D.texWidth = textureWidth;
+      viewer3D.texHeight = textureHeight;
       console.log(`[3D] Texture loaded: ${textureWidth}x${textureHeight}`);
     };
     img.onerror = function() {
       console.warn('[3D] Failed to load texture');
     };
   }
+
+  texture = new THREE.CanvasTexture(texCanvas);
+  texture.magFilter = THREE.NearestFilter;
+  texture.minFilter = THREE.NearestFilter;
+  texture.wrapS = THREE.ClampToEdgeWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+
+  // Store on viewer3D for painting access
+  viewer3D.texCanvas = texCanvas;
+  viewer3D.texCtx = texCtx;
+  viewer3D.texTexture = texture;
+  viewer3D.texWidth = textureWidth;
+  viewer3D.texHeight = textureHeight;
+  viewer3D.currentMobName = mobName;
   
   const rootGroup = new THREE.Group();
   const geometries = parseBedrock(geometryData);
@@ -1041,6 +1068,7 @@ function init3DEditorControls() {
       case 'r': setEditorTool('scale'); break;
       case 'p': setEditorTool('paint'); break;
       case 'x': setEditorTool('erase'); break;
+      case 'i': setEditorTool('pick'); break;
       case 'g': 
         e.preventDefault();
         toggleGrid();
@@ -1085,42 +1113,29 @@ function initGeometryCopy() {
   });
 }
 
-// Refresh the 3D model texture when the painter saves a new texture
+// Refresh the 3D model texture when texture data changes
 function refresh3DTexture(mobName) {
   if (!viewer3D || !viewer3D.mesh) return;
-  
-  // Get the new texture
+
   const textureData = getUserMobTexture(mobName);
   if (!textureData) return;
-  
-  // Create new texture
+
   const img = new Image();
   img.src = textureData;
-  const newTexture = new THREE.Texture(img);
-  newTexture.magFilter = THREE.NearestFilter;
-  newTexture.minFilter = THREE.NearestFilter;
-  newTexture.wrapS = THREE.ClampToEdgeWrapping;
-  newTexture.wrapT = THREE.ClampToEdgeWrapping;
-  
   img.onload = function() {
-    newTexture.needsUpdate = true;
-    
-    // Update all mesh materials with the new texture
-    viewer3D.mesh.traverse(child => {
-      if (child.isMesh && child.material) {
-        // Create new material with texture
-        child.material = new THREE.MeshLambertMaterial({
-          map: newTexture,
-          side: THREE.DoubleSide,
-          transparent: true,
-          alphaTest: 0.05
-        });
+    // Update the shared canvas-backed texture
+    if (viewer3D.texCanvas && viewer3D.texCtx) {
+      viewer3D.texCanvas.width = img.width;
+      viewer3D.texCanvas.height = img.height;
+      viewer3D.texCtx.drawImage(img, 0, 0);
+      viewer3D.texWidth = img.width;
+      viewer3D.texHeight = img.height;
+      if (viewer3D.texTexture) {
+        viewer3D.texTexture.needsUpdate = true;
       }
-    });
-    
+    }
     console.log(`[3D] Texture refreshed for ${mobName}`);
   };
-  
   img.onerror = function() {
     console.warn('[3D] Failed to refresh texture');
   };
@@ -1133,7 +1148,7 @@ function refresh3DTexture(mobName) {
 // Editor state
 const editor3DState = {
   mode: 'object', // 'object', 'face', 'edge', 'vertex'
-  tool: 'select', // 'select', 'move', 'scale', 'rotate', 'paint', 'erase'
+  tool: 'select', // 'select', 'move', 'scale', 'rotate', 'paint', 'erase', 'pick'
   gridVisible: true,
   backgroundColor: 0x1e1e1f,
   selectedObject: null,
@@ -1141,6 +1156,7 @@ const editor3DState = {
   hoverObject: null,
   hoverFace: null,
   paintColor: '#ff0000',
+  brushSize: 1,
   showWireframe: false,
   snapToGrid: false,
   gridSize: 16
@@ -1205,151 +1221,171 @@ function setEditorTool(tool) {
   // Update cursor
   const canvas = document.getElementById('viewport-3d');
   if (canvas) {
-    canvas.style.cursor = tool === 'paint' ? 'crosshair' : 'default';
+    canvas.style.cursor = ['paint', 'erase', 'pick'].includes(tool) ? 'crosshair' : 'default';
   }
 }
 
-// Paint a face with a color
-function paintFace(mesh, faceIndex, color) {
-  if (!mesh || !mesh.isMesh) return;
-  
-  console.log(`[3D Editor] Painting mesh ${mesh.name || 'unnamed'}, face ${faceIndex}`);
-  
-  // For BoxGeometry, each face is made of 2 triangles (6 vertices)
-  // faceIndex from raycaster corresponds to the triangle index
-  // We need to convert to face index (0-5 for box faces)
-  const boxFaceIndex = Math.floor(faceIndex / 2);
-  
-  // Get the geometry
-  const geometry = mesh.geometry;
-  if (!geometry) return;
-  
-  // Check if we have vertex colors attribute
-  let colors = geometry.getAttribute('color');
-  if (!colors) {
-    // Initialize vertex colors (white by default)
-    const count = geometry.attributes.position.count;
-    colors = new THREE.Float32BufferAttribute(new Array(count * 3).fill(1), 3);
-    geometry.setAttribute('color', colors);
-    
-    // Enable vertex colors on material
-    if (mesh.material) {
-      mesh.material.vertexColors = true;
-      mesh.material.needsUpdate = true;
+// Paint on the texture at a UV coordinate
+function paintAtUV(uv, color, brushSize) {
+  if (!viewer3D || !viewer3D.texCtx || !uv) return;
+
+  const ctx = viewer3D.texCtx;
+  const tw = viewer3D.texWidth;
+  const th = viewer3D.texHeight;
+  const size = brushSize || editor3DState.brushSize || 1;
+
+  // UV to pixel (UV y is flipped: 0=bottom, 1=top)
+  const px = Math.floor(uv.x * tw);
+  const py = Math.floor((1 - uv.y) * th);
+
+  ctx.fillStyle = color;
+
+  if (size <= 1) {
+    ctx.fillRect(px, py, 1, 1);
+  } else {
+    const half = Math.floor(size / 2);
+    for (let dy = -half; dy < size - half; dy++) {
+      for (let dx = -half; dx < size - half; dx++) {
+        const tx = px + dx;
+        const ty = py + dy;
+        if (tx >= 0 && tx < tw && ty >= 0 && ty < th) {
+          ctx.fillRect(tx, ty, 1, 1);
+        }
+      }
     }
   }
-  
-  // Convert hex color to RGB
-  const threeColor = new THREE.Color(color);
-  const r = threeColor.r;
-  const g = threeColor.g;
-  const b = threeColor.b;
-  
-  // BoxGeometry face vertex mapping (each face has 4 vertices, but we need to handle indexed geometry)
-  // For a standard BoxGeometry, vertices are arranged in groups of 4 per face
-  const verticesPerFace = 4;
-  const startVertex = boxFaceIndex * verticesPerFace;
-  
-  // Paint the 4 vertices of this face
-  for (let i = 0; i < verticesPerFace; i++) {
-    const vertexIndex = startVertex + i;
-    if (vertexIndex * 3 + 2 < colors.array.length) {
-      colors.array[vertexIndex * 3] = r;
-      colors.array[vertexIndex * 3 + 1] = g;
-      colors.array[vertexIndex * 3 + 2] = b;
-    }
-  }
-  
-  colors.needsUpdate = true;
-  
-  console.log(`[3D Editor] Painted face ${boxFaceIndex} (triangle ${faceIndex}) with color ${color}`);
+
+  // Update the Three.js texture
+  viewer3D.texTexture.needsUpdate = true;
 }
 
-// Raycasting for mouse interaction
+// Erase (paint white) at a UV coordinate
+function eraseAtUV(uv, brushSize) {
+  paintAtUV(uv, '#ffffff', brushSize);
+}
+
+// Save the current texture canvas to localStorage and refresh
+function savePaintedTexture() {
+  if (!viewer3D || !viewer3D.texCanvas || !viewer3D.currentMobName) return;
+  const base64 = viewer3D.texCanvas.toDataURL('image/png');
+  if (typeof saveUserMobTexture === 'function') {
+    saveUserMobTexture(viewer3D.currentMobName, base64);
+    console.log('[3D Paint] Texture saved for', viewer3D.currentMobName);
+  }
+}
+
+// Color picker: sample the texture color at a UV coordinate
+function pickColorAtUV(uv) {
+  if (!viewer3D || !viewer3D.texCtx || !uv) return null;
+  const tw = viewer3D.texWidth;
+  const th = viewer3D.texHeight;
+  const px = Math.floor(uv.x * tw);
+  const py = Math.floor((1 - uv.y) * th);
+  const pixel = viewer3D.texCtx.getImageData(px, py, 1, 1).data;
+  const hex = '#' + ((1 << 24) + (pixel[0] << 16) + (pixel[1] << 8) + pixel[2]).toString(16).slice(1);
+  return hex;
+}
+
+// Raycasting for mouse interaction and 3D painting
 function setupRaycasting() {
   if (!viewer3D) {
     console.warn('[3D Editor] Cannot setup raycasting - viewer3D not initialized');
     return;
   }
-  
+
   const raycaster = new THREE.Raycaster();
   const mouse = new THREE.Vector2();
-  const canvas = document.getElementById('viewport-3d');
-  
-  if (!canvas) {
-    console.warn('[3D Editor] Cannot setup raycasting - canvas not found');
+  const container = document.getElementById('viewport-3d');
+
+  if (!container) {
+    console.warn('[3D Editor] Cannot setup raycasting - container not found');
     return;
   }
-  
-  console.log('[3D Editor] Setting up raycasting...');
-  
-  // Track mouse position for raycasting
-  canvas.addEventListener('mousemove', (e) => {
-    const rect = canvas.getBoundingClientRect();
+
+  let isPainting = false;
+
+  function getIntersect(e) {
+    const rect = container.getBoundingClientRect();
     mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
     mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-    
     raycaster.setFromCamera(mouse, viewer3D.camera);
-    
-    // Get all meshes from the scene
     const meshes = [];
     viewer3D.scene.traverse(child => {
-      if (child.isMesh && child.visible) {
-        meshes.push(child);
-      }
+      if (child.isMesh && child.visible) meshes.push(child);
     });
-    
-    if (meshes.length > 0) {
-      const intersects = raycaster.intersectObjects(meshes, false);
-      
-      if (intersects.length > 0) {
-        const intersect = intersects[0];
-        editor3DState.hoverObject = intersect.object;
-        editor3DState.hoverFace = intersect.face;
-        
-        // Highlight hover effect
-        if (editor3DState.tool === 'paint') {
-          canvas.style.cursor = 'crosshair';
-        }
-      } else {
-        editor3DState.hoverObject = null;
-        editor3DState.hoverFace = null;
-        canvas.style.cursor = editor3DState.tool === 'select' ? 'default' : 'crosshair';
+    const intersects = raycaster.intersectObjects(meshes, false);
+    return intersects.length > 0 ? intersects[0] : null;
+  }
+
+  function handlePaintAction(e) {
+    const hit = getIntersect(e);
+    if (!hit || !hit.uv) return;
+
+    if (editor3DState.tool === 'paint') {
+      paintAtUV(hit.uv, editor3DState.paintColor);
+    } else if (editor3DState.tool === 'erase') {
+      eraseAtUV(hit.uv);
+    } else if (editor3DState.tool === 'pick') {
+      const color = pickColorAtUV(hit.uv);
+      if (color) {
+        editor3DState.paintColor = color;
+        const colorInput = document.getElementById('editor-paint-color');
+        if (colorInput) colorInput.value = color;
       }
     }
-  });
-  
-  canvas.addEventListener('mousedown', (e) => {
-    // Only handle left click
-    if (e.button !== 0) return;
-    
-    // Don't paint if we're rotating the view (orbit controls handle this)
-    if (!editor3DState.hoverObject) return;
-    
-    const mesh = editor3DState.hoverObject;
-    
-    switch (editor3DState.tool) {
-      case 'select':
-        editor3DState.selectedObject = mesh;
-        console.log('[3D Editor] Selected:', mesh.name || 'unnamed');
-        break;
-        
-      case 'paint':
-        if (editor3DState.hoverFace) {
-          console.log(`[3D Editor] Painting face ${editor3DState.hoverFace.materialIndex} with color ${editor3DState.paintColor}`);
-          paintFace(mesh, editor3DState.hoverFace.materialIndex, editor3DState.paintColor);
-        }
-        break;
-        
-      case 'erase':
-        // Hide the mesh (don't delete to allow undo)
-        mesh.visible = false;
-        console.log('[3D Editor] Hidden:', mesh.name || 'unnamed');
-        break;
+  }
+
+  container.addEventListener('mousemove', (e) => {
+    const hit = getIntersect(e);
+    if (hit) {
+      editor3DState.hoverObject = hit.object;
+      editor3DState.hoverFace = hit.face;
+      const isPaintTool = ['paint', 'erase', 'pick'].includes(editor3DState.tool);
+      container.style.cursor = isPaintTool ? 'crosshair' : 'default';
+    } else {
+      editor3DState.hoverObject = null;
+      editor3DState.hoverFace = null;
+      container.style.cursor = 'default';
+    }
+
+    // Continuous painting while dragging
+    if (isPainting && ['paint', 'erase'].includes(editor3DState.tool)) {
+      handlePaintAction(e);
     }
   });
-  
-  console.log('[3D Editor] Raycasting setup complete');
+
+  container.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+
+    const isPaintTool = ['paint', 'erase', 'pick'].includes(editor3DState.tool);
+    if (isPaintTool && editor3DState.hoverObject) {
+      // Prevent orbit controls from activating during painting
+      e.stopPropagation();
+      isPainting = true;
+      handlePaintAction(e);
+      return;
+    }
+
+    if (!editor3DState.hoverObject) return;
+
+    if (editor3DState.tool === 'select') {
+      editor3DState.selectedObject = editor3DState.hoverObject;
+      console.log('[3D Editor] Selected:', editor3DState.hoverObject.name || 'unnamed');
+    }
+  });
+
+  const stopPainting = () => {
+    if (isPainting) {
+      isPainting = false;
+      savePaintedTexture();
+      // Sync the 2D preview if visible
+      if (typeof window.onPaintStrokeEnd === "function") window.onPaintStrokeEnd();
+    }
+  };
+  container.addEventListener('mouseup', stopPainting);
+  container.addEventListener('mouseleave', stopPainting);
+
+  console.log('[3D Editor] Raycasting + 3D painting setup complete');
 }
 
 // Add a new cube to the scene
@@ -1419,7 +1455,8 @@ window.deleteSelected = deleteSelected;
 window.duplicateSelected = duplicateSelected;
 window.init3DEditor = init3DEditor;
 window.setupRaycasting = setupRaycasting;
-window.paintFace = paintFace;
+window.paintAtUV = paintAtUV;
+window.savePaintedTexture = savePaintedTexture;
 
 // Geometry generation via LLM
 let currentGeometryData = null;

@@ -441,16 +441,30 @@
 
   
 
-  <!-- Side by Side: Mob Geometry (Left) and Texture Painter (Right) -->
+  <!-- Mob Geometry & Texture (Full Width) -->
 
-  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-top: 2rem; margin-bottom: 2rem;">
+  <div style="margin-top: 2rem; margin-bottom: 2rem;">
 
-    
+    <div class="content-card" id="geometry-container" style="display: none; margin-top: 0;">
 
-    <!-- LEFT: Mob Geometry -->
-    <div class="content-card" id="geometry-container" style="display: none; margin-top: 0; min-height: 400px;">
-      <h3 style="margin: 0 0 0.5rem 0; font-size: 1rem; font-weight: bold;">Mob Geometry</h3>
-      <p class="hint" style="margin: 0 0 1rem 0;">Geometry file from Mojang's bedrock-samples repository.</p>
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+        <h3 style="margin: 0; font-size: 1rem; font-weight: bold;">Mob Geometry</h3>
+        <div style="display: flex; gap: 0.25rem; align-items: center;">
+          <button type="button" class="primary" id="view-toggle-3d" style="font-size: 0.8rem; padding: 0.25rem 0.75rem;">3D</button>
+          <button type="button" class="secondary" id="view-toggle-2d" style="font-size: 0.8rem; padding: 0.25rem 0.75rem;">2D Texture</button>
+          <span style="border-left: 1px solid var(--border); height: 1.5rem; margin: 0 0.25rem;"></span>
+          <button type="button" class="secondary" id="painter-uv-toggle" style="font-size: 0.8rem; padding: 0.25rem 0.75rem;" title="Show UV overlay on 2D view">UV</button>
+          <span style="border-left: 1px solid var(--border); height: 1.5rem; margin: 0 0.25rem;"></span>
+          <button type="button" class="secondary" id="painter-load" style="font-size: 0.8rem; padding: 0.25rem 0.75rem;" title="Reload texture">Reload</button>
+          <button type="button" class="secondary" id="painter-clear" style="font-size: 0.8rem; padding: 0.25rem 0.75rem;" title="Clear texture">Clear</button>
+          <label style="font-size: 0.8rem; padding: 0.25rem 0.75rem; cursor: pointer; border: 1px solid var(--border); border-radius: 4px; color: var(--muted);" title="Import PNG texture">
+            Import
+            <input type="file" id="painter-import" accept="image/png" style="display: none;">
+          </label>
+        </div>
+      </div>
+
+      <p class="hint" style="margin: 0 0 0.75rem 0;">Paint directly on the 3D model. Toggle to 2D view to see the flat texture map.</p>
 
       <div style="position: relative; margin-bottom: 1rem;">
 
@@ -468,7 +482,7 @@
 
       <!-- 3D Viewport (Blockbench-style) -->
 
-      <div style="margin-bottom: 1.5rem;">
+      <div id="viewport-3d-wrapper" style="margin-bottom: 1.5rem;">
 
         <h3 style="margin-top: 0; margin-bottom: 0.75rem; font-size: 0.95rem;">3D Model Preview</h3>
 
@@ -512,13 +526,19 @@
 
           <!-- Paint Tools -->
 
-          <div class="toolbar-group" style="display: flex; gap: 0.25rem; border-right: 1px solid var(--border); padding-right: 0.5rem;">
+          <div class="toolbar-group" style="display: flex; gap: 0.25rem; border-right: 1px solid var(--border); padding-right: 0.5rem; align-items: center;">
 
             <button type="button" class="secondary editor-tool-btn" data-tool="paint" id="tool-paint" onclick="setEditorTool('paint')" title="Paint (P)">Paint</button>
 
             <input type="color" id="editor-paint-color" value="#ff0000" onchange="if(window.editor3DState) window.editor3DState.paintColor = this.value" style="width: 32px; height: 32px; border: none; border-radius: 4px; cursor: pointer;" title="Paint Color">
 
             <button type="button" class="secondary editor-tool-btn" data-tool="erase" id="tool-erase" onclick="setEditorTool('erase')" title="Erase (X)">Erase</button>
+
+            <button type="button" class="secondary editor-tool-btn" data-tool="pick" id="tool-pick" onclick="setEditorTool('pick')" title="Pick Color (I)">Pick</button>
+
+            <label style="font-size: 0.75rem; color: var(--muted); margin-left: 0.25rem;" title="Brush Size">Size:</label>
+            <input type="range" id="editor-brush-size" min="1" max="8" value="1" style="width: 60px;" title="Brush Size" onchange="if(window.editor3DState) window.editor3DState.brushSize = parseInt(this.value)">
+            <span id="brush-size-label" style="font-size: 0.75rem; color: var(--muted); min-width: 1em;">1</span>
 
           </div>
 
@@ -628,7 +648,13 @@
 
       </div>
 
-      
+      <!-- 2D Texture View (toggled, hidden by default) -->
+      <div id="tex-2d-panel" style="display: none; margin-bottom: 1rem;">
+        <div style="position: relative; display: flex; justify-content: center;">
+          <canvas id="pixel-canvas" width="512" height="512" style="border: 1px solid var(--border); image-rendering: pixelated; background: #fff;"></canvas>
+          <canvas id="uv-overlay-canvas" width="512" height="512" style="position: absolute; top: 0; pointer-events: none; display: none;"></canvas>
+        </div>
+      </div>
 
       <!-- JSON Viewer -->
 
@@ -639,64 +665,6 @@
         <pre id="geometry-viewer" style="background: var(--editor-bg); color: var(--editor-text); padding: 1rem; border-radius: 12px; border: 1px solid var(--border); overflow-x: auto; overflow-y: auto; max-height: 400px; margin: 0; font-size: 0.85rem;"></pre>
 
       </details>
-
-    </div>
-
-
-
-    <!-- RIGHT: Texture Painter -->
-    <div class="content-card" style="margin-top: 0; min-height: 400px;">
-      <h3 style="margin: 0 0 0.5rem 0; font-size: 1rem; font-weight: bold;">Texture Painter</h3>
-      <p class="hint" style="margin: 0 0 1rem 0;">Paint the 64x64 skin for the selected mob.</p>
-
-      <div class="painter-layout">
-
-        <div class="painter-canvas-wrapper" style="position: relative;">
-
-          <canvas id="pixel-canvas" width="384" height="384"></canvas>
-          <canvas id="uv-overlay-canvas" width="384" height="384" style="position: absolute; top: 0; left: 0; pointer-events: none; display: none;"></canvas>
-
-        </div>
-
-        <div class="painter-tools">
-
-          <div class="field">
-
-            <label>Color</label>
-
-            <input type="color" id="painter-color" value="#ff0000" style="width: 100%; height: 46px; padding: 0; border: none; border-radius: 8px;">
-
-          </div>
-
-          <div class="tool-row">
-
-            <button type="button" class="secondary" id="painter-pencil">Pencil</button>
-
-            <button type="button" class="secondary" id="painter-eraser">Eraser</button>
-
-            <button type="button" class="secondary" id="painter-clear">Clear</button>
-
-          </div>
-
-          <div class="tool-row">
-
-            <button type="button" class="secondary" id="painter-load">Load Current</button>
-
-            <button type="button" class="secondary" id="painter-uv-toggle">Show UV</button>
-
-          </div>
-
-          <div class="field">
-
-            <label>Import Image</label>
-
-            <input type="file" id="painter-import" accept="image/png">
-
-          </div>
-
-        </div>
-
-      </div>
 
     </div>
 
