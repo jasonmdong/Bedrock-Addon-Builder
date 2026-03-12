@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 Golden Test Runner for LLM Provider Comparison.
 
@@ -20,8 +21,12 @@ import os
 from datetime import datetime
 from pathlib import Path
 
-# Add backend to path
-sys.path.insert(0, str(Path(__file__).parent))
+# Ensure stdout handles Unicode on Windows
+if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+# Add project root to path
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from backend.llm.llm_scoring import (
     GOLDEN_TESTS,
@@ -112,13 +117,13 @@ def run_single_test(test, provider: str, api_key: str = None) -> tuple[GoldenTes
         # Run the golden test
         result = run_golden_test(test, output_spec)
         
-        status = "✅ PASS" if result.passed else "❌ FAIL"
+        status = "[PASS]" if result.passed else "[FAIL]"
         print(f"{status} (score: {result.score:.2f})")
         
         return result, output_spec, test.input_spec
         
     except SpecValidationError as e:
-        print(f"❌ VALIDATION ERROR: {e}")
+        print(f"[ERROR] VALIDATION ERROR: {e}")
         return GoldenTestResult(
             test_name=test.name,
             passed=False,
@@ -128,7 +133,7 @@ def run_single_test(test, provider: str, api_key: str = None) -> tuple[GoldenTes
         ), {"error": str(e)}, test.input_spec
         
     except Exception as e:
-        print(f"❌ ERROR: {e}")
+        print(f"[ERROR] {e}")
         return GoldenTestResult(
             test_name=test.name,
             passed=False,
@@ -148,7 +153,17 @@ def run_tests_for_provider(provider: str, api_key: str = None, tests: list = Non
     print(f"{'='*60}")
     
     for test in tests:
-        result, output_spec, input_spec = run_single_test(test, provider, api_key)
+        try:
+            result, output_spec, input_spec = run_single_test(test, provider, api_key)
+        except Exception as e:
+            print(f"[ERROR] Test {test.name} crashed: {e}")
+            result = GoldenTestResult(
+                test_name=test.name,
+                passed=False,
+                score=0.0,
+                checks=[],
+                error=str(e)
+            )
         results.append(result)
         
         # Show detailed check results in verbose mode
@@ -205,11 +220,11 @@ def print_report(report: dict):
     for provider, score_data in report['scores'].items():
         print(f"\n{provider}:")
         for test_result in score_data['test_results']:
-            status = "✅" if test_result['passed'] else "❌"
+            status = "[PASS]" if test_result['passed'] else "[FAIL]"
             print(f"  {status} {test_result['name']}: {test_result['score']:.2f}")
     
     if report.get('best_provider'):
-        print(f"\n🏆 Best Provider: {report['best_provider']}")
+        print(f"\nBest Provider: {report['best_provider']}")
 
 
 def dry_run():
@@ -301,17 +316,17 @@ def main():
     for provider in providers:
         api_key = args.api_key or get_api_key_for_provider(provider)
         if not api_key:
-            print(f"\n⚠️  Warning: No API key found for {provider}. Set {provider.upper()}_API_KEY environment variable.")
+            print(f"\n[WARN] No API key found for {provider}. Set {provider.upper()}_API_KEY environment variable.")
             continue
         
         try:
             results = run_tests_for_provider(provider, api_key, tests_to_run, verbose=args.verbose)
             all_results[provider] = results
         except Exception as e:
-            print(f"\n❌ Failed to run tests for {provider}: {e}")
+            print(f"\n[ERROR] Failed to run tests for {provider}: {e}")
     
     if not all_results:
-        print("\n❌ No providers were tested. Check your API keys.")
+        print("\n[ERROR] No providers were tested. Check your API keys.")
         sys.exit(1)
     
     # Generate and print report

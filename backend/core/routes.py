@@ -924,18 +924,19 @@ def llm_spec_editor(payload: dict = Body(...)):
     provider = data.get("provider")
     api_key = data.get("api_key")
     category = data.get("category", "entity_logic_ai")
+    use_plan = bool(data.get("use_plan", False))
     current = data.get("current_spec") or data.get("spec")
     if not current:
         current = read_current_spec()
 
-    print(f"[LLM] provider={provider} category={category} prompt_len={len(str(prompt).strip())}")
+    print(f"[LLM] provider={provider} category={category} prompt_len={len(str(prompt).strip())} use_plan={use_plan}")
 
     # if server running in local dev mode prefer mock to avoid external calls
     if LOCAL_LLM_DEV and not provider:
         return llm_spec_mock(payload)
 
     try:
-        updated = llm_rewrite_spec(prompt, current, provider, api_key, category=category)
+        updated = llm_rewrite_spec(prompt, current, provider, api_key, category=category, use_plan=use_plan)
     except SpecValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except RuntimeError as exc:
@@ -945,6 +946,8 @@ def llm_spec_editor(payload: dict = Body(...)):
     # Extract internal metadata before saving (don't persist it)
     mcp_meta = updated.pop("_mcp_meta", None) if updated else None
     texture_b64 = updated.pop("_texture_b64", "") if updated else ""
+    orchestrator_meta = updated.pop("_orchestrator_meta", None) if updated else None
+    pipeline_meta = updated.pop("_pipeline_meta", None) if updated else None
 
     if data.get("save"):
         try:
@@ -955,6 +958,10 @@ def llm_spec_editor(payload: dict = Body(...)):
                 result["mcp"] = mcp_meta
             if texture_b64:
                 result["texture_b64"] = texture_b64
+            if orchestrator_meta:
+                result["orchestrator"] = orchestrator_meta
+            if pipeline_meta:
+                result["pipeline"] = pipeline_meta
             return result
         except SpecValidationError as exc:
             raise HTTPException(status_code=422, detail=str(exc))
@@ -964,6 +971,10 @@ def llm_spec_editor(payload: dict = Body(...)):
         result["mcp"] = mcp_meta
     if texture_b64:
         result["texture_b64"] = texture_b64
+    if orchestrator_meta:
+        result["orchestrator"] = orchestrator_meta
+    if pipeline_meta:
+        result["pipeline"] = pipeline_meta
     return result
 
 

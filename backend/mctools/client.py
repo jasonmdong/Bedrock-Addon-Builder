@@ -441,7 +441,7 @@ async def call_tool(
         await _invalidate_session()
         raise RuntimeError(f"MCP tool call '{tool_name}' timed out after {effective_timeout}s")
 
-    if resp.status_code == 400 and "session" in resp.text.lower():
+    if resp.status_code in (400, 404) and "session" in resp.text.lower():
         await _invalidate_session()
         session_id = await _ensure_session()
         resp = await _mcp_post(payload, session_id, timeout=effective_timeout)

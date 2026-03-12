@@ -1,77 +1,528 @@
 {
+  "_format": "Bedrock entity component schema reference. 'valid_fields' lists EVERY accepted field with type and default. Fields not listed here are INVALID and silently ignored by Bedrock.",
   "components": {
-    "minecraft:behavior.swell": {
-      "description": "Allows the mob to swell and trigger an explosion. MUST be paired with minecraft:explode.",
-      "properties": {
-        "start_distance": "Distance to start swelling",
-        "stop_distance": "Distance to stop swelling"
+    "minecraft:behavior.melee_attack": {
+      "description": "Basic melee attack AI goal.",
+      "valid_fields": {
+        "priority": {"type": "int", "required": true},
+        "speed_multiplier": {"type": "float", "default": 1.0},
+        "track_target": {"type": "bool", "default": true},
+        "reach_multiplier": {"type": "float", "default": 1.0},
+        "attack_once": {"type": "bool", "default": false},
+        "require_complete_path": {"type": "bool", "default": false}
       }
+    },
+    "minecraft:behavior.ranged_attack": {
+      "description": "Ranged attack AI goal. MUST be paired with minecraft:shooter.",
+      "valid_fields": {
+        "priority": {"type": "int", "required": true},
+        "attack_interval_min": {"type": "float", "default": 1.0},
+        "attack_interval_max": {"type": "float", "default": 3.0},
+        "attack_radius": {"type": "float", "default": 15.0},
+        "burst_shots": {"type": "int", "default": 1},
+        "burst_interval": {"type": "float", "default": 0.0},
+        "charge_charged_trigger": {"type": "float", "default": 0.0},
+        "charge_shoot_trigger": {"type": "float", "default": 0.0},
+        "speed_multiplier": {"type": "float", "default": 1.0},
+        "x_max_rotation": {"type": "float", "default": 30.0},
+        "y_max_head_rotation": {"type": "float", "default": 30.0}
+      },
+      "INVALID_FIELDS": ["require_angry", "shoot_sound_event", "sound_event", "projectile"]
+    },
+    "minecraft:shooter": {
+      "description": "Defines the projectile a mob shoots. Used with minecraft:behavior.ranged_attack.",
+      "valid_fields": {
+        "def": {"type": "string", "required": true, "description": "Projectile entity ID"},
+        "aux_val": {"type": "int", "default": -1},
+        "sound": {"type": "string", "default": ""}
+      },
+      "valid_projectiles": [
+        "minecraft:arrow",
+        "minecraft:small_fireball",
+        "minecraft:large_fireball",
+        "minecraft:snowball",
+        "minecraft:shulker_bullet",
+        "minecraft:llama_spit",
+        "minecraft:dragon_fireball",
+        "minecraft:wither_skull",
+        "minecraft:wither_skull_dangerous"
+      ]
+    },
+    "minecraft:behavior.swell": {
+      "description": "Creeper swell behavior. MUST be paired with minecraft:explode. Incompatible with ranged attack (mob charges at target).",
+      "valid_fields": {
+        "priority": {"type": "int", "required": true},
+        "start_distance": {"type": "float", "default": 2.5},
+        "stop_distance": {"type": "float", "default": 6.0}
+      },
+      "INVALID_FIELDS": ["swell_radius", "swell_time", "group_size"]
     },
     "minecraft:explode": {
-      "description": "Defines the actual explosion properties. Required for mobs that swell.",
-      "properties": {
-        "fuse_length": "Time in seconds before exploding",
-        "power": "Explosion radius/strength (e.g., 3)",
-        "causes_fire": "Boolean",
-        "destroy_affected_by_griefing": "Boolean"
+      "description": "Explosion properties. Required with minecraft:behavior.swell.",
+      "valid_fields": {
+        "fuse_length": {"type": "float", "default": 1.5},
+        "fuse_lit": {"type": "bool", "default": true},
+        "power": {"type": "float", "default": 3.0},
+        "causes_fire": {"type": "bool", "default": false},
+        "destroy_affected_by_griefing": {"type": "bool", "default": true},
+        "fire_affected_by_griefing": {"type": "bool", "default": true},
+        "max_resistance": {"type": "float", "default": 3.40282e+38}
       }
     },
-    "minecraft:target_nearby_sensor": {
-      "description": "Triggers events based on player proximity. Useful for starting the swell behavior.",
-      "properties": {
-        "inside_range": "Distance to trigger",
-        "outside_range": "Distance to reset"
+    "minecraft:behavior.nearest_attackable_target": {
+      "description": "Targeting AI - selects nearest valid target.",
+      "valid_fields": {
+        "priority": {"type": "int", "required": true},
+        "entity_types": {"type": "array", "required": true, "description": "Array of {filters, max_dist} objects"},
+        "must_see": {"type": "bool", "default": false},
+        "must_see_forget_duration": {"type": "float", "default": 3.0},
+        "must_reach": {"type": "bool", "default": false},
+        "reselect_targets": {"type": "bool", "default": false},
+        "within_radius": {"type": "float", "default": 0.0},
+        "attack_interval": {"type": "int", "default": 0},
+        "scan_interval": {"type": "int", "default": 10}
       }
     },
-    "minecraft:behavior.leap_at_target": {
-      "description": "Allows the mob to leap at its target.",
-      "properties": {
-        "yd": "Vertical leap strength",
-        "must_be_on_ground": "Whether it must be on ground to leap"
+    "minecraft:behavior.hurt_by_target": {
+      "description": "Targets entities that have recently hurt this mob.",
+      "valid_fields": {
+        "priority": {"type": "int", "required": true},
+        "alert_same_type": {"type": "bool", "default": false},
+        "entity_types": {"type": "array", "default": []}
       }
     },
-    "minecraft:behavior.melee_attack": {
-      "description": "Basic melee attack behavior.",
-      "properties": {
-        "speed_multiplier": "Movement speed multiplier when attacking",
-        "track_target": "Whether to track the target's position"
+    "minecraft:behavior.float": {
+      "description": "Allows mob to float in water.",
+      "valid_fields": {
+        "priority": {"type": "int", "required": true}
       }
     },
-    "minecraft:behavior.avoid_mob_type": {
-      "description": "Allows the mob to run away from specific mob types (e.g., cats, ocelots).",
-      "properties": {
-        "max_dist": "Distance to keep from the avoided mob",
-        "sprint_speed_multiplier": "Speed when running away"
+    "minecraft:behavior.look_at_player": {
+      "description": "Mob looks at nearby players.",
+      "valid_fields": {
+        "priority": {"type": "int", "required": true},
+        "look_distance": {"type": "float", "default": 8.0},
+        "probability": {"type": "float", "default": 0.02}
+      }
+    },
+    "minecraft:behavior.random_look_around": {
+      "description": "Mob randomly looks around.",
+      "valid_fields": {
+        "priority": {"type": "int", "required": true}
+      }
+    },
+    "minecraft:behavior.wander": {
+      "description": "Random wandering movement.",
+      "valid_fields": {
+        "priority": {"type": "int", "required": true},
+        "speed_multiplier": {"type": "float", "default": 1.0},
+        "wander_distance": {"type": "float", "default": 10.0},
+        "interval": {"type": "int", "default": 120}
+      },
+      "INVALID_FIELDS": ["xz_dist", "y_dist"]
+    },
+    "minecraft:behavior.random_stroll": {
+      "description": "Random strolling movement (alternative to wander).",
+      "valid_fields": {
+        "priority": {"type": "int", "required": true},
+        "speed_multiplier": {"type": "float", "default": 1.0},
+        "xz_dist": {"type": "int", "default": 10},
+        "y_dist": {"type": "int", "default": 7},
+        "interval": {"type": "int", "default": 120}
       }
     },
     "minecraft:behavior.panic": {
-      "description": "Allows the mob to run away when hurt.",
-      "properties": {
-        "speed_multiplier": "Panic speed multiplier"
+      "description": "Mob runs away when hurt.",
+      "valid_fields": {
+        "priority": {"type": "int", "required": true},
+        "speed_multiplier": {"type": "float", "default": 1.25},
+        "force": {"type": "bool", "default": false}
+      }
+    },
+    "minecraft:behavior.tempt": {
+      "description": "Mob follows players holding specific items.",
+      "valid_fields": {
+        "priority": {"type": "int", "required": true},
+        "speed_multiplier": {"type": "float", "default": 1.0},
+        "items": {"type": "array", "required": true, "description": "Array of item ID strings"},
+        "within_radius": {"type": "float", "default": 0.0},
+        "can_tempt_vertically": {"type": "bool", "default": false}
+      }
+    },
+    "minecraft:behavior.breed": {
+      "description": "Breeding AI goal.",
+      "valid_fields": {
+        "priority": {"type": "int", "required": true},
+        "speed_multiplier": {"type": "float", "default": 1.0}
+      }
+    },
+    "minecraft:behavior.follow_parent": {
+      "description": "Baby mob follows parent.",
+      "valid_fields": {
+        "priority": {"type": "int", "required": true},
+        "speed_multiplier": {"type": "float", "default": 1.0}
+      }
+    },
+    "minecraft:behavior.beg": {
+      "description": "Mob begs for items (like wolves). Required with minecraft:tameable.",
+      "valid_fields": {
+        "priority": {"type": "int", "required": true},
+        "look_distance": {"type": "float", "default": 8.0},
+        "look_time": {"type": "array", "default": [2, 4], "description": "[min_seconds, max_seconds]"},
+        "items": {"type": "array", "required": true, "description": "Array of item ID strings"}
+      }
+    },
+    "minecraft:behavior.leap_at_target": {
+      "description": "Mob leaps at its target.",
+      "valid_fields": {
+        "priority": {"type": "int", "required": true},
+        "yd": {"type": "float", "default": 0.4},
+        "must_be_on_ground": {"type": "bool", "default": true}
+      }
+    },
+    "minecraft:behavior.avoid_mob_type": {
+      "description": "Mob runs from specific entity types.",
+      "valid_fields": {
+        "priority": {"type": "int", "required": true},
+        "entity_types": {"type": "array", "required": true},
+        "max_dist": {"type": "float", "default": 10.0},
+        "walk_speed_multiplier": {"type": "float", "default": 1.0},
+        "sprint_speed_multiplier": {"type": "float", "default": 1.5}
+      }
+    },
+    "minecraft:behavior.defend_village_target": {
+      "description": "Iron Golem style village defense.",
+      "valid_fields": {
+        "priority": {"type": "int", "required": true},
+        "entity_types": {"type": "array", "required": true}
       }
     },
     "minecraft:behavior.mount_pathing": {
-      "description": "Allows the mob to path towards a mount (like a spider jockey)."
+      "description": "Paths towards a mount (spider jockey).",
+      "valid_fields": {
+        "priority": {"type": "int", "required": true},
+        "speed_multiplier": {"type": "float", "default": 1.0},
+        "target_dist": {"type": "float", "default": 0.0},
+        "track_target": {"type": "bool", "default": true}
+      }
     },
-    "minecraft:behavior.defend_village_target": {
-      "description": "Iron Golem style village defense behavior."
+    "minecraft:behavior.stomp_attack": {
+      "description": "Ravager-style stomp attack.",
+      "valid_fields": {
+        "priority": {"type": "int", "required": true},
+        "speed_multiplier": {"type": "float", "default": 1.0},
+        "stomp_range_multiplier": {"type": "float", "default": 2.0},
+        "no_damage_range_multiplier": {"type": "float", "default": 2.0}
+      }
     },
-    "minecraft:is_charged": {
-      "description": "Marks the entity as charged (like a charged creeper)."
+    "minecraft:tameable": {
+      "description": "Allows mob to be tamed. Pair with minecraft:behavior.beg.",
+      "valid_fields": {
+        "probability": {"type": "float", "default": 0.33},
+        "tame_items": {"type": "array", "required": true, "description": "Array of item ID strings"},
+        "tame_event": {"type": "object", "default": {}}
+      }
+    },
+    "minecraft:breedable": {
+      "description": "Allows mob to breed.",
+      "valid_fields": {
+        "require_tame": {"type": "bool", "default": false},
+        "breed_items": {"type": "array", "required": true, "description": "Array of item ID strings"},
+        "breeds_with": {"type": "array", "default": []},
+        "mutation_factor": {"type": "object", "default": {}}
+      }
+    },
+    "minecraft:rideable": {
+      "description": "Allows entities to ride this mob.",
+      "valid_fields": {
+        "seat_count": {"type": "int", "required": true},
+        "family_types": {"type": "array", "default": ["player"]},
+        "interact_text": {"type": "string", "default": "action.interact.ride.horse"},
+        "seats": {"type": "array", "required": true, "description": "Array of {position: [x,y,z]} objects"},
+        "controlling_seat": {"type": "int", "default": 0},
+        "pull_in_entities": {"type": "bool", "default": false}
+      }
+    },
+    "minecraft:input_ground_controlled": {
+      "description": "Player controls this mob's movement when riding. Requires minecraft:rideable.",
+      "valid_fields": {}
+    },
+    "minecraft:attack": {
+      "description": "Defines melee damage value.",
+      "valid_fields": {
+        "damage": {"type": "int", "required": true},
+        "effect_name": {"type": "string", "default": ""},
+        "effect_duration": {"type": "float", "default": 0.0}
+      }
+    },
+    "minecraft:health": {
+      "description": "Entity health pool.",
+      "valid_fields": {
+        "value": {"type": "int", "required": true},
+        "max": {"type": "int", "required": true}
+      }
+    },
+    "minecraft:movement": {
+      "description": "Base movement speed attribute.",
+      "valid_fields": {
+        "value": {"type": "float", "required": true}
+      }
+    },
+    "minecraft:movement.basic": {
+      "description": "Ground movement controller.",
+      "valid_fields": {
+        "max_turn": {"type": "float", "default": 30.0}
+      }
+    },
+    "minecraft:movement.fly": {
+      "description": "Flying movement controller. Requires minecraft:can_fly + minecraft:navigation.fly.",
+      "valid_fields": {
+        "max_turn": {"type": "float", "default": 30.0}
+      }
+    },
+    "minecraft:movement.sway": {
+      "description": "Aquatic swaying movement. Requires minecraft:navigation.swim.",
+      "valid_fields": {
+        "sway_amplitude": {"type": "float", "default": 0.05},
+        "sway_frequency": {"type": "float", "default": 0.5},
+        "max_turn": {"type": "float", "default": 30.0}
+      }
+    },
+    "minecraft:movement.skip": {
+      "description": "Skipping movement (rabbits).",
+      "valid_fields": {
+        "max_turn": {"type": "float", "default": 30.0}
+      }
+    },
+    "minecraft:movement.hover": {
+      "description": "Hovering movement (bees).",
+      "valid_fields": {
+        "max_turn": {"type": "float", "default": 30.0}
+      }
+    },
+    "minecraft:navigation.walk": {
+      "description": "Ground pathfinding.",
+      "valid_fields": {
+        "can_walk": {"type": "bool", "default": true},
+        "avoid_water": {"type": "bool", "default": false},
+        "avoid_damage_blocks": {"type": "bool", "default": false},
+        "can_open_doors": {"type": "bool", "default": false},
+        "can_pass_doors": {"type": "bool", "default": true},
+        "can_break_doors": {"type": "bool", "default": false},
+        "avoid_sun": {"type": "bool", "default": false},
+        "can_path_over_water": {"type": "bool", "default": false}
+      }
+    },
+    "minecraft:navigation.fly": {
+      "description": "Flying pathfinding. Requires minecraft:can_fly.",
+      "valid_fields": {
+        "can_path_over_water": {"type": "bool", "default": true},
+        "can_path_from_air": {"type": "bool", "default": true}
+      }
+    },
+    "minecraft:navigation.swim": {
+      "description": "Aquatic pathfinding.",
+      "valid_fields": {
+        "can_sink": {"type": "bool", "default": false},
+        "avoid_damage_blocks": {"type": "bool", "default": false},
+        "can_path_over_water": {"type": "bool", "default": false},
+        "can_breach": {"type": "bool", "default": false}
+      }
+    },
+    "minecraft:navigation.climb": {
+      "description": "Climbing pathfinding (spiders). Requires minecraft:can_climb.",
+      "valid_fields": {
+        "can_path_over_water": {"type": "bool", "default": false},
+        "avoid_damage_blocks": {"type": "bool", "default": false}
+      }
+    },
+    "minecraft:navigation.hover": {
+      "description": "Hover pathfinding (bees).",
+      "valid_fields": {
+        "can_path_over_water": {"type": "bool", "default": true},
+        "can_path_from_air": {"type": "bool", "default": true}
+      }
+    },
+    "minecraft:can_fly": {
+      "description": "Marks entity as a flyer. Requires minecraft:movement.fly + minecraft:navigation.fly.",
+      "valid_fields": {}
+    },
+    "minecraft:can_climb": {
+      "description": "Allows entity to climb walls. Pair with minecraft:navigation.climb.",
+      "valid_fields": {}
+    },
+    "minecraft:breathable": {
+      "description": "Breathing configuration for aquatic mobs.",
+      "valid_fields": {
+        "total_supply": {"type": "int", "default": 15},
+        "suffocate_time": {"type": "int", "default": -20},
+        "breathes_water": {"type": "bool", "default": false},
+        "breathes_air": {"type": "bool", "default": true},
+        "breathes_solids": {"type": "bool", "default": false},
+        "generates_bubbles": {"type": "bool", "default": true},
+        "inhale_time": {"type": "float", "default": 0.0}
+      }
+    },
+    "minecraft:fire_immune": {
+      "description": "Makes the entity immune to fire/lava damage.",
+      "valid_fields": {}
     },
     "minecraft:knockback_resistance": {
-      "description": "Reduces knockback taken by the mob.",
-      "properties": {
-        "value": "Resistance value (0.0 to 1.0)"
+      "description": "Reduces knockback from attacks.",
+      "valid_fields": {
+        "value": {"type": "float", "required": true, "description": "0.0 to 1.0"}
+      }
+    },
+    "minecraft:is_baby": {
+      "description": "Marks entity as a baby. Implies scale < 0.9.",
+      "valid_fields": {}
+    },
+    "minecraft:is_charged": {
+      "description": "Marks entity as charged (like charged creeper).",
+      "valid_fields": {}
+    },
+    "minecraft:scale": {
+      "description": "Visual scale override.",
+      "valid_fields": {
+        "value": {"type": "float", "required": true}
       }
     },
     "minecraft:teleport": {
-      "description": "Allows the mob to teleport (Enderman style).",
-      "properties": {
-        "random_teleports": "Whether it teleports randomly"
+      "description": "Enderman-style teleportation.",
+      "valid_fields": {
+        "random_teleports": {"type": "bool", "default": true},
+        "max_random_teleport_time": {"type": "float", "default": 20.0},
+        "min_random_teleport_time": {"type": "float", "default": 0.0},
+        "random_teleport_cube": {"type": "array", "default": [32, 16, 32]},
+        "target_distance": {"type": "float", "default": 16.0},
+        "target_teleport_chance": {"type": "float", "default": 0.01},
+        "light_teleport_chance": {"type": "float", "default": 0.01},
+        "dark_teleport_chance": {"type": "float", "default": 0.01}
+      }
+    },
+    "minecraft:area_attack": {
+      "description": "Area-of-effect damage around the entity.",
+      "valid_fields": {
+        "damage_range": {"type": "float", "required": true},
+        "damage_per_tick": {"type": "int", "required": true},
+        "cause": {"type": "string", "default": "attack"},
+        "entity_filter": {"type": "object", "default": {}}
+      }
+    },
+    "minecraft:loot": {
+      "description": "Loot table reference.",
+      "valid_fields": {
+        "table": {"type": "string", "required": true, "description": "Path like loot_tables/entities/mob.json"}
+      }
+    },
+    "minecraft:flying_speed": {
+      "description": "Flying speed attribute.",
+      "valid_fields": {
+        "value": {"type": "float", "required": true}
+      }
+    },
+    "minecraft:follow_range": {
+      "description": "How far the entity can detect and follow targets.",
+      "valid_fields": {
+        "value": {"type": "int", "required": true},
+        "max": {"type": "int", "default": 2048}
+      }
+    },
+    "minecraft:target_nearby_sensor": {
+      "description": "Triggers events based on entity proximity.",
+      "valid_fields": {
+        "inside_range": {"type": "float", "required": true},
+        "outside_range": {"type": "float", "required": true},
+        "on_inside_range": {"type": "object", "default": {}},
+        "on_outside_range": {"type": "object", "default": {}}
+      }
+    },
+    "minecraft:behavior.stomp_turtle_egg": {
+      "description": "Zombie-style egg stomping.",
+      "valid_fields": {
+        "priority": {"type": "int", "required": true},
+        "speed_multiplier": {"type": "float", "default": 1.0},
+        "search_range": {"type": "int", "default": 10},
+        "search_height": {"type": "int", "default": 3},
+        "goal_radius": {"type": "float", "default": 1.14},
+        "interval": {"type": "int", "default": 120}
+      }
+    },
+    "minecraft:behavior.swim_idle": {
+      "description": "Aquatic idle swimming.",
+      "valid_fields": {
+        "priority": {"type": "int", "required": true},
+        "idle_time": {"type": "float", "default": 5.0},
+        "success_rate": {"type": "float", "default": 0.1}
+      }
+    },
+    "minecraft:behavior.swim_wander": {
+      "description": "Aquatic wandering.",
+      "valid_fields": {
+        "priority": {"type": "int", "required": true},
+        "speed_multiplier": {"type": "float", "default": 1.0},
+        "interval": {"type": "int", "default": 120},
+        "look_ahead": {"type": "float", "default": 5.0}
+      }
+    },
+    "minecraft:jump.static": {
+      "description": "Standard jump behavior.",
+      "valid_fields": {}
+    },
+    "minecraft:physics": {
+      "description": "Enables physics (gravity, collision).",
+      "valid_fields": {
+        "has_gravity": {"type": "bool", "default": true},
+        "has_collision": {"type": "bool", "default": true}
+      }
+    },
+    "minecraft:type_family": {
+      "description": "Entity family membership for filter targeting.",
+      "valid_fields": {
+        "family": {"type": "array", "required": true, "description": "Array of family strings like ['monster', 'mob']"}
+      }
+    },
+    "minecraft:collision_box": {
+      "description": "Entity collision bounds.",
+      "valid_fields": {
+        "width": {"type": "float", "required": true},
+        "height": {"type": "float", "required": true}
+      }
+    },
+    "minecraft:pushable": {
+      "description": "Whether the entity can be pushed.",
+      "valid_fields": {
+        "is_pushable": {"type": "bool", "default": true},
+        "is_pushable_by_piston": {"type": "bool", "default": true}
       }
     }
   },
-  "families": ["monster", "mob", "creeper", "zombie", "skeleton", "spider", "irongolem", "player"],
-  "notes": "Reference from Mojang/bedrock-samples. Use these components to customize AI behavior. TIP: To make a mob only explode and NOT melee attack, add 'minecraft:behavior.melee_attack': null to the components."
+  "dependencies": {
+    "minecraft:behavior.swell": ["minecraft:explode"],
+    "minecraft:explode": ["minecraft:behavior.swell"],
+    "minecraft:behavior.ranged_attack": ["minecraft:shooter"],
+    "minecraft:shooter": ["minecraft:behavior.ranged_attack"],
+    "minecraft:tameable": ["minecraft:behavior.beg"],
+    "minecraft:can_fly": ["minecraft:movement.fly", "minecraft:navigation.fly"],
+    "minecraft:movement.fly": ["minecraft:can_fly", "minecraft:navigation.fly"],
+    "minecraft:navigation.fly": ["minecraft:can_fly", "minecraft:movement.fly"],
+    "minecraft:can_climb": ["minecraft:navigation.climb"],
+    "minecraft:movement.sway": ["minecraft:navigation.swim"],
+    "minecraft:navigation.swim": ["minecraft:breathable"],
+    "minecraft:rideable": ["minecraft:input_ground_controlled"],
+    "minecraft:breedable": ["minecraft:behavior.breed"]
+  },
+  "conflicts": {
+    "minecraft:behavior.swell": ["minecraft:behavior.ranged_attack", "minecraft:shooter"],
+    "minecraft:behavior.ranged_attack": ["minecraft:behavior.swell"],
+    "minecraft:navigation.walk": ["minecraft:navigation.fly", "minecraft:navigation.swim", "minecraft:navigation.climb"],
+    "minecraft:navigation.fly": ["minecraft:navigation.walk", "minecraft:navigation.swim", "minecraft:navigation.climb"],
+    "minecraft:navigation.swim": ["minecraft:navigation.walk", "minecraft:navigation.fly"],
+    "minecraft:navigation.climb": ["minecraft:navigation.walk", "minecraft:navigation.fly"],
+    "minecraft:movement.basic": ["minecraft:movement.fly", "minecraft:movement.sway"],
+    "minecraft:movement.fly": ["minecraft:movement.basic", "minecraft:movement.sway"],
+    "minecraft:movement.sway": ["minecraft:movement.basic", "minecraft:movement.fly"]
+  },
+  "families": ["monster", "mob", "creeper", "zombie", "skeleton", "spider", "irongolem", "player", "animal", "wolf", "cat", "villager", "undead"],
+  "notes": "Source of truth for valid Bedrock entity component fields. Any field NOT listed in valid_fields will be silently ignored by the Bedrock engine and cause broken behavior."
 }

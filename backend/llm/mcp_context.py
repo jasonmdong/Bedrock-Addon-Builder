@@ -23,6 +23,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from backend.llm.prompt_intents import PromptIntentProfile, extract_prompt_intents
+
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -217,8 +219,33 @@ def _format_for_prompt(tool_name: str, raw_content: list[dict]) -> str:
     return "\n".join(parts)
 
 
-def _detect_template_type(prompt: str, category: str) -> str:
+def _should_fetch_templates(
+    prompt: str,
+    category: str,
+    intent_profile: Optional[PromptIntentProfile] = None,
+) -> bool:
+    """Return True when the prompt likely benefits from a geometry template."""
+    if category != "entity_logic_ai":
+        return False
+
+    profile = intent_profile or extract_prompt_intents(prompt, category)
+    if profile.constraints.get("geometry_requested"):
+        return True
+    if profile.template_hint:
+        return True
+    return any(signal.name == "geometry_edit" for signal in profile.signals)
+
+
+def _detect_template_type(
+    prompt: str,
+    category: str,
+    intent_profile: Optional[PromptIntentProfile] = None,
+) -> str:
     """Determine the best MCP template type from the user's prompt and category."""
+    profile = intent_profile or extract_prompt_intents(prompt, category)
+    if profile.template_hint:
+        return profile.template_hint
+
     prompt_lower = prompt.lower()
     for template_type, keywords in TEMPLATE_KEYWORDS.items():
         if any(kw in prompt_lower for kw in keywords):
@@ -262,7 +289,11 @@ async def _fetch_templates(prompt: str, category: str) -> str:
     if not MCTOOLS_ENABLED:
         return ""
 
-    template_type = _detect_template_type(prompt, category)
+    profile = extract_prompt_intents(prompt, category)
+    if not _should_fetch_templates(prompt, category, profile):
+        return ""
+
+    template_type = _detect_template_type(prompt, category, profile)
 
     cache_key = template_type
     now = time.time()
@@ -298,14 +329,135 @@ async def _fetch_templates(prompt: str, category: str) -> str:
 
 async def mcp_validate(spec: dict) -> MCPValidationResult:
     """Validate a spec against MCP's validateContent tool.
-
-    Currently skipped: our app uses an internal spec format (hp, damage, speed,
-    components dict), but validateContent expects real Bedrock entity JSON
-    (format_version, minecraft:entity, etc.). Sending our spec wastes 15s+ on
-    a guaranteed parse failure. To enable this, we'd need to run the spec
-    through builders.py first to produce actual Bedrock JSON.
     """
-    return MCPValidationResult(valid=True, available=False)
+    from backend.mctools.client import call_tool, MCTOOLS_ENABLED
+
+    if not MCTOOLS_ENABLED:
+        return MCPValidationResult(valid=True, available=False)
+
+    if _is_validation_tripped():
+        return MCPValidationResult(valid=True, available=False)
+
+    try:
+        payload = json.dumps(_spec_to_validation_content(spec), indent=2)
+        result = await call_tool(
+            "validateContent",
+            {"jsonContentOrBase64ZipContent": payload},
+            timeout=MCP_VALIDATION_TIMEOUT,
+        )
+        text_parts = [
+            item.get("text", "")
+            for item in result.get("content", [])
+            if item.get("type") == "text"
+        ]
+        errors = _extract_errors(text_parts)
+        valid = not result.get("isError") and not errors
+        if valid:
+            _record_validation_success()
+        else:
+            _record_validation_failure()
+        return MCPValidationResult(
+            valid=valid,
+            errors=errors,
+            raw_content=result.get("content", []),
+            available=True,
+        )
+    except Exception as e:
+        log.warning("[mcp_context] validateContent failed: %s", e)
+        _record_validation_failure()
+        return MCPValidationResult(valid=True, available=False)
+
+
+def _spec_to_validation_content(spec: dict) -> dict:
+    """Convert an internal app spec into the JSON document expected by validateContent."""
+    if "minecraft:entity" in spec or "minecraft:item" in spec or "minecraft:block" in spec:
+        return spec
+    if "pools" in spec or any(k.startswith("minecraft:recipe") for k in spec):
+        return spec
+    if "header" in spec and "modules" in spec:
+        return spec
+    return _spec_to_bedrock_entity(spec)
+
+
+def _spec_to_bedrock_entity(spec: dict) -> dict:
+    """Build a minimal Bedrock entity JSON from the app's simplified mob spec."""
+    identifier = spec.get("identifier", "custom:mob")
+    short_name = spec.get("short_name", identifier.split(":")[-1])
+    hp = int(spec.get("hp", 20))
+    damage = int(spec.get("damage", 2))
+    speed = float(spec.get("speed", 0.25))
+    collision_box = spec.get("collision_box", {"width": 1, "height": 1})
+
+    entity = {
+        "format_version": "1.16.0",
+        "minecraft:entity": {
+            "description": {
+                "identifier": identifier,
+                "is_spawnable": True,
+                "is_summonable": True,
+                "is_experimental": False,
+            },
+            "components": {
+                "minecraft:type_family": {"family": [short_name, "monster"]},
+                "minecraft:health": {"value": hp, "max": hp},
+                "minecraft:movement.basic": {},
+                "minecraft:jump.static": {},
+                "minecraft:movement": {"value": speed},
+                "minecraft:attack": {"damage": damage},
+                "minecraft:physics": {},
+                "minecraft:collision_box": collision_box,
+                "minecraft:navigation.walk": {
+                    "can_walk": True,
+                    "can_pass_doors": True,
+                },
+                "minecraft:pushable": {
+                    "is_pushable": True,
+                    "is_pushable_by_piston": True,
+                },
+                "minecraft:behavior.float": {"priority": 0},
+                "minecraft:behavior.hurt_by_target": {"priority": 1},
+                "minecraft:behavior.nearest_attackable_target": {
+                    "priority": 2,
+                    "entity_types": [
+                        {
+                            "filters": {
+                                "test": "is_family",
+                                "subject": "other",
+                                "value": "player",
+                            },
+                            "max_dist": 35,
+                        }
+                    ],
+                },
+                "minecraft:behavior.melee_attack": {
+                    "priority": 3,
+                    "speed_multiplier": 1.0,
+                },
+                "minecraft:behavior.random_stroll": {
+                    "priority": 6,
+                    "speed_multiplier": 1.0,
+                },
+                "minecraft:behavior.look_at_player": {
+                    "priority": 8,
+                    "look_distance": 6.0,
+                },
+                "minecraft:behavior.random_look_around": {"priority": 9},
+            },
+        },
+    }
+
+    if abs(float(spec.get("scale", 1.0)) - 1.0) > 1e-6:
+        entity["minecraft:entity"]["components"]["minecraft:scale"] = {
+            "value": float(spec["scale"])
+        }
+
+    for key, value in (spec.get("components") or {}).items():
+        if value is None:
+            entity["minecraft:entity"]["components"].pop(key, None)
+        else:
+            entity["minecraft:entity"]["components"][key] = value
+
+    return entity
 
 
 def _extract_errors(text_parts: list[str]) -> list[str]:
@@ -835,3 +987,21 @@ def mcp_validate_sync(spec: dict) -> Optional[MCPValidationResult]:
     Currently a no-op passthrough — see mcp_validate() docstring.
     """
     return MCPValidationResult(valid=True, available=False)
+
+
+def mcp_validate_sync_v2(spec: dict) -> Optional[MCPValidationResult]:
+    """Synchronous wrapper for async MCP validation."""
+    from backend.mctools.client import MCTOOLS_ENABLED
+    if not MCTOOLS_ENABLED:
+        return MCPValidationResult(valid=True, available=False)
+    try:
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(asyncio.run, mcp_validate(spec))
+            return future.result(timeout=MCP_VALIDATION_TIMEOUT + 3)
+    except Exception as e:
+        log.warning("[mcp_context] Sync validation failed: %s", e)
+        return MCPValidationResult(valid=True, available=False)
+
+
+mcp_validate_sync = mcp_validate_sync_v2

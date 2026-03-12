@@ -7,11 +7,21 @@ const llmButton = document.getElementById("llm-run");
 const llmProvider = document.getElementById("llm-provider");
 const llmCategory = document.getElementById("llm-category");
 const llmKey = document.getElementById("llm-key");
+const llmUsePlan = document.getElementById("llm-use-plan");
 const llmHistoryList = document.getElementById("llm-history-list");
 const llmSessionCount = document.getElementById("llm-session-count");
 const clearLlmHistoryBtn = document.getElementById("clear-llm-history");
 
 const LLM_CATEGORY_KEY = "builder_llm_category";
+const LLM_USE_PLAN_KEY = "builder_llm_use_plan";
+
+// Restore Smart Plan toggle state
+if (llmUsePlan) {
+  llmUsePlan.checked = localStorage.getItem(LLM_USE_PLAN_KEY) === "true";
+  llmUsePlan.addEventListener("change", () => {
+    localStorage.setItem(LLM_USE_PLAN_KEY, llmUsePlan.checked);
+  });
+}
 
 function detectCategoryFromSpec(spec) {
   if (!spec || typeof spec !== "object") return "entity_logic_ai";
@@ -268,6 +278,9 @@ async function requestLlm() {
   if (apiKey) {
     requestBody.api_key = apiKey;
   }
+  if (llmUsePlan && llmUsePlan.checked) {
+    requestBody.use_plan = true;
+  }
   // mock uses dedicated mock route for dev
   let endpoint = "/api/spec/llm";
   if (provider === "mock") endpoint = "/api/spec/llm_mock";
@@ -367,14 +380,18 @@ async function requestLlm() {
     }
   }
   
-  // Build status message with MCP augmentation info
+  // Build status message with MCP + orchestrator info
   let statusMsg = `${provider} updated the spec at ${new Date().toLocaleTimeString()}.`;
   const mcpInfo = _formatMcpStatus(payload.mcp);
   if (mcpInfo) statusMsg += " " + mcpInfo;
+  const orchInfo = _formatOrchestratorStatus(payload.orchestrator);
+  if (orchInfo) statusMsg += " " + orchInfo;
+  const pipelineInfo = _formatPipelineStatus(payload.pipeline);
+  if (pipelineInfo) statusMsg += " " + pipelineInfo;
   setStatus(statusMsg);
 
   // Show MCP detail badge if available
-  _renderMcpBadge(payload.mcp);
+  _renderMcpBadge(payload.mcp, payload.pipeline);
 
   try {
     const user = getCurrentUser();
@@ -396,9 +413,13 @@ async function requestLlm() {
 
 function _buildProgressSteps(provider, category) {
   const steps = [];
+  const usePlan = llmUsePlan && llmUsePlan.checked;
   if (typeof mctoolsAvailable !== "undefined" && mctoolsAvailable) {
     steps.push(`Retrieving MCP context for [${category}]...`);
-    steps.push(`Sending to ${provider} (with MCP context)...`);
+  }
+  if (usePlan) {
+    steps.push(`Planning changes with ${provider}...`);
+    steps.push(`Applying plan...`);
   } else {
     steps.push(`Sending to ${provider} [${category}]...`);
   }
@@ -425,7 +446,40 @@ function _formatMcpStatus(mcp) {
 }
 
 
-function _renderMcpBadge(mcp) {
+function _formatOrchestratorStatus(orch) {
+  if (!orch) return "";
+  const parts = [];
+  if (orch.applied_directly) {
+    parts.push("Plan applied directly (no Phase 2)");
+  } else if (orch.fell_back_to_llm) {
+    parts.push("Plan-guided rewrite");
+  }
+  const reasoning = orch.plan && orch.plan.reasoning;
+  if (reasoning) {
+    const short = reasoning.length > 60
+      ? reasoning.slice(0, 57) + "..."
+      : reasoning;
+    parts.push(short);
+  }
+  return parts.length ? `[Smart Plan: ${parts.join(" | ")}]` : "";
+}
+
+function _formatPipelineStatus(pipeline) {
+  if (!pipeline) return "";
+  const parts = [];
+  const intents = pipeline.intent_profile?.signals || pipeline.stages?.find(s => s.name === "intent_extraction")?.artifacts?.intent_profile?.signals || [];
+  if (intents.length) {
+    parts.push(`Intent: ${intents.slice(0, 3).map(i => i.name).join(", ")}`);
+  }
+  const repair = pipeline.repair;
+  if (repair?.attempted) {
+    parts.push(repair.succeeded ? "repair pass fixed validation issues" : "repair pass attempted");
+  }
+  return parts.length ? `[${parts.join(" | ")}]` : "";
+}
+
+
+function _renderMcpBadge(mcp, pipeline) {
   let badge = document.getElementById("llm-mcp-badge");
   if (!badge) {
     const statusArea = document.getElementById("status");
@@ -437,7 +491,7 @@ function _renderMcpBadge(mcp) {
     statusArea.parentNode.insertBefore(badge, statusArea.nextSibling);
   }
 
-  if (!mcp || !mcp.augmented) {
+  if ((!mcp || !mcp.augmented) && !pipeline) {
     badge.textContent = "";
     badge.style.display = "none";
     return;
@@ -459,6 +513,14 @@ function _renderMcpBadge(mcp) {
       const msgs = (mcp.validation.messages || []).slice(0, 3).join("; ");
       parts.push("MCP validation: " + (msgs || "issues found"));
     }
+  }
+
+  const intentSignals = pipeline?.stages?.find(s => s.name === "intent_extraction")?.artifacts?.intent_profile?.signals || [];
+  if (intentSignals.length) {
+    parts.push("Structured intent: " + intentSignals.slice(0, 4).map(s => s.name).join(", "));
+  }
+  if (pipeline?.repair?.attempted) {
+    parts.push(pipeline.repair.succeeded ? "Repair pass: fixed" : "Repair pass: attempted");
   }
 
   badge.textContent = parts.join(" | ");
