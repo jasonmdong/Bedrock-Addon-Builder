@@ -63,13 +63,13 @@ CACHE_TTL = 600  # 10 minutes
 NEGATIVE_CACHE_TTL = 120  # 2 min — cache failures so we don't retry every request
 MAX_MCP_SCHEMA_CHARS = 8000
 MAX_MCP_TEMPLATE_CHARS = 4000
-MCP_RETRIEVAL_TIMEOUT = 10  # seconds — hard cap on template retrieval
-MCP_TOOL_TIMEOUT = 8.0  # seconds — per-tool httpx timeout (overrides the global 30s)
-MCP_VALIDATION_TIMEOUT = 15.0  # seconds — per-validation httpx timeout
+MCP_RETRIEVAL_TIMEOUT = 30  # seconds — hard cap on template retrieval
+MCP_TOOL_TIMEOUT = 20.0  # seconds — per-tool httpx timeout (overrides the global 30s)
+MCP_VALIDATION_TIMEOUT = 45.0  # seconds — per-validation httpx timeout
 
 # Circuit breaker: after this many consecutive failures, stop trying
-CIRCUIT_BREAKER_THRESHOLD = 2
-CIRCUIT_BREAKER_COOLDOWN = 300  # 5 minutes
+CIRCUIT_BREAKER_THRESHOLD = 5
+CIRCUIT_BREAKER_COOLDOWN = 60  # 1 minute
 
 # Maps prompt keywords → MCP getModelTemplates templateType.
 # Full valid enum: humanoid, small_animal, large_animal, vehicle, bird, insect,
@@ -550,6 +550,7 @@ def _geometry_to_design(
     design["visibleBoundsSize"] = [
         desc.get("visible_bounds_width", 4),
         desc.get("visible_bounds_height", 4),
+        desc.get("visible_bounds_width", 4),
     ]
     design["visibleBoundsOffset"] = desc.get("visible_bounds_offset", [0, 1, 0])
 

@@ -131,6 +131,92 @@ def _preserve_geometry(output_spec: dict, input_spec: dict) -> dict:
     return output_spec
 
 
+# ---------------------------------------------------------------------------
+# Geometry auto-fetch: database → GitHub vanilla → LLM generation
+# ---------------------------------------------------------------------------
+
+# Mobs whose geometry can be fetched from Mojang's bedrock-samples repo
+_VANILLA_GEOMETRY_NAMES = {
+    "bat", "bee", "blaze", "cat", "cave_spider", "chicken", "cod", "cow",
+    "creeper", "dolphin", "donkey", "drowned", "elder_guardian", "enderman",
+    "endermite", "evoker", "fox", "ghast", "goat", "guardian", "hoglin",
+    "horse", "husk", "iron_golem", "llama", "magma_cube", "mooshroom",
+    "mule", "ocelot", "panda", "parrot", "phantom", "pig", "piglin",
+    "pillager", "polar_bear", "pufferfish", "rabbit", "ravager", "salmon",
+    "sheep", "shulker", "silverfish", "skeleton", "slime", "snow_golem",
+    "spider", "squid", "stray", "strider", "trader_llama", "tropical_fish",
+    "turtle", "vex", "villager", "vindicator", "wandering_trader", "witch",
+    "wither", "wither_skeleton", "wolf", "zoglin", "zombie",
+    "zombie_pigman", "zombie_villager", "zombified_piglin",
+    "axolotl", "glow_squid", "warden", "allay", "frog", "tadpole",
+    "camel", "sniffer", "armadillo", "breeze", "bogged",
+}
+
+
+def _is_vanilla_mob(display_name: str, geometry_ref: str) -> bool:
+    """Check if the mob can be resolved from vanilla Bedrock geometry."""
+    name = display_name.lower().replace(" ", "_")
+    geo_name = geometry_ref.replace("geometry.", "").lower()
+    return name in _VANILLA_GEOMETRY_NAMES or geo_name in _VANILLA_GEOMETRY_NAMES
+
+
+
+def _auto_fetch_geometry(
+    output_spec: dict,
+    prompt: str,
+    provider_key: str,
+    api_key: Optional[str],
+) -> dict:
+    """If the LLM returned empty geometry_json for a non-vanilla mob, try to
+    fill it from the database or generate it.
+
+    Modifies output_spec in place and returns it.
+    """
+    # Skip if already has custom geometry
+    if _has_custom_geometry(output_spec):
+        print(f"[LLM-GEOFETCH] Skipping auto-fetch: spec already has custom geometry")
+        return output_spec
+
+    display_name = output_spec.get("display_name", "")
+    geometry_ref = output_spec.get("geometry", "")
+
+    # Skip vanilla mobs — frontend fetches their geometry from GitHub
+    if _is_vanilla_mob(display_name, geometry_ref):
+        print(f"[LLM-GEOFETCH] Skipping auto-fetch: '{display_name}' (geometry={geometry_ref}) is vanilla")
+        return output_spec
+
+    print(f"[LLM-GEOFETCH] Non-vanilla mob '{display_name}' (geometry={geometry_ref}) has no geometry, generating via LLM...")
+    try:
+        short_name = output_spec.get("short_name", "custom_mob")
+        geo_prompt = f"Create a {display_name} mob geometry"
+        geo_result = llm_generate_geometry(
+            prompt=geo_prompt,
+            current_geometry=None,
+            provider=provider_key,
+            api_key=api_key,
+            mob_name=short_name,
+        )
+        if geo_result and geo_result.get("minecraft:geometry"):
+            # Strip internal keys
+            clean_geo = {k: v for k, v in geo_result.items() if not k.startswith("_")}
+            output_spec["geometry_json"] = clean_geo
+            # Use texture from geometry generation if we don't have one yet
+            if geo_result.get("_texture_b64") and not output_spec.get("_texture_b64"):
+                output_spec["_texture_b64"] = geo_result["_texture_b64"]
+            # Update geometry reference
+            geo_list = clean_geo.get("minecraft:geometry", [])
+            if geo_list and isinstance(geo_list[0], dict):
+                geo_id = geo_list[0].get("description", {}).get("identifier", "")
+                if geo_id:
+                    output_spec["geometry"] = geo_id
+            print(f"[LLM] Auto-generated geometry for '{display_name}'")
+    except Exception as e:
+        log.warning("[LLM] Auto geometry generation failed: %s", e)
+        print(f"[LLM] Auto geometry generation failed for '{display_name}': {e}")
+
+    return output_spec
+
+
 MAX_SYSTEM_PROMPT_CHARS = 25_000  # ~6K tokens — keeps total well under 80K
 
 
@@ -704,6 +790,12 @@ def llm_rewrite_spec(prompt: str, current: dict, provider: str,
         if output_spec and category == "entity_logic_ai":
             output_spec = _preserve_geometry(output_spec, current)
 
+        # --- Step 2c: Auto-fetch geometry for non-vanilla mobs with empty geometry ---
+        if output_spec and category == "entity_logic_ai":
+            output_spec = _auto_fetch_geometry(
+                output_spec, prompt, provider_key, api_key,
+            )
+
         # Run semantic consistency check
         if LOGGING_ENABLED and output_spec:
             score_result = check_semantic_consistency(output_spec)
@@ -823,6 +915,7 @@ def llm_rewrite_spec(prompt: str, current: dict, provider: str,
                     color_rgb=output_spec.get("color_rgb"),
                     texture_hint=output_spec.get("texture_hint", ""),
                     short_name=output_spec.get("short_name", "custom_mob"),
+                    texture_instructions=output_spec.get("texture_instructions"),
                 )
                 if texture_b64:
                     print(f"[LLM] Procedural texture generated ({len(texture_b64)} chars)")

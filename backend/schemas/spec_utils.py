@@ -130,7 +130,7 @@ def validate_spec(raw: dict) -> dict:
     if not isinstance(engine, (list, tuple)) or len(engine) != 3:
         raise SpecValidationError("engine_min must be an array of 3 integers.")
     engine = [
-        _coerce_number(v, f"engine_min[{idx}]", integer=True, minimum=1, maximum=2000)
+        _coerce_number(v, f"engine_min[{idx}]", integer=True, minimum=(0 if idx == 2 else 1), maximum=2000)
         for idx, v in enumerate(engine)
     ]
     merged["engine_min"] = engine

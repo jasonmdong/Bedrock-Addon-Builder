@@ -895,6 +895,13 @@ def get_spec():
     }
 
 
+def get_default_spec():
+    """Return a clean blank spec using the built-in DEFAULTS."""
+    from backend.core.core import DEFAULTS
+    import copy
+    return copy.deepcopy(DEFAULTS)
+
+
 async def replace_spec(payload: dict = Body(...)):
     """Replace the current spec."""
     try:

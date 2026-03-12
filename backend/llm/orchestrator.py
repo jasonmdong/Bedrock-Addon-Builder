@@ -406,6 +406,10 @@ def plan_is_simple(plan: OrchestratorPlan) -> bool:
         if field not in KNOWN_TOP_LEVEL_FIELDS:
             return False
 
+    # Geometry changes require LLM generation — never apply directly
+    if "geometry" in plan.fields_to_change or "geometry_json" in plan.fields_to_change:
+        return False
+
     # Every added component must have a value and look like a real component
     for comp in plan.components_to_add:
         if comp not in plan.component_values:

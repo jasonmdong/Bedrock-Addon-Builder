@@ -651,9 +651,10 @@
 
       <div class="painter-layout">
 
-        <div class="painter-canvas-wrapper">
+        <div class="painter-canvas-wrapper" style="position: relative;">
 
           <canvas id="pixel-canvas" width="384" height="384"></canvas>
+          <canvas id="uv-overlay-canvas" width="384" height="384" style="position: absolute; top: 0; left: 0; pointer-events: none; display: none;"></canvas>
 
         </div>
 
@@ -680,6 +681,8 @@
           <div class="tool-row">
 
             <button type="button" class="secondary" id="painter-load">Load Current</button>
+
+            <button type="button" class="secondary" id="painter-uv-toggle">Show UV</button>
 
           </div>
 

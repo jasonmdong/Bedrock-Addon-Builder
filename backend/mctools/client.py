@@ -24,7 +24,7 @@ log = logging.getLogger(__name__)
 # Configuration
 # ---------------------------------------------------------------------------
 
-MCTOOLS_MCP_URL = os.environ.get("MCTOOLS_MCP_URL", "http://localhost:6126/mcp")
+MCTOOLS_MCP_URL = os.environ.get("MCTOOLS_MCP_URL", "http://[::1]:6126/mcp")
 MCTOOLS_ENABLED = os.environ.get("MCTOOLS_ENABLED", "true").lower() in ("1", "true", "yes")
 MCTOOLS_TIMEOUT = int(os.environ.get("MCTOOLS_TIMEOUT_MS", "30000")) / 1000  # seconds
 MCTOOLS_ADMIN_PASSCODE = os.environ.get("MCTOOLS_ADMIN_PASSCODE", "mctadm01")
@@ -32,7 +32,7 @@ MCTOOLS_ADMIN_PASSCODE = os.environ.get("MCTOOLS_ADMIN_PASSCODE", "mctadm01")
 # The mctools MCP transport has DNS rebinding protection that only allows
 # Host: 127.0.0.1, but the server binds to "localhost" (which may resolve
 # to ::1 on Windows).  We override the Host header on MCP requests.
-_MCP_HOST_HEADER = "127.0.0.1:6126"
+_MCP_HOST_HEADER = "[::1]:6126"
 
 # Resolve the mctools package directory
 _MCTOOLS_PACKAGE_DIR = (

@@ -29,6 +29,7 @@ from backend.core.routes import (
     delete_mob,
     duplicate_mob,
     get_spec,
+    get_default_spec,
     replace_spec,
     patch_spec,
     llm_spec_editor,
@@ -107,6 +108,7 @@ app.post("/api/mobs/{name}/duplicate")(duplicate_mob)
 
 # Spec routes
 app.get("/api/spec")(get_spec)
+app.get("/api/spec/default")(get_default_spec)
 app.put("/api/spec")(replace_spec)
 app.post("/api/spec/patch")(patch_spec)
 app.post("/api/spec/llm")(llm_spec_editor)
