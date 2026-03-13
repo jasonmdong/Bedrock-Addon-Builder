@@ -96,8 +96,10 @@ function initializeViewer3D() {
   renderer.domElement.addEventListener("mousedown", (e) => {
     controls.previousMousePosition = { x: e.clientX, y: e.clientY };
     const isPaintTool = ['paint', 'erase', 'pick'].includes(editor3DState.tool);
-    // Don't start orbit rotation when using paint tools and hovering a mesh
-    if (e.button === 0 && !(isPaintTool && editor3DState.hoverObject)) {
+    const isTransformTool = ['move', 'rotate', 'scale'].includes(editor3DState.tool);
+    // Don't start orbit rotation when using paint/transform tools and hovering a mesh
+    const blockOrbit = (isPaintTool || isTransformTool) && editor3DState.hoverObject;
+    if (e.button === 0 && !blockOrbit) {
       controls.isRotating = true;
     }
     if (e.button === 2 || (e.button === 0 && e.shiftKey)) controls.isPanning = true;
@@ -246,9 +248,12 @@ function applyPerFaceUV(geometry, uvFaces, size, textureWidth, textureHeight) {
 
   // Three.js BoxGeometry face order: right(+x), left(-x), top(+y), bottom(-y), front(+z), back(-z)
   // Bedrock per-face names mapped to Three.js face indices:
-  const faceOrder = ["east", "west", "up", "down", "south", "north"];
+  // lateral=true for side faces (vertices ordered TL,TR,BL,BR in Three.js)
+  const faceOrder = [
+    ["east", true], ["west", true], ["up", false], ["down", false], ["south", true], ["north", true]
+  ];
 
-  for (const faceName of faceOrder) {
+  for (const [faceName, lateral] of faceOrder) {
     const face = uvFaces[faceName];
     if (face && face.uv && face.uv_size) {
       const fu = face.uv[0];
@@ -258,13 +263,15 @@ function applyPerFaceUV(geometry, uvFaces, size, textureWidth, textureHeight) {
 
       const u1 = toU(fu);
       const u2 = toU(fu + fw);
-      const v1 = toV(fv + fh); // bottom (after Y-flip)
-      const v2 = toV(fv);      // top (after Y-flip)
+      const vBottom = toV(fv + fh);
+      const vTop = toV(fv);
 
-      // 4 vertices: BL, BR, TL, TR
-      uvArray.push(u1, v1, u2, v1, u1, v2, u2, v2);
+      if (lateral) {
+        uvArray.push(u1, vTop, u2, vTop, u1, vBottom, u2, vBottom);
+      } else {
+        uvArray.push(u1, vBottom, u2, vBottom, u1, vTop, u2, vTop);
+      }
     } else {
-      // No UV for this face — map to 0,0 (transparent/blank)
       uvArray.push(0, 0, 0, 0, 0, 0, 0, 0);
     }
   }
@@ -303,33 +310,39 @@ function applyBoxUV(geometry, uv, size, textureWidth, textureHeight) {
   // The viewer uses X-inversion for positions, so U-mirroring
   // on the front face is NOT needed (inversion handles it).
   
-  // Face definitions: [pixelU, pixelV, pixelW, pixelH, mirrorU, mirrorV]
+  // Face definitions: [pixelU, pixelV, pixelW, pixelH, mirrorU, mirrorV, lateral]
+  // lateral=true means the face is a side face (vertices ordered TL,TR,BL,BR in Three.js)
   const faces = [
     // +X = East/Right side
-    [u,             v + d,   d, h, true, false],
+    [u,             v + d,   d, h, false, false, true],
     // -X = West/Left side
-    [u + d + w,     v + d,   d, h, false, false],
+    [u + d + w,     v + d,   d, h, false, false, true],
     // +Y = Top
-    [u + d,         v,       w, d, false, false],
+    [u + d,         v,       w, d, false, false, false],
     // -Y = Bottom
-    [u + d + w,     v,       w, d, false, true],
+    [u + d + w,     v,       w, d, false, true, false],
     // +Z = South/Back
-    [u + 2*d + w,   v + d,   w, h, true, false],
+    [u + 2*d + w,   v + d,   w, h, true, false, true],
     // -Z = North/Front
-    [u + d,         v + d,   w, h, false, false]
+    [u + d,         v + d,   w, h, false, false, true]
   ];
-  
-  for (const [fu, fv, fw, fh, mirrorU, mirrorV] of faces) {
+
+  for (const [fu, fv, fw, fh, mirrorU, mirrorV, lateral] of faces) {
     let u1 = toU(fu);
     let u2 = toU(fu + fw);
-    let v1 = toV(fv + fh); // bottom (after Y-flip)
-    let v2 = toV(fv);      // top (after Y-flip)
-    
+    let vBottom = toV(fv + fh);
+    let vTop = toV(fv);
+
     if (mirrorU) [u1, u2] = [u2, u1];
-    if (mirrorV) [v1, v2] = [v2, v1];
-    
-    // 4 vertices: BL, BR, TL, TR
-    uvArray.push(u1, v1, u2, v1, u1, v2, u2, v2);
+    if (mirrorV) [vBottom, vTop] = [vTop, vBottom];
+
+    if (lateral) {
+      // Lateral faces: Three.js vertex order is TL, TR, BL, BR
+      uvArray.push(u1, vTop, u2, vTop, u1, vBottom, u2, vBottom);
+    } else {
+      // Top/bottom faces: Three.js vertex order is BL, BR, TL, TR
+      uvArray.push(u1, vBottom, u2, vBottom, u1, vTop, u2, vTop);
+    }
   }
   
   geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvArray, 2));
@@ -1075,7 +1088,10 @@ function init3DEditorControls() {
         gridBtn?.classList.toggle('active', editor3DState.gridVisible);
         break;
       case 'z':
-        if (!e.ctrlKey && !e.metaKey) {
+        if (e.ctrlKey || e.metaKey) {
+          e.preventDefault();
+          undo();
+        } else {
           e.preventDefault();
           toggleWireframe();
           wireBtn?.classList.toggle('active', editor3DState.showWireframe);
@@ -1084,6 +1100,9 @@ function init3DEditorControls() {
       case 'delete':
       case 'backspace':
         deleteSelected();
+        break;
+      case 'escape':
+        clearSelection();
         break;
     }
   });
@@ -1145,35 +1164,97 @@ function refresh3DTexture(mobName) {
 // BLOCKBENCH-STYLE 3D EDITOR FEATURES
 // =====================
 
-// Editor state
+// =====================
+// EDITOR STATE & TOOLS
+// =====================
+
 const editor3DState = {
-  mode: 'object', // 'object', 'face', 'edge', 'vertex'
   tool: 'select', // 'select', 'move', 'scale', 'rotate', 'paint', 'erase', 'pick'
   gridVisible: true,
   backgroundColor: 0x1e1e1f,
-  selectedObject: null,
-  selectedFace: null,
+  selectedObject: null,  // the mesh or group that is selected
   hoverObject: null,
   hoverFace: null,
   paintColor: '#ff0000',
   brushSize: 1,
   showWireframe: false,
-  snapToGrid: false,
-  gridSize: 16
+  // Transform drag state
+  _dragging: false,
+  _dragStart: null,       // {x, y} screen coords at drag start
+  _dragStartWorld: null,   // THREE.Vector3 world position at drag start
+  _origPosition: null,
+  _origRotation: null,
+  _origScale: null,
+  // Undo stack
+  _undoStack: [],
 };
+
+// Selection outline helper
+let selectionBox = null;
+
+function clearSelection() {
+  if (selectionBox && selectionBox.parent) {
+    selectionBox.parent.remove(selectionBox);
+  }
+  selectionBox = null;
+  editor3DState.selectedObject = null;
+}
+
+function selectObject(obj) {
+  if (!obj || !viewer3D) return;
+
+  // Walk up to find the bone group (THREE.Group with a boneName)
+  let target = obj;
+  while (target && !target.userData?.boneName && target.parent && target.parent !== viewer3D.scene && target.parent !== viewer3D.mesh) {
+    target = target.parent;
+  }
+
+  // Remove old outline
+  if (selectionBox && selectionBox.parent) {
+    selectionBox.parent.remove(selectionBox);
+  }
+
+  editor3DState.selectedObject = target;
+
+  // Create wireframe bounding box outline
+  const box = new THREE.Box3().setFromObject(target);
+  if (box.isEmpty()) return;
+
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+
+  const geo = new THREE.BoxGeometry(size.x, size.y, size.z);
+  const edges = new THREE.EdgesGeometry(geo);
+  selectionBox = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({
+    color: 0x1e90ff,
+    linewidth: 2,
+    depthTest: false,
+    transparent: true,
+  }));
+  selectionBox.renderOrder = 999;
+  selectionBox.position.copy(center);
+  // Convert to target's parent space if target has a parent
+  if (target.parent) {
+    target.parent.worldToLocal(selectionBox.position);
+  }
+  selectionBox.userData._isSelectionBox = true;
+
+  (target.parent || viewer3D.scene).add(selectionBox);
+  console.log('[3D Editor] Selected:', target.userData?.boneName || target.name || 'object');
+}
+
+function refreshSelectionBox() {
+  if (!editor3DState.selectedObject) return;
+  selectObject(editor3DState.selectedObject);
+}
 
 // Toggle grid visibility
 function toggleGrid() {
   if (!viewer3D) return;
   editor3DState.gridVisible = !editor3DState.gridVisible;
-  
   viewer3D.scene.traverse(child => {
-    if (child.type === 'GridHelper') {
-      child.visible = editor3DState.gridVisible;
-    }
+    if (child.type === 'GridHelper') child.visible = editor3DState.gridVisible;
   });
-  
-  console.log(`[3D Editor] Grid ${editor3DState.gridVisible ? 'shown' : 'hidden'}`);
 }
 
 // Set background color
@@ -1187,42 +1268,78 @@ function setBackgroundColor(color) {
 function toggleWireframe() {
   if (!viewer3D || !viewer3D.mesh) return;
   editor3DState.showWireframe = !editor3DState.showWireframe;
-  
   viewer3D.mesh.traverse(child => {
     if (child.isMesh) {
       child.material.wireframe = editor3DState.showWireframe;
     }
   });
-  
-  console.log(`[3D Editor] Wireframe ${editor3DState.showWireframe ? 'on' : 'off'}`);
 }
 
-// Set editor mode (object, face, edge, vertex)
-function setEditorMode(mode) {
-  editor3DState.mode = mode;
-  console.log(`[3D Editor] Mode set to: ${mode}`);
-  
-  // Update UI
-  document.querySelectorAll('.editor-mode-btn').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.mode === mode);
-  });
-}
-
-// Set editor tool (select, move, scale, rotate, paint)
 function setEditorTool(tool) {
   editor3DState.tool = tool;
-  console.log(`[3D Editor] Tool set to: ${tool}`);
-  
-  // Update UI
+
+  // Update UI buttons
   document.querySelectorAll('.editor-tool-btn').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.tool === tool);
   });
-  
+
   // Update cursor
-  const canvas = document.getElementById('viewport-3d');
-  if (canvas) {
-    canvas.style.cursor = ['paint', 'erase', 'pick'].includes(tool) ? 'crosshair' : 'default';
+  const el = document.getElementById('viewport-3d');
+  if (el) {
+    if (['paint', 'erase', 'pick'].includes(tool)) el.style.cursor = 'crosshair';
+    else if (['move', 'rotate', 'scale'].includes(tool)) el.style.cursor = 'grab';
+    else el.style.cursor = 'default';
   }
+}
+
+// =====================
+// UNDO SYSTEM
+// =====================
+
+function pushUndo(label) {
+  const obj = editor3DState.selectedObject;
+  if (!obj) return;
+  editor3DState._undoStack.push({
+    label,
+    object: obj,
+    position: obj.position.clone(),
+    rotation: obj.rotation.clone(),
+    scale: obj.scale.clone(),
+  });
+  // Keep stack bounded
+  if (editor3DState._undoStack.length > 50) editor3DState._undoStack.shift();
+}
+
+function undo() {
+  const entry = editor3DState._undoStack.pop();
+  if (!entry) return;
+  entry.object.position.copy(entry.position);
+  entry.object.rotation.copy(entry.rotation);
+  entry.object.scale.copy(entry.scale);
+  refreshSelectionBox();
+  console.log('[3D Editor] Undo:', entry.label);
+}
+
+// =====================
+// TRANSFORM HELPERS
+// =====================
+
+// Project a screen-space mouse delta into world-space movement
+function screenToWorldDelta(dx, dy, camera, distance) {
+  const vFov = camera.fov * Math.PI / 180;
+  const el = document.getElementById('viewport-3d');
+  const h = el ? el.clientHeight : 500;
+  const worldPerPx = (2 * distance * Math.tan(vFov / 2)) / h;
+
+  // Extract camera's local right (+X) and up (+Y) axes from its world matrix
+  const m = camera.matrixWorld.elements;
+  const right = new THREE.Vector3(m[0], m[1], m[2]).normalize();
+  const up = new THREE.Vector3(m[4], m[5], m[6]).normalize();
+
+  const delta = new THREE.Vector3();
+  delta.addScaledVector(right, dx * worldPerPx);
+  delta.addScaledVector(up, -dy * worldPerPx);
+  return delta;
 }
 
 // Paint on the texture at a UV coordinate
@@ -1286,7 +1403,7 @@ function pickColorAtUV(uv) {
   return hex;
 }
 
-// Raycasting for mouse interaction and 3D painting
+// Raycasting for mouse interaction, painting, and transforms
 function setupRaycasting() {
   if (!viewer3D) {
     console.warn('[3D Editor] Cannot setup raycasting - viewer3D not initialized');
@@ -1303,6 +1420,7 @@ function setupRaycasting() {
   }
 
   let isPainting = false;
+  let isTransforming = false;
 
   function getIntersect(e) {
     const rect = container.getBoundingClientRect();
@@ -1311,7 +1429,7 @@ function setupRaycasting() {
     raycaster.setFromCamera(mouse, viewer3D.camera);
     const meshes = [];
     viewer3D.scene.traverse(child => {
-      if (child.isMesh && child.visible) meshes.push(child);
+      if (child.isMesh && child.visible && !child.userData?._isSelectionBox) meshes.push(child);
     });
     const intersects = raycaster.intersectObjects(meshes, false);
     return intersects.length > 0 ? intersects[0] : null;
@@ -1335,57 +1453,132 @@ function setupRaycasting() {
     }
   }
 
+  // --- Transform drag handling ---
+  function startTransform(e) {
+    const obj = editor3DState.selectedObject;
+    if (!obj) return false;
+
+    pushUndo(editor3DState.tool);
+    isTransforming = true;
+    editor3DState._dragging = true;
+    editor3DState._dragStart = { x: e.clientX, y: e.clientY };
+    editor3DState._origPosition = obj.position.clone();
+    editor3DState._origRotation = obj.rotation.clone();
+    editor3DState._origScale = obj.scale.clone();
+    container.style.cursor = 'grabbing';
+    return true;
+  }
+
+  function updateTransform(e) {
+    const obj = editor3DState.selectedObject;
+    if (!obj || !editor3DState._dragging) return;
+
+    const dx = e.clientX - editor3DState._dragStart.x;
+    const dy = e.clientY - editor3DState._dragStart.y;
+    const dist = viewer3D.controls ? viewer3D.controls.distance : 100;
+
+    if (editor3DState.tool === 'move') {
+      const delta = screenToWorldDelta(dx, dy, viewer3D.camera, dist);
+      obj.position.copy(editor3DState._origPosition).add(delta);
+      refreshSelectionBox();
+    } else if (editor3DState.tool === 'rotate') {
+      // Horizontal drag = Y rotation, Vertical drag = X rotation
+      const sensitivity = 0.5;
+      obj.rotation.copy(editor3DState._origRotation);
+      obj.rotation.y += dx * sensitivity * Math.PI / 180;
+      obj.rotation.x -= dy * sensitivity * Math.PI / 180;
+      refreshSelectionBox();
+    } else if (editor3DState.tool === 'scale') {
+      // Drag right/up = scale up, left/down = scale down
+      const factor = 1 + (dx - dy) * 0.005;
+      const clamped = Math.max(0.1, Math.min(5, factor));
+      obj.scale.copy(editor3DState._origScale).multiplyScalar(clamped);
+      refreshSelectionBox();
+    }
+  }
+
+  function stopTransform() {
+    if (isTransforming) {
+      isTransforming = false;
+      editor3DState._dragging = false;
+      container.style.cursor = ['move', 'rotate', 'scale'].includes(editor3DState.tool) ? 'grab' : 'default';
+    }
+  }
+
+  // --- Mouse events ---
   container.addEventListener('mousemove', (e) => {
-    const hit = getIntersect(e);
-    if (hit) {
-      editor3DState.hoverObject = hit.object;
-      editor3DState.hoverFace = hit.face;
-      const isPaintTool = ['paint', 'erase', 'pick'].includes(editor3DState.tool);
-      container.style.cursor = isPaintTool ? 'crosshair' : 'default';
-    } else {
-      editor3DState.hoverObject = null;
-      editor3DState.hoverFace = null;
-      container.style.cursor = 'default';
+    // Transform dragging takes priority
+    if (isTransforming) {
+      updateTransform(e);
+      return;
     }
 
     // Continuous painting while dragging
     if (isPainting && ['paint', 'erase'].includes(editor3DState.tool)) {
       handlePaintAction(e);
+      return;
+    }
+
+    // Hover detection
+    const hit = getIntersect(e);
+    if (hit) {
+      editor3DState.hoverObject = hit.object;
+      editor3DState.hoverFace = hit.face;
+    } else {
+      editor3DState.hoverObject = null;
+      editor3DState.hoverFace = null;
     }
   });
 
   container.addEventListener('mousedown', (e) => {
     if (e.button !== 0) return;
 
-    const isPaintTool = ['paint', 'erase', 'pick'].includes(editor3DState.tool);
+    const tool = editor3DState.tool;
+    const isPaintTool = ['paint', 'erase', 'pick'].includes(tool);
+    const isTransformTool = ['move', 'rotate', 'scale'].includes(tool);
+
+    // Paint tools
     if (isPaintTool && editor3DState.hoverObject) {
-      // Prevent orbit controls from activating during painting
       e.stopPropagation();
       isPainting = true;
       handlePaintAction(e);
       return;
     }
 
-    if (!editor3DState.hoverObject) return;
+    // Transform tools — if clicking on a mesh, select it then start drag
+    if (isTransformTool) {
+      if (editor3DState.hoverObject) {
+        selectObject(editor3DState.hoverObject);
+      }
+      if (editor3DState.selectedObject) {
+        e.stopPropagation();
+        startTransform(e);
+      }
+      return;
+    }
 
-    if (editor3DState.tool === 'select') {
-      editor3DState.selectedObject = editor3DState.hoverObject;
-      console.log('[3D Editor] Selected:', editor3DState.hoverObject.name || 'unnamed');
+    // Select tool
+    if (tool === 'select') {
+      if (editor3DState.hoverObject) {
+        selectObject(editor3DState.hoverObject);
+      } else {
+        clearSelection();
+      }
     }
   });
 
-  const stopPainting = () => {
+  const stopAll = (e) => {
     if (isPainting) {
       isPainting = false;
       savePaintedTexture();
-      // Sync the 2D preview if visible
       if (typeof window.onPaintStrokeEnd === "function") window.onPaintStrokeEnd();
     }
+    stopTransform();
   };
-  container.addEventListener('mouseup', stopPainting);
-  container.addEventListener('mouseleave', stopPainting);
+  container.addEventListener('mouseup', stopAll);
+  container.addEventListener('mouseleave', stopAll);
 
-  console.log('[3D Editor] Raycasting + 3D painting setup complete');
+  console.log('[3D Editor] Raycasting + painting + transforms setup complete');
 }
 
 // Add a new cube to the scene
@@ -1411,25 +1604,27 @@ function addCube(position = [0, 0, 0], size = [8, 8, 8]) {
 // Delete selected object
 function deleteSelected() {
   if (!viewer3D || !editor3DState.selectedObject) return;
-  
-  viewer3D.scene.remove(editor3DState.selectedObject);
-  editor3DState.selectedObject = null;
-  
+  const obj = editor3DState.selectedObject;
+  pushUndo('delete');
+  if (obj.parent) obj.parent.remove(obj);
+  else viewer3D.scene.remove(obj);
+  clearSelection();
   console.log('[3D Editor] Deleted selected object');
 }
 
 // Duplicate selected object
 function duplicateSelected() {
   if (!viewer3D || !editor3DState.selectedObject) return;
-  
+
   const original = editor3DState.selectedObject;
   const clone = original.clone();
   clone.position.x += 10;
-  clone.name = `${original.name}_copy`;
-  
-  viewer3D.scene.add(clone);
-  editor3DState.selectedObject = clone;
-  
+  clone.name = `${original.name || 'object'}_copy`;
+
+  const parent = original.parent || viewer3D.scene;
+  parent.add(clone);
+  selectObject(clone);
+
   console.log('[3D Editor] Duplicated:', original.name);
 }
 
@@ -1448,8 +1643,10 @@ window.editor3DState = editor3DState;
 window.toggleGrid = toggleGrid;
 window.setBackgroundColor = setBackgroundColor;
 window.toggleWireframe = toggleWireframe;
-window.setEditorMode = setEditorMode;
 window.setEditorTool = setEditorTool;
+window.selectObject = selectObject;
+window.clearSelection = clearSelection;
+window.undo = undo;
 window.addCube = addCube;
 window.deleteSelected = deleteSelected;
 window.duplicateSelected = duplicateSelected;

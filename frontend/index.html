@@ -492,33 +492,17 @@
 
         <div class="editor-toolbar" style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem; flex-wrap: wrap; align-items: center;">
 
-          <!-- View Controls -->
+          <!-- Transform Tools -->
 
           <div class="toolbar-group" style="display: flex; gap: 0.25rem; border-right: 1px solid var(--border); padding-right: 0.5rem;">
 
-            <button type="button" class="secondary editor-tool-btn" data-tool="select" id="tool-select" onclick="setEditorTool('select')" title="Select (Q)">Select</button>
+            <button type="button" class="secondary editor-tool-btn active" data-tool="select" id="tool-select" onclick="setEditorTool('select')" title="Select (Q)">Select</button>
 
             <button type="button" class="secondary editor-tool-btn" data-tool="move" id="tool-move" onclick="setEditorTool('move')" title="Move (W)">Move</button>
 
             <button type="button" class="secondary editor-tool-btn" data-tool="rotate" id="tool-rotate" onclick="setEditorTool('rotate')" title="Rotate (E)">Rotate</button>
 
             <button type="button" class="secondary editor-tool-btn" data-tool="scale" id="tool-scale" onclick="setEditorTool('scale')" title="Scale (R)">Scale</button>
-
-          </div>
-
-          
-
-          <!-- Mode Controls -->
-
-          <div class="toolbar-group" style="display: flex; gap: 0.25rem; border-right: 1px solid var(--border); padding-right: 0.5rem;">
-
-            <button type="button" class="secondary editor-mode-btn active" data-mode="object" id="mode-object" onclick="setEditorMode('object')" title="Object Mode">Object</button>
-
-            <button type="button" class="secondary editor-mode-btn" data-mode="face" id="mode-face" onclick="setEditorMode('face')" title="Face Mode">Face</button>
-
-            <button type="button" class="secondary editor-mode-btn" data-mode="edge" id="mode-edge" onclick="setEditorMode('edge')" title="Edge Mode">Edge</button>
-
-            <button type="button" class="secondary editor-mode-btn" data-mode="vertex" id="mode-vertex" onclick="setEditorMode('vertex')" title="Vertex Mode">Vertex</button>
 
           </div>
 
@@ -548,7 +532,7 @@
 
           <div class="toolbar-group" style="display: flex; gap: 0.25rem; border-right: 1px solid var(--border); padding-right: 0.5rem;">
 
-            <button type="button" class="secondary" id="editor-add-cube" onclick="addCube([0,8,0],[8,8,8])" title="Add Cube (Shift+A)">+ Cube</button>
+            <button type="button" class="secondary" id="editor-add-cube" onclick="addCube([0,4,0],[2,2,2])" title="Add Cube (Shift+A)">+ Cube</button>
 
             <button type="button" class="secondary" id="editor-duplicate" onclick="duplicateSelected()" title="Duplicate (Shift+D)">Duplicate</button>
 
