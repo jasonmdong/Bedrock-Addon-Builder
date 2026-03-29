@@ -7,7 +7,7 @@ from typing import Optional
 
 from backend.core.core import LLM_MODEL_NAME, DEEPSEEK_MODEL_NAME, GEMINI_MODEL_NAME, CLAUDE_MODEL_NAME, OLLAMA_MODEL_NAME, OLLAMA_BASE_URL, DEFAULT_LLM_PROVIDER, LLM_SYSTEM_PROMPT, BACKEND_DIR
 from backend.schemas.schemas_loader import SPEC_SCHEMA
-from backend.schemas.spec_utils import validate_spec, SpecValidationError
+from backend.schemas.spec_utils import validate_spec, sanitize_spec, SpecValidationError
 from backend.llm.category_context import (
     CATEGORY_CONTEXT, CATEGORY_SCHEMAS, VANILLA_REF, detect_category,
 )
@@ -351,6 +351,7 @@ def _call_openai(prompt: str, current: dict, api_key: Optional[str],
         raise RuntimeError(f"LLM returned invalid JSON: {exc}") from exc
     _sanitize_geometry_json(candidate)
     if category == "entity_logic_ai":
+        candidate = sanitize_spec(candidate)
         return validate_spec(candidate)
     return candidate
 
@@ -488,7 +489,8 @@ def _call_claude(prompt: str, current: dict, api_key: Optional[str],
                  category: str = "entity_logic_ai",
                  mcp_context: Optional[MCPContext] = None,
                  dynamic_ctx: Optional[DynamicContext] = None,
-                 intent_profile: Optional[PromptIntentProfile] = None) -> dict:
+                 intent_profile: Optional[PromptIntentProfile] = None,
+                 model_name: Optional[str] = None) -> dict:
     """Call Anthropic Claude to rewrite a spec based on a user prompt."""
     if anthropic is None:
         raise RuntimeError("anthropic package is not installed.")
@@ -496,12 +498,13 @@ def _call_claude(prompt: str, current: dict, api_key: Optional[str],
     if not key:
         raise RuntimeError("Provide ANTHROPIC_API_KEY (either in the form field or as an environment variable).")
 
-    print("[LLM] calling Claude model", CLAUDE_MODEL_NAME)
+    model_to_use = model_name or CLAUDE_MODEL_NAME
+    print("[LLM] calling Claude model", model_to_use)
     try:
         client = anthropic.Anthropic(api_key=key)
         
         response = client.messages.create(
-            model=CLAUDE_MODEL_NAME,
+            model=model_to_use,
             max_tokens=2048,
             system=_get_full_system_prompt(category, mcp_context, dynamic_ctx, intent_profile),
             messages=[
@@ -519,6 +522,10 @@ def _call_claude(prompt: str, current: dict, api_key: Optional[str],
             
         candidate = json.loads(content)
         _sanitize_geometry_json(candidate)
+        candidate = sanitize_spec(candidate)
+        candidate = sanitize_spec(candidate)
+        candidate = sanitize_spec(candidate)
+        candidate = sanitize_spec(candidate)
         if category == "entity_logic_ai":
             return validate_spec(candidate)
         return candidate
@@ -539,8 +546,10 @@ def _call_provider(
         return _call_deepseek(prompt, current, api_key, category, mcp_context, dynamic_ctx, intent_profile)
     elif provider_key == "gemini":
         return _call_gemini(prompt, current, api_key, category, mcp_context, dynamic_ctx, intent_profile)
-    elif provider_key == "claude":
-        return _call_claude(prompt, current, api_key, category, mcp_context, dynamic_ctx, intent_profile)
+    elif provider_key == "claude" or provider_key == "claude-sonnet":
+        return _call_claude(prompt, current, api_key, category, mcp_context, dynamic_ctx, intent_profile, model_name="claude-sonnet-4-20250514")
+    elif provider_key == "claude-opus":
+        return _call_claude(prompt, current, api_key, category, mcp_context, dynamic_ctx, intent_profile, model_name="claude-opus-4-20250514")
     elif provider_key == "ollama":
         return _call_ollama(prompt, current, api_key, category, mcp_context, dynamic_ctx, intent_profile)
     else:
@@ -705,6 +714,7 @@ def llm_rewrite_spec(prompt: str, current: dict, provider: str,
                 try:
                     output_spec = apply_plan(plan, current)
                     if category == "entity_logic_ai":
+                        output_spec = sanitize_spec(output_spec)
                         output_spec = validate_spec(output_spec)
                     orchestrator_meta = {
                         "plan": plan.to_dict(),
@@ -1086,8 +1096,10 @@ def llm_generate_geometry(
             output = _call_geometry_deepseek(user_content, api_key, mcp_template_text)
         elif provider_key == "gemini":
             output = _call_geometry_gemini(user_content, api_key, mcp_template_text)
-        elif provider_key == "claude":
-            output = _call_geometry_claude(user_content, api_key, mcp_template_text)
+        elif provider_key == "claude" or provider_key == "claude-sonnet":
+            output = _call_geometry_claude(user_content, api_key, mcp_template_text, model_name="claude-sonnet-4-20250514")
+        elif provider_key == "claude-opus":
+            output = _call_geometry_claude(user_content, api_key, mcp_template_text, model_name="claude-opus-4-20250514")
         elif provider_key == "ollama":
             output = _call_geometry_ollama(user_content, api_key, mcp_template_text)
         else:
@@ -1194,7 +1206,8 @@ def _call_geometry_gemini(user_content: str, api_key: str | None,
 
 
 def _call_geometry_claude(user_content: str, api_key: str | None,
-                          mcp_template_text: str = "") -> dict:
+                          mcp_template_text: str = "",
+                          model_name: Optional[str] = None) -> dict:
     """Call Claude to generate geometry."""
     if anthropic is None:
         raise RuntimeError("anthropic package not installed")
@@ -1202,8 +1215,10 @@ def _call_geometry_claude(user_content: str, api_key: str | None,
     if not key:
         raise RuntimeError("Provide ANTHROPIC_API_KEY")
     client = anthropic.Anthropic(api_key=key)
+    model_to_use = model_name or CLAUDE_MODEL_NAME
+    print("[LLM] calling Claude model for geometry", model_to_use)
     response = client.messages.create(
-        model=CLAUDE_MODEL_NAME,
+        model=model_to_use,
         max_tokens=4096,
         system=_get_geometry_system_prompt(mcp_template_text),
         messages=[{"role": "user", "content": user_content}]

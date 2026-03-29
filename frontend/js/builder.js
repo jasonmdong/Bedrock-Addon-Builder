@@ -187,9 +187,9 @@ async function fetchAndDisplayGeometry(geometryMobName, textureMobName = null) {
       geometryUrl.href = "#";
       geometryUrl.textContent = "No source available";
       geometryContainer.style.display = "block";
-      if (viewer3D && viewer3D.mesh) {
-        viewer3D.scene.remove(viewer3D.mesh);
-        viewer3D.mesh = null;
+      if (window.viewer3D && window.viewer3D.mesh) {
+        window.viewer3D.scene.remove(window.viewer3D.mesh);
+        window.viewer3D.mesh = null;
       }
       return;
     }
@@ -235,9 +235,9 @@ async function fetchAndDisplayGeometry(geometryMobName, textureMobName = null) {
     geometryUrl.textContent = "No source available";
     geometryContainer.style.display = "block";
     // Clear any previous 3D model
-    if (viewer3D && viewer3D.mesh) {
-      viewer3D.scene.remove(viewer3D.mesh);
-      viewer3D.mesh = null;
+    if (window.viewer3D && window.viewer3D.mesh) {
+      window.viewer3D.scene.remove(window.viewer3D.mesh);
+      window.viewer3D.mesh = null;
     }
   }
 }

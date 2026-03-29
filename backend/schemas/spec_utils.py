@@ -88,6 +88,64 @@ def _coerce_color(value, name: str) -> str:
     return value.upper()
 
 
+def sanitize_spec(raw: dict) -> dict:
+    """Sanitize a spec by clamping values to valid ranges before validation."""
+    if not isinstance(raw, dict):
+        return raw
+    
+    sanitized = json.loads(json.dumps(raw))
+    
+    # Clamp collision_box values to valid ranges
+    if "collision_box" in sanitized and isinstance(sanitized["collision_box"], dict):
+        box = sanitized["collision_box"]
+        if "width" in box:
+            try:
+                width = float(box["width"])
+                box["width"] = max(0.1, min(5, width))
+            except (TypeError, ValueError):
+                pass
+        if "height" in box:
+            try:
+                height = float(box["height"])
+                box["height"] = max(0.5, min(5, height))
+            except (TypeError, ValueError):
+                pass
+    
+    # Clamp HP
+    if "hp" in sanitized:
+        try:
+            hp = int(float(sanitized["hp"]))
+            sanitized["hp"] = max(1, min(2048, hp))
+        except (TypeError, ValueError):
+            pass
+    
+    # Clamp damage
+    if "damage" in sanitized:
+        try:
+            damage = float(sanitized["damage"])
+            sanitized["damage"] = max(0, min(128, damage))
+        except (TypeError, ValueError):
+            pass
+    
+    # Clamp speed
+    if "speed" in sanitized:
+        try:
+            speed = float(sanitized["speed"])
+            sanitized["speed"] = max(0, min(2, speed))
+        except (TypeError, ValueError):
+            pass
+    
+    # Clamp scale
+    if "scale" in sanitized:
+        try:
+            scale = float(sanitized["scale"])
+            sanitized["scale"] = max(0.2, min(5.0, scale))
+        except (TypeError, ValueError):
+            pass
+    
+    return sanitized
+
+
 def merge_spec(defaults: dict, *layers: dict) -> dict:
     """Merge spec layers over defaults, filling in missing fields."""
     out = json.loads(json.dumps(defaults))
