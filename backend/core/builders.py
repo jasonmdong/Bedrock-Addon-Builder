@@ -135,6 +135,64 @@ def make_uuid() -> str:
     return str(uuid.uuid4())
 
 
+def validate_animation_references(specs: list[dict], animations_dir: Path) -> list[str]:
+    """Pre-validate all animation and animation controller references.
+    
+    Checks that:
+    1. All geometry IDs referenced in specs exist or can be resolved
+    2. All animation controller IDs are defined  
+    3. All animations referenced in controllers exist
+    
+    Returns list of validation errors (empty if all valid).
+    """
+    errors = []
+    
+    for spec in specs:
+        short_name = spec.get("short_name", "unknown")
+        
+        # Check geometry reference
+        geometry = spec.get("geometry", "")
+        if geometry and geometry.startswith("geometry."):
+            # Only validate if not vanilla (vanilla will be fetched from Mojang)
+            if "custom" in geometry:
+                geo_file = animations_dir / f"{short_name}.geo.json"
+                if not geo_file.exists():
+                    custom_geo = spec.get("geometry_json")
+                    if not (custom_geo and isinstance(custom_geo, dict) and "minecraft:geometry" in custom_geo):
+                        errors.append(f"{short_name}: geometry '{geometry}' not found and no custom geometry_json")
+        
+        # Check animation controller
+        ac_id = spec.get("animation_controller")
+        if ac_id:
+            ac_file = animations_dir / f"{short_name}.animation_controllers.json"
+            if ac_file.exists():
+                try:
+                    ac_data = json.loads(ac_file.read_text())
+                    # Verify controller exists
+                    controllers = ac_data.get("animation_controllers", {})
+                    if ac_id not in controllers:
+                        errors.append(f"{short_name}: animation controller '{ac_id}' not defined in file")
+                    
+                    # Verify all states reference existing animations
+                    anim_file = animations_dir / f"{short_name}.animation.json"
+                    if anim_file.exists():
+                        anim_data = json.loads(anim_file.read_text())
+                        animations = anim_data.get("animations", {})
+                        
+                        for state_name, state_def in controllers[ac_id].get("states", {}).items():
+                            for anim in state_def.get("animations", []):
+                                if anim not in animations:
+                                    errors.append(
+                                        f"{short_name}: animation '{anim}' referenced in state "
+                                        f"'{state_name}' but not defined"
+                                    )
+                except (json.JSONDecodeError, KeyError) as e:
+                    errors.append(f"{short_name}: failed to validate animation_controllers.json: {e}")
+    
+    return errors
+
+
+
 def make_png_rgba(width, height, r, g, b, a=255) -> bytes:
     """Generate a simple solid-color PNG image."""
     import struct
@@ -206,9 +264,10 @@ def patch_resource_pack(res_root: Path, specs: list[dict], textures_dir: Path = 
         "texture_data": {}
     }
 
-    # Use the vanilla built-in controller.render.default — it already maps
-    # Geometry.default, Material.default, and Texture.default which is all we need.
-    # Writing a custom render controller file was unreliable (pack load order issues).
+    # Use built-in render controllers (controller.render.default, etc.) to avoid pack load order issues.
+    # We DO NOT create custom render_controllers.json files—that would cause race conditions.
+    # Instead, animations are linked via behavior pack (minecraft:animation.controller),
+    # keeping animation state management server-side and decoupled from rendering.
 
     first_png = None
 
@@ -356,7 +415,7 @@ def patch_resource_pack(res_root: Path, specs: list[dict], textures_dir: Path = 
 
         scale = float(spec.get("scale", 1.0))
         client = {
-            "format_version": "1.10.0",
+            "format_version": "1.20.0",
             "minecraft:client_entity": {
                 "description": {
                     "identifier": spec["identifier"],
@@ -374,6 +433,37 @@ def patch_resource_pack(res_root: Path, specs: list[dict], textures_dir: Path = 
         if abs(scale - 1.0) > 1e-6:
             client["minecraft:client_entity"]["description"]["scale"] = scale
         _write_text(client_file, json.dumps(client, indent=2))
+
+        # Write animation files if they exist in spec
+        animation_json = spec.get("animation_json")
+        print(f"[BUILD] Checking animation_json for {spec['short_name']}: {bool(animation_json)}")
+        if animation_json:
+            print(f"[BUILD] animation_json type: {type(animation_json)}, is dict: {isinstance(animation_json, dict)}")
+            if isinstance(animation_json, dict):
+                print(f"[BUILD] animation_json keys: {list(animation_json.keys())}")
+                print(f"[BUILD] animation_json preview: {json.dumps(animation_json, indent=2)[:500]}...")
+        if animation_json and isinstance(animation_json, dict):
+            anim_dir = res_root / "animations"
+            anim_dir.mkdir(parents=True, exist_ok=True)
+            anim_file = anim_dir / f"{spec['short_name']}.animation.json"
+            _write_text(anim_file, json.dumps(animation_json, indent=2))
+            print(f"[BUILD] Wrote animation file: {anim_file.name}")
+            print(f"[BUILD] Animation file size: {anim_file.stat().st_size} bytes")
+
+        animation_controller_json = spec.get("animation_controller_json")
+        print(f"[BUILD] Checking animation_controller_json for {spec['short_name']}: {bool(animation_controller_json)}")
+        if animation_controller_json:
+            print(f"[BUILD] animation_controller_json type: {type(animation_controller_json)}, is dict: {isinstance(animation_controller_json, dict)}")
+            if isinstance(animation_controller_json, dict):
+                print(f"[BUILD] animation_controller_json keys: {list(animation_controller_json.keys())}")
+                print(f"[BUILD] animation_controller_json preview: {json.dumps(animation_controller_json, indent=2)[:500]}...")
+        if animation_controller_json and isinstance(animation_controller_json, dict):
+            ac_dir = res_root / "animation_controllers"
+            ac_dir.mkdir(parents=True, exist_ok=True)
+            ac_file = ac_dir / f"{spec['short_name']}.animation_controllers.json"
+            _write_text(ac_file, json.dumps(animation_controller_json, indent=2))
+            print(f"[BUILD] Wrote animation controller file: {ac_file.name}")
+            print(f"[BUILD] Animation controller file size: {ac_file.stat().st_size} bytes")
 
         # Add names to lang file
         display_name = spec.get("display_name", spec["short_name"].capitalize())
@@ -568,6 +658,35 @@ def patch_behavior_pack(beh_root: Path, specs: list[dict]):
 
         comps = entity["minecraft:entity"]["components"]
 
+        # Add animation controller if animations exist in spec
+        animation_controller_id = spec.get("animation_controller")
+        if animation_controller_id:
+            comps["minecraft:animation.controller"] = {
+                "controllers": [animation_controller_id]
+            }
+
+        # Write animation.json and animation_controllers.json files from spec
+        mob_name = spec["identifier"].split(":")[-1]
+        mob_short = spec["short_name"]
+        
+        # Write animation.json if present in spec
+        animation_json = spec.get("animation_json")
+        if animation_json and isinstance(animation_json, dict) and animation_json.get("animations"):
+            anim_dir = beh_root / "animations"
+            anim_dir.mkdir(parents=True, exist_ok=True)
+            anim_file = anim_dir / f"{mob_short}.json"
+            _write_text(anim_file, json.dumps(animation_json, indent=2))
+            print(f"[BUILD] Created animation file: animations/{mob_short}.json")
+        
+        # Write animation_controllers.json if present in spec
+        animation_controller_json = spec.get("animation_controller_json")
+        if animation_controller_json and isinstance(animation_controller_json, dict) and animation_controller_json.get("animation_controllers"):
+            ac_dir = beh_root / "animation_controllers"
+            ac_dir.mkdir(parents=True, exist_ok=True)
+            ac_file = ac_dir / f"{mob_short}.json"
+            _write_text(ac_file, json.dumps(animation_controller_json, indent=2))
+            print(f"[BUILD] Created animation controller file: animation_controllers/{mob_short}.json")
+
         # If mob has ranged attack (shooter), remove melee_attack so it
         # actually fires projectiles instead of always running up to melee.
         if "minecraft:shooter" in comps and "minecraft:behavior.ranged_attack" in comps:
@@ -608,7 +727,6 @@ def patch_behavior_pack(beh_root: Path, specs: list[dict]):
 
         # Loot table pipeline: ensure minecraft:loot is wired AND the
         # actual loot table JSON file is created when loot_drops exists.
-        mob_name = spec["identifier"].split(":")[-1]
         loot_drops = spec.get("loot_drops", [])
 
         # Auto-wire minecraft:loot if loot_drops exists but component missing

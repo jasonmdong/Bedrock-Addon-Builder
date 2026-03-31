@@ -231,12 +231,64 @@ def create_mcworld(out_dir: Path,
     result = json.loads(result_json)
     mcworld_bytes = base64.b64decode(result["file_base64"])
 
+    # ── Inject animation files into the mcworld ──────────────────────
+    # MCP's build_mcworld builds packs from scratch, so animation files
+    # written to beh_root/res_root are not included. We need to inject them.
+    mcworld_buffer = io.BytesIO(mcworld_bytes)
+    with zipfile.ZipFile(mcworld_buffer, "a", zipfile.ZIP_DEFLATED) as zf:
+        # Find the behavior pack path in the mcworld (format: behavior_packs/{name}_BP/)
+        beh_pack_prefix = None
+        res_pack_prefix = None
+        for item in zf.namelist():
+            if "behavior_packs/" in item and "/manifest.json" in item:
+                beh_pack_prefix = item.split("/manifest.json")[0]
+                break
+        for item in zf.namelist():
+            if "resource_packs/" in item and "/manifest.json" in item:
+                res_pack_prefix = item.split("/manifest.json")[0]
+                break
+        
+        # Inject animation files from beh_root
+        if beh_pack_prefix:
+            anim_dir = beh_root / "animations"
+            if anim_dir.exists():
+                for anim_file in anim_dir.glob("*.json"):
+                    archive_path = f"{beh_pack_prefix}/animations/{anim_file.name}"
+                    zf.writestr(archive_path, anim_file.read_text())
+                    print(f"[WORLD] Injected {anim_file.name} into behavior pack")
+            
+            ac_dir = beh_root / "animation_controllers"
+            if ac_dir.exists():
+                for ac_file in ac_dir.glob("*.json"):
+                    archive_path = f"{beh_pack_prefix}/animation_controllers/{ac_file.name}"
+                    zf.writestr(archive_path, ac_file.read_text())
+                    print(f"[WORLD] Injected {ac_file.name} into behavior pack")
+        
+        # Inject animation files from res_root
+        if res_pack_prefix:
+            anim_dir = res_root / "animations"
+            if anim_dir.exists():
+                for anim_file in anim_dir.glob("*.animation.json"):
+                    archive_path = f"{res_pack_prefix}/animations/{anim_file.name}"
+                    zf.writestr(archive_path, anim_file.read_text())
+                    print(f"[WORLD] Injected {anim_file.name} into resource pack")
+            
+            ac_dir = res_root / "animation_controllers"
+            if ac_dir.exists():
+                for ac_file in ac_dir.glob("*.animation_controllers.json"):
+                    archive_path = f"{res_pack_prefix}/animation_controllers/{ac_file.name}"
+                    zf.writestr(archive_path, ac_file.read_text())
+                    print(f"[WORLD] Injected {ac_file.name} into resource pack")
+    
+    # Get the updated binary
+    mcworld_bytes = mcworld_buffer.getvalue()
+
     mcworld_path = out_dir / f"{safe_name}.mcworld"
     mcworld_path.write_bytes(mcworld_bytes)
 
     for ident in result.get("mob_identifiers", []):
         print(f"[WORLD] Will auto-spawn {ident} near player on world load")
-    print(f"[WORLD] Generated .mcworld via MCP pipeline")
+    print(f"[WORLD] Generated .mcworld via MCP pipeline with injected animations")
 
     return mcworld_path
 

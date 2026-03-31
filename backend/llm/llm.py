@@ -187,6 +187,9 @@ def _auto_fetch_geometry(
 
     print(f"[LLM-GEOFETCH] Non-vanilla mob '{display_name}' (geometry={geometry_ref}) has no geometry, generating via LLM...")
     try:
+        from backend.llm.animation_generation import llm_generate_animation
+        from backend.llm.animation_controllers_generation import llm_generate_animation_controller
+        
         short_name = output_spec.get("short_name", "custom_mob")
         geo_prompt = f"Create a {display_name} mob geometry"
         geo_result = llm_generate_geometry(
@@ -210,6 +213,48 @@ def _auto_fetch_geometry(
                 if geo_id:
                     output_spec["geometry"] = geo_id
             print(f"[LLM] Auto-generated geometry for '{display_name}'")
+            
+            # Auto-generate animations for the geometry
+            try:
+                anim_result = llm_generate_animation(
+                    prompt=f"Create animations for: {geo_prompt}",
+                    geometry_json=clean_geo,
+                    mob_name=short_name,
+                    provider=provider_key,
+                    api_key=api_key,
+                )
+                animation = anim_result.get("animation")
+                if animation:
+                    output_spec["animation_json"] = animation
+                    print(f"[LLM-GEOFETCH] Auto-generated animations with {anim_result.get('bone_count', '?')} bones")
+                    print(f"[LLM-GEOFETCH] animation_json saved to spec: {json.dumps(animation, indent=2)[:500]}...")
+                    
+                    # Auto-generate animation controller
+                    try:
+                        ac_result = llm_generate_animation_controller(
+                            animation_json=animation,
+                            mob_name=short_name,
+                            provider=provider_key,
+                            api_key=api_key,
+                        )
+                        animation_controller = ac_result.get("animation_controller")
+                        if animation_controller:
+                            output_spec["animation_controller_json"] = animation_controller
+                            output_spec["animation_controller"] = f"controller.animation.{short_name}"
+                            print(f"[LLM-GEOFETCH] Auto-generated animation controller")
+                            print(f"[LLM-GEOFETCH] animation_controller_json saved to spec: {json.dumps(animation_controller, indent=2)[:500]}...")
+                            print(f"[LLM-GEOFETCH] animation_controller (id) saved to spec: {output_spec['animation_controller']}")
+                        else:
+                            print(f"[LLM-GEOFETCH] Warning: animation_controller is None or empty")
+                    except Exception as ac_err:
+                        print(f"[LLM-GEOFETCH] Warning: failed to generate controller: {ac_err}")
+                else:
+                    print(f"[LLM-GEOFETCH] Warning: animation generation returned None or empty")
+                    print(f"[LLM-GEOFETCH] anim_result keys: {list(anim_result.keys()) if anim_result else 'None'}")
+            except Exception as anim_err:
+                print(f"[LLM-GEOFETCH] Warning: animation generation failed: {anim_err}")
+                import traceback
+                traceback.print_exc()
     except Exception as e:
         log.warning("[LLM] Auto geometry generation failed: %s", e)
         print(f"[LLM] Auto geometry generation failed for '{display_name}': {e}")
