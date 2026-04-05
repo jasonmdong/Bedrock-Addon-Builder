@@ -154,10 +154,16 @@ _VANILLA_GEOMETRY_NAMES = {
 
 
 def _is_vanilla_mob(display_name: str, geometry_ref: str) -> bool:
-    """Check if the mob can be resolved from vanilla Bedrock geometry."""
+    """Check if the mob can be resolved from vanilla Bedrock geometry.
+    
+    Only return True if the display_name matches the geometry_ref (same vanilla animal).
+    This prevents skipping auto-fetch for renamed mobs like "Elephant" with "geometry.cow".
+    """
     name = display_name.lower().replace(" ", "_")
     geo_name = geometry_ref.replace("geometry.", "").lower()
-    return name in _VANILLA_GEOMETRY_NAMES or geo_name in _VANILLA_GEOMETRY_NAMES
+    # Only skip auto-fetch if display_name and geometry match AND both are vanilla
+    # (e.g., "Cow" + "geometry.cow" is vanilla, but "Elephant" + "geometry.cow" is not)
+    return name == geo_name and name in _VANILLA_GEOMETRY_NAMES
 
 
 

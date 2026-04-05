@@ -16,6 +16,7 @@ With conditions like:
 
 import json
 import logging
+import os
 import time
 from typing import Optional
 
@@ -301,14 +302,45 @@ def _call_ac_gemini(
         return None
 
 
+def _get_claude_model_name(provider: str) -> str:
+    """Determine Claude model ID from provider string.
+    
+    Maps provider variants to actual model IDs:
+    - "claude-sonnet-4.6" or "claude-sonnet" → claude-3-5-sonnet (latest)
+    - "claude-opus" → claude-opus-4-20250514 (latest)
+    - Default → CLAUDE_MODEL_NAME (from env or default)
+    """
+    provider_lower = provider.lower() if provider else ""
+    
+    if "opus" in provider_lower:
+        return "claude-opus-4-20250514"
+    elif "sonnet" in provider_lower:
+        # Use latest Sonnet model (same as in llm.py)
+        return "claude-sonnet-4-20250514"
+    else:
+        # Fall back to configured default
+        return CLAUDE_MODEL_NAME
+
+
 def _call_ac_claude(
     prompt: str,
     system_prompt: str,
     api_key: str,
+    provider: str = "claude",
 ) -> Optional[dict]:
-    """Call Claude to generate animation controller."""
+    """Call Claude to generate animation controller.
+    
+    Args:
+        prompt: User prompt
+        system_prompt: System prompt
+        api_key: Anthropic API key
+        provider: Provider string (e.g., "claude-sonnet-4.6" or "claude-opus") to select model
+    """
     try:
         import httpx
+        
+        model = _get_claude_model_name(provider)
+        print(f"[AC-CLAUDE] Using model: {model} (provider: {provider})")
         
         client = httpx.Client(timeout=30)
         response = client.post(
@@ -318,7 +350,7 @@ def _call_ac_claude(
                 "anthropic-version": "2023-06-01",
             },
             json={
-                "model": CLAUDE_MODEL_NAME,
+                "model": model,
                 "max_tokens": 2000,
                 "system": system_prompt,
                 "messages": [
@@ -372,21 +404,71 @@ def _call_ac_provider(
     provider: str,
     api_key: Optional[str] = None,
 ) -> Optional[dict]:
-    """Route animation controller generation to the selected provider."""
+    """Route animation controller generation to the selected provider.
     
-    if provider == "openai" and api_key:
-        return _call_ac_openai(prompt, system_prompt, api_key)
-    elif provider == "deepseek" and api_key:
-        return _call_ac_deepseek(prompt, system_prompt, api_key)
-    elif provider == "gemini" and api_key:
-        return _call_ac_gemini(prompt, system_prompt, api_key)
-    elif provider == "claude" and api_key:
-        return _call_ac_claude(prompt, system_prompt, api_key)
-    elif provider == "ollama":
+    Supports flexible provider matching with .startswith() to handle variants
+    like "openai-gpt-4o" or "deepseek-chat".
+    
+    Falls back to environment variables if api_key not provided:
+    - OpenAI: OPENAI_API_KEY
+    - DeepSeek: DEEPSEEK_API_KEY
+    - Gemini: GEMINI_API_KEY
+    - Claude: ANTHROPIC_API_KEY
+    """
+    
+    # Normalize provider and get api_key from environment if not passed
+    provider_lower = provider.lower() if provider else ""
+    
+    print(f"[AC-PROVIDER] Called with provider: {provider_lower}, api_key present: {bool(api_key)}")
+    
+    if provider_lower.startswith("openai"):
+        api_key = api_key or os.getenv("OPENAI_API_KEY")
+        if api_key:
+            print(f"[AC-PROVIDER] Routing to OpenAI")
+            return _call_ac_openai(prompt, system_prompt, api_key)
+        else:
+            log.error(f"[AC-PROVIDER] OpenAI selected but no API key in args or OPENAI_API_KEY env")
+            print(f"[AC-PROVIDER] ERROR: OpenAI selected but no OPENAI_API_KEY")
+            return None
+    
+    elif provider_lower.startswith("deepseek"):
+        api_key = api_key or os.getenv("DEEPSEEK_API_KEY")
+        if api_key:
+            print(f"[AC-PROVIDER] Routing to DeepSeek")
+            return _call_ac_deepseek(prompt, system_prompt, api_key)
+        else:
+            log.error(f"[AC-PROVIDER] DeepSeek selected but no API key in args or DEEPSEEK_API_KEY env")
+            print(f"[AC-PROVIDER] ERROR: DeepSeek selected but no DEEPSEEK_API_KEY")
+            return None
+    
+    elif provider_lower.startswith("gemini"):
+        api_key = api_key or os.getenv("GEMINI_API_KEY")
+        if api_key:
+            print(f"[AC-PROVIDER] Routing to Gemini")
+            return _call_ac_gemini(prompt, system_prompt, api_key)
+        else:
+            log.error(f"[AC-PROVIDER] Gemini selected but no API key in args or GEMINI_API_KEY env")
+            print(f"[AC-PROVIDER] ERROR: Gemini selected but no GEMINI_API_KEY")
+            return None
+    
+    elif provider_lower.startswith("claude"):
+        api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
+        if api_key:
+            print(f"[AC-PROVIDER] Routing to Claude")
+            return _call_ac_claude(prompt, system_prompt, api_key, provider=provider)
+        else:
+            log.error(f"[AC-PROVIDER] Claude selected but no API key in args or ANTHROPIC_API_KEY env")
+            print(f"[AC-PROVIDER] ERROR: Claude selected but no ANTHROPIC_API_KEY")
+            return None
+    
+    elif provider_lower.startswith("ollama"):
+        print(f"[AC-PROVIDER] Routing to Ollama")
         return _call_ac_ollama(prompt, system_prompt)
     
-    log.error(f"Unknown provider: {provider}")
-    return None
+    else:
+        log.error(f"[AC-PROVIDER] Unknown provider: {provider}")
+        print(f"[AC-PROVIDER] ERROR - Unknown provider: {provider}")
+        return None
 
 
 def llm_generate_animation_controller(

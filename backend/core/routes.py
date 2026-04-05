@@ -1031,6 +1031,76 @@ def llm_spec_editor(payload: dict = Body(...)):
         print(f"[LLM-SPEC-EDITOR] animation_controller_json type: {type(updated['animation_controller_json'])}")
         print(f"[LLM-SPEC-EDITOR] animation_controller_json keys: {list(updated['animation_controller_json'].keys()) if isinstance(updated['animation_controller_json'], dict) else 'N/A'}")
 
+    # --- Validation: Retry if both animation files failed to generate ---
+    has_animation_json = bool(updated.get('animation_json'))
+    has_animation_controller_json = bool(updated.get('animation_controller_json'))
+    
+    if not has_animation_json and not has_animation_controller_json:
+        # Both missing — check if we have geometry to work from
+        geometry_json = updated.get("geometry_json", {})
+        has_geometry = geometry_json and isinstance(geometry_json, dict) and "minecraft:geometry" in geometry_json
+        
+        if has_geometry:
+            print(f"[LLM-SPEC-EDITOR] VALIDATION: Both animation files missing, retrying generation...")
+            mob_name = updated.get("short_name", "custom_mob")
+            from backend.llm.animation_generation import llm_generate_animation, ensure_animations_and_controller
+            from backend.llm.animation_controllers_generation import llm_generate_animation_controller
+            
+            try:
+                # Retry animation generation
+                anim_result = llm_generate_animation(
+                    prompt=f"Create animations for: {prompt}",
+                    geometry_json=geometry_json,
+                    mob_name=mob_name,
+                    provider=provider,
+                    api_key=api_key,
+                )
+                animation_json = anim_result.get("animation") if anim_result else None
+                animation_controller_json = None
+                
+                if animation_json:
+                    # Generate animation controller
+                    print(f"[LLM-SPEC-EDITOR] RETRY: Auto-generating animation controller")
+                    try:
+                        ac_result = llm_generate_animation_controller(
+                            animation_json=animation_json,
+                            mob_name=mob_name,
+                            provider=provider,
+                            api_key=api_key,
+                        )
+                        animation_controller_json = ac_result.get("animation_controller") if ac_result else None
+                    except Exception as ac_err:
+                        print(f"[LLM-SPEC-EDITOR] RETRY: Warning: failed to generate controller: {ac_err}")
+                
+                # Validate and auto-generate any missing pieces
+                animation_json, animation_controller_json, val_messages = ensure_animations_and_controller(
+                    animation_json=animation_json,
+                    animation_controller_json=animation_controller_json,
+                    mob_name=mob_name,
+                    geometry_json=geometry_json,
+                    provider=provider,
+                    api_key=api_key,
+                )
+                
+                for msg in val_messages:
+                    print(f"[LLM-SPEC-EDITOR] RETRY: {msg}")
+                
+                # Update spec with regenerated files
+                if animation_json:
+                    updated["animation_json"] = animation_json
+                    print(f"[LLM-SPEC-EDITOR] RETRY: Animation regenerated and added to spec")
+                
+                if animation_controller_json:
+                    updated["animation_controller_json"] = animation_controller_json
+                    print(f"[LLM-SPEC-EDITOR] RETRY: Animation controller regenerated and added to spec")
+                
+                if not animation_json and not animation_controller_json:
+                    print(f"[LLM-SPEC-EDITOR] RETRY: Warning: retry also failed to generate animations")
+            except Exception as retry_err:
+                print(f"[LLM-SPEC-EDITOR] RETRY: Warning: animation retry failed: {retry_err}")
+        else:
+            print(f"[LLM-SPEC-EDITOR] VALIDATION: Both animation files missing but no geometry to generate from")
+
     if data.get("save"):
         try:
             name = updated.get("short_name") or "current"
