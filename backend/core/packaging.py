@@ -231,9 +231,54 @@ def create_mcworld(out_dir: Path,
     result = json.loads(result_json)
     mcworld_bytes = base64.b64decode(result["file_base64"])
 
-    # ── Inject animation files into the mcworld ──────────────────────
-    # MCP's build_mcworld builds packs from scratch, so animation files
-    # written to beh_root/res_root are not included. We need to inject them.
+    # ── Replace entity files in the mcworld ────────────────────────────────
+    # MCP generates entity files from our mob data, but without the scripts block
+    # for animation controller wiring. We must use our pre-written entity files
+    # which have the correct geometry references and animation scripts.
+    mcworld_buffer = io.BytesIO(mcworld_bytes)
+    with zipfile.ZipFile(mcworld_buffer, "a", zipfile.ZIP_DEFLATED) as zf:
+        # Find the resource pack path in the mcworld
+        res_pack_prefix = None
+        for item in zf.namelist():
+            if "resource_packs/" in item and "/manifest.json" in item:
+                res_pack_prefix = item.split("/manifest.json")[0]
+                break
+        
+        if res_pack_prefix:
+            # Remove ALL existing entity files from the ZIP (MCP-generated ones)
+            entity_entries_to_remove = [
+                entry for entry in zf.namelist()
+                if f"{res_pack_prefix}/entity/" in entry
+            ]
+            if entity_entries_to_remove:
+                print(f"[WORLD] Removing {len(entity_entries_to_remove)} MCP-generated entity files from ZIP")
+                # Rebuild ZIP without the MCP entity files
+                temp_buffer = io.BytesIO()
+                with zipfile.ZipFile(temp_buffer, "w", zipfile.ZIP_DEFLATED) as temp_zf:
+                    for entry in zf.namelist():
+                        if entry not in entity_entries_to_remove:
+                            temp_zf.writestr(entry, zf.read(entry))
+                    
+                    # Now write our entity files
+                    ent_dir = res_root / "entity"
+                    if ent_dir.exists():
+                        for ent_file in sorted(ent_dir.glob("*.entity.json")):
+                            archive_path = f"{res_pack_prefix}/entity/{ent_file.name}"
+                            content = ent_file.read_text()
+                            temp_zf.writestr(archive_path, content)
+                            
+                            # Verify critical blocks
+                            if '"scripts"' in content:
+                                print(f"[WORLD] ✓ Using {ent_file.name} with scripts block")
+                            else:
+                                print(f"[WORLD] ✗ WARNING: {ent_file.name} missing scripts block")
+                
+                mcworld_bytes = temp_buffer.getvalue()
+        
+        # Continue with animation file injection using the updated buffer
+        mcworld_buffer = io.BytesIO(mcworld_bytes)
+    
+    # ── Inject animation and animation controller files ─────────────────────
     mcworld_buffer = io.BytesIO(mcworld_bytes)
     with zipfile.ZipFile(mcworld_buffer, "a", zipfile.ZIP_DEFLATED) as zf:
         # Find the behavior pack path in the mcworld (format: behavior_packs/{name}_BP/)
@@ -248,7 +293,7 @@ def create_mcworld(out_dir: Path,
                 res_pack_prefix = item.split("/manifest.json")[0]
                 break
         
-        # Inject animation files from beh_root
+        # Inject animation files from res_root
         if beh_pack_prefix:
             anim_dir = beh_root / "animations"
             if anim_dir.exists():

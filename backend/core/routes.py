@@ -960,12 +960,18 @@ def llm_spec_editor(payload: dict = Body(...)):
     mob_name = updated.get("short_name", "custom_mob") if updated else "custom_mob"
     geometry_json = updated.get("geometry_json", {}) if updated else {}
     
+    # Normalize geometry to modern format if needed (converts geometry.X keys to minecraft:geometry array)
+    if geometry_json and isinstance(geometry_json, dict):
+        geometry_json = _normalize_geometry(geometry_json)
+        updated["geometry_json"] = geometry_json  # Update with normalized version
+        print(f"[LLM-SPEC-EDITOR] Normalized geometry, keys now: {list(geometry_json.keys())}")
+    
     # Check if geometry has actual content (minecraft:geometry key exists)
     has_geometry = geometry_json and isinstance(geometry_json, dict) and "minecraft:geometry" in geometry_json
     
     if has_geometry:
         print(f"[LLM-SPEC-EDITOR] Auto-generating animations for {mob_name}")
-        from backend.llm.animation_generation import llm_generate_animation, ensure_animations_and_controller
+        from backend.llm.animation_generation import llm_generate_animation, ensure_animations_and_controller, validate_physics_animation_sync
         from backend.llm.animation_controllers_generation import llm_generate_animation_controller
         
         try:
@@ -1012,7 +1018,24 @@ def llm_spec_editor(payload: dict = Body(...)):
             
             if animation_controller_json:
                 updated["animation_controller_json"] = animation_controller_json
-                print(f"[LLM-SPEC-EDITOR] Generated animation controller")
+                # Explicitly set the animation_controller ID so builders.py uses it
+                updated["animation_controller"] = f"controller.animation.{mob_name}"
+                print(f"[LLM-SPEC-EDITOR] Generated animation controller: {updated['animation_controller']}")
+                
+                # Validate physics-animation sync AFTER both files are ready
+                if animation_json and animation_controller_json:
+                    sync_validation = validate_physics_animation_sync(
+                        animation_json=animation_json,
+                        animation_controller_json=animation_controller_json,
+                        mob_name=mob_name,
+                    )
+                    updated["_animation_sync_validation"] = sync_validation
+                    if sync_validation["logic_failure_risk"]:
+                        print(f"[LLM-SPEC-EDITOR] ⚠️  {sync_validation['summary']}")
+                        print(f"[LLM-SPEC-EDITOR] Issues: {sync_validation['issues']}")
+                    if sync_validation["visual_failure_risk"]:
+                        print(f"[LLM-SPEC-EDITOR] ⚠️  {sync_validation['summary']}")
+                        print(f"[LLM-SPEC-EDITOR] Check that leg/body bones have motion in walk/run animations")
             
             if not animation_json and not animation_controller_json:
                 print(f"[LLM-SPEC-EDITOR] Warning: animation generation returned None")
@@ -1043,7 +1066,7 @@ def llm_spec_editor(payload: dict = Body(...)):
         if has_geometry:
             print(f"[LLM-SPEC-EDITOR] VALIDATION: Both animation files missing, retrying generation...")
             mob_name = updated.get("short_name", "custom_mob")
-            from backend.llm.animation_generation import llm_generate_animation, ensure_animations_and_controller
+            from backend.llm.animation_generation import llm_generate_animation, ensure_animations_and_controller, validate_physics_animation_sync
             from backend.llm.animation_controllers_generation import llm_generate_animation_controller
             
             try:
@@ -1092,7 +1115,20 @@ def llm_spec_editor(payload: dict = Body(...)):
                 
                 if animation_controller_json:
                     updated["animation_controller_json"] = animation_controller_json
-                    print(f"[LLM-SPEC-EDITOR] RETRY: Animation controller regenerated and added to spec")
+                    # Explicitly set the animation_controller ID
+                    updated["animation_controller"] = f"controller.animation.{mob_name}"
+                    print(f"[LLM-SPEC-EDITOR] RETRY: Animation controller regenerated: {updated['animation_controller']}")
+                    
+                    # Validate physics-animation sync for retry too
+                    if animation_json and animation_controller_json:
+                        sync_validation = validate_physics_animation_sync(
+                            animation_json=animation_json,
+                            animation_controller_json=animation_controller_json,
+                            mob_name=mob_name,
+                        )
+                        updated["_animation_sync_validation"] = sync_validation
+                        if sync_validation["logic_failure_risk"] or sync_validation["visual_failure_risk"]:
+                            print(f"[LLM-SPEC-EDITOR] RETRY: {sync_validation['summary']}")
                 
                 if not animation_json and not animation_controller_json:
                     print(f"[LLM-SPEC-EDITOR] RETRY: Warning: retry also failed to generate animations")

@@ -39,6 +39,107 @@ log = logging.getLogger(__name__)
 ANIMATION_FORMAT_VERSION = "1.8.0"
 
 
+def _build_entity_animations_block(mob_id: str, animation_short_names: list[str]) -> dict:
+    """Programmatically build the entity.json animations block.
+    
+    This function eliminates short-name/full-ID confusion by building the
+    animations block deterministically in code instead of from LLM output.
+    
+    Args:
+        mob_id: Short mob name (e.g., "zombie", "elephant")
+        animation_short_names: List of animation short names (e.g., ["idle", "walk", "run"])
+    
+    Returns:
+        dict with:
+          - "{mob_id}_controller": "controller.animation.{mob_id}"  (controller reference)
+          - "{shortname}": "animation.{mob_id}.{shortname}"  (for each animation)
+    
+    Example:
+        >>> _build_entity_animations_block("zombie", ["idle", "walk", "run"])
+        {
+            "zombie_controller": "controller.animation.zombie",
+            "idle": "animation.zombie.idle",
+            "walk": "animation.zombie.walk",
+            "run": "animation.zombie.run"
+        }
+    """
+    controller_id = f"controller.animation.{mob_id}"
+    block = {f"{mob_id}_controller": controller_id}
+    
+    for short_name in animation_short_names:
+        animation_id = f"animation.{mob_id}.{short_name}"
+        block[short_name] = animation_id
+    
+    print(f"[WIRING] Built entity animations block: {json.dumps(block, indent=2)}")
+    return block
+
+
+def _build_controller_states(states: dict, mob_id: str, animation_names: list[str]) -> dict:
+    """Programmatically enforce short-name references in controller states.
+    
+    Takes LLM-generated states and fixes the animations arrays to use
+    deterministic short-name to full-ID mappings. This prevents the LLM
+    from generating incorrect animation references.
+    
+    Args:
+        states: Dict of states from LLM (e.g., {"idle": {...}, "walk": {...}})
+        mob_id: Short mob name (e.g., "zombie")
+        animation_names: List of available animation short names (e.g., ["idle", "walk", "run"])
+    
+    Returns:
+        Fixed states dict with correct animations arrays
+    
+    Logic:
+        - For each state, the animations array should list the full animation IDs
+        - By convention: state "idle" animates "animation.{mob_id}.idle"
+        - Common state → animation mappings:
+          - "idle" → "animation.{mob_id}.idle"
+          - "walking" → "animation.{mob_id}.walk"  (fuzzy match)
+          - "running" → "animation.{mob_id}.run"   (fuzzy match)
+        - States without a matching animation get empty array (OK - no bone animation)
+    """
+    animation_name_set = set(animation_names)
+    
+    # Build fuzzy matching rules for common variations
+    fuzzy_mappings = {
+        "walking": "walk",
+        "running": "run",
+        "flying": "fly",
+        "swim": "swimming",
+        "swimming": "swim",
+    }
+    
+    for state_name, state_data in states.items():
+        correct_animations = []
+        
+        # Try exact match first
+        if state_name in animation_name_set:
+            # CRITICAL: Animation controller references SHORT NAMES (the keys from entity.json animations block)
+            # NOT full IDs. The entity.json mapping handles ID translation.
+            # E.g., entity.json has "idle": "animation.elephant.idle"
+            # Controller just references "idle" and the entity maps it to the full ID
+            correct_animations = [state_name]
+        # Try fuzzy match (e.g., "walking" might map to "walk" animation)
+        elif state_name in fuzzy_mappings:
+            alt_name = fuzzy_mappings[state_name]
+            if alt_name in animation_name_set:
+                correct_animations = [alt_name]  # Use the matched animation short name
+        # Try reverse fuzzy match (e.g., state "walk" from "walking" animation)
+        else:
+            for anim_name in animation_names:
+                if anim_name in fuzzy_mappings and fuzzy_mappings[anim_name] == state_name:
+                    correct_animations = [anim_name]  # Use the animation short name
+                    break
+        
+        # States without matching animation are OK - they can transition to other states
+        # but don't play a bone animation themselves
+        state_data["animations"] = correct_animations
+        
+        print(f"[WIRING] State '{state_name}': animations = {correct_animations}")
+    
+    return states
+
+
 def _extract_json_from_response(content: str) -> Optional[dict]:
     """Robustly extract JSON from LLM response content.
     
@@ -133,6 +234,104 @@ def _extract_json_from_response(content: str) -> Optional[dict]:
     # No valid JSON found
     print(f"[EXTRACT-JSON] Failed all extraction strategies on content: {content[:200]}...")
     return None
+
+
+def _normalize_animation_json(animation_json: Optional[dict], mob_name: str, bone_names: list[str] = None) -> Optional[dict]:
+    """Fix malformed animation JSON structure.
+    
+    If the LLM returns bones at the root level instead of wrapped in an
+    "animations" object, detect and fix it. This is a common failure mode.
+    
+    Args:
+        animation_json: Potentially malformed animation dict
+        mob_name: Short name of mob for animation key generation
+        bone_names: List of valid bone names (for reconstruction if needed)
+    
+    Returns:
+        Corrected animation dict, or None if it can't be salvaged
+    """
+    if not isinstance(animation_json, dict):
+        return None
+    
+    # If it already has proper structure, return as-is
+    if "format_version" in animation_json and "animations" in animation_json:
+        return animation_json
+    
+    # Detect if bones are at root level or if "rotation" is used as a bone name (common malformation)
+    root_keys = set(animation_json.keys())
+    bone_like_keys = {k for k in root_keys if k not in ("format_version", "animations", "animation_controllers")}
+    
+    # Check for "rotation" bone (indicates malformed output where bones are confused with bone properties)
+    has_rotation_as_bone = "rotation" in animation_json
+    
+    if (bone_like_keys and "animations" not in animation_json) or has_rotation_as_bone:
+        print(f"[ANIM-NORMALIZE] Detected malformed structure: bones at root level or 'rotation' as bone name")
+        print(f"[ANIM-NORMALIZE] Root keys: {root_keys}")
+        
+        # Extract format_version if present
+        format_version = animation_json.get("format_version", ANIMATION_FORMAT_VERSION)
+        
+        # Gather bones and other animation data
+        bones_data = {}
+        for key in bone_like_keys:
+            if key != "rotation":  # Skip the malformed "rotation" at root
+                bones_data[key] = animation_json[key]
+        
+        # If we have rotation at root and no real bones, it's the keyframe data
+        if has_rotation_as_bone or not bones_data:
+            rotation_data = animation_json.get("rotation", {})
+            # Create animations using all available bones or the provided list
+            available_bones = bone_names if bone_names else list(bones_data.keys()) if bones_data else ["body", "head"]
+            
+            if available_bones:
+                fixed = {
+                    "format_version": format_version,
+                    "animations": {
+                        f"animation.{mob_name}.idle": {
+                            "loop": True,
+                            "anim_time_update": "query.anim_time",
+                            "bones": {bone: {"rotation": rotation_data} for bone in available_bones if rotation_data}
+                        },
+                        f"animation.{mob_name}.walk": {
+                            "loop": True,
+                            "anim_time_update": "query.modified_distance_moved",
+                            "bones": {bone: {"rotation": rotation_data} for bone in available_bones if rotation_data}
+                        },
+                        f"animation.{mob_name}.run": {
+                            "loop": True,
+                            "anim_time_update": "query.modified_distance_moved",
+                            "bones": {bone: {"rotation": rotation_data} for bone in available_bones if rotation_data}
+                        }
+                    }
+                }
+                print(f"[ANIM-NORMALIZE] Fixed structure: created 3 animations with {len(available_bones)} bones each ({', '.join(available_bones[:3])}...)")
+                return fixed
+        else:
+            # We have multiple root-level keys that are bone names
+            fixed = {
+                "format_version": format_version,
+                "animations": {
+                    f"animation.{mob_name}.idle": {
+                        "loop": True,
+                        "anim_time_update": "query.anim_time",
+                        "bones": bones_data
+                    },
+                    f"animation.{mob_name}.walk": {
+                        "loop": True,
+                        "anim_time_update": "query.modified_distance_moved",
+                        "bones": bones_data
+                    },
+                    f"animation.{mob_name}.run": {
+                        "loop": True,
+                        "anim_time_update": "query.modified_distance_moved",
+                        "bones": bones_data
+                    }
+                }
+            }
+            print(f"[ANIM-NORMALIZE] Fixed structure: created 3 animations (idle, walk, run)")
+            return fixed
+    
+    return animation_json
 
 
 def validate_animation_format(animation_json: Optional[dict], mob_name: str) -> tuple[bool, list[str]]:
@@ -384,6 +583,219 @@ def _extract_bones_from_geometry(geometry_json: dict) -> list[str]:
     return list(dict.fromkeys(bones))  # Remove duplicates, preserve order
 
 
+def _fetch_mojang_animation_sample(mob_name: str) -> Optional[dict]:
+    """Fetch animation.json sample from Mojang's bedrock-samples GitHub repository.
+    
+    Downloads actual animation examples from:
+    https://github.com/Mojang/bedrock-samples/tree/main/resource_pack/animations
+    
+    Args:
+        mob_name: Mob name (e.g., 'chicken', 'cow', 'zombie')
+    
+    Returns:
+        Parsed animation JSON dict or None if not found
+    """
+    import urllib.request
+    import urllib.error
+    
+    base_url = "https://raw.githubusercontent.com/Mojang/bedrock-samples/main/resource_pack/animations"
+    
+    # Try common animation file names
+    candidates = [
+        f"{mob_name}.animation.json",
+        f"{mob_name}.animation_controllers.json",
+    ]
+    
+    for filename in candidates:
+        url = f"{base_url}/{filename}"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "BedrockAddonBuilder/1.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                print(f"[MOJANG-ANIM] ✓ Fetched {filename} from bedrock-samples")
+                return data
+        except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, OSError):
+            continue
+    
+    print(f"[MOJANG-ANIM] ✗ Could not fetch animation samples for '{mob_name}' from bedrock-samples")
+    return None
+
+
+def _fetch_mojang_animation_controller_sample(mob_name: str) -> Optional[dict]:
+    """Fetch animation_controllers.json sample from Mojang's bedrock-samples GitHub repository.
+    
+    Downloads actual animation controller examples from:
+    https://github.com/Mojang/bedrock-samples/tree/main/resource_pack/animation_controllers
+    
+    Args:
+        mob_name: Mob name (e.g., 'chicken', 'cow', 'zombie')
+    
+    Returns:
+        Parsed animation controller JSON dict or None if not found
+    """
+    import urllib.request
+    import urllib.error
+    
+    base_url = "https://raw.githubusercontent.com/Mojang/bedrock-samples/main/resource_pack/animation_controllers"
+    
+    candidates = [
+        f"{mob_name}.animation_controllers.json",
+    ]
+    
+    for filename in candidates:
+        url = f"{base_url}/{filename}"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "BedrockAddonBuilder/1.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                print(f"[MOJANG-CTRL] ✓ Fetched {filename} from bedrock-samples")
+                return data
+        except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, OSError):
+            continue
+    
+    print(f"[MOJANG-CTRL] ✗ Could not fetch animation controller for '{mob_name}' from bedrock-samples")
+    return None
+
+
+def _get_animation_skeleton(mob_name: str, anim_type: str, bones: list[str]) -> str:
+    """Return a pre-structured JSON skeleton for the LLM to fill in.
+    
+    Instead of asking the LLM to generate valid JSON from scratch (which leads to
+    malformed structures and invented bone names), provide a complete skeleton where
+    the LLM only needs to replace FILL_IN placeholders with Molang expressions.
+    
+    This eliminates:
+    1. Malformed bone structures (structure is already valid)
+    2. Invented bone names (all bones are pre-defined)
+    
+    Args:
+        mob_name: Mob short name (for animation IDs)
+        anim_type: 'idle', 'walk', 'run', 'fly', 'swim', 'slither', etc.
+        bones: List of valid bone names from geometry
+    
+    Returns:
+        JSON string with complete skeleton ready for LLM to fill in
+    """
+    skeleton_dict = {
+        "format_version": "1.8.0",
+        "animations": {
+            f"animation.{mob_name}.{anim_type}": {
+                "loop": True,
+                "bones": {
+                    bone: {"rotation": ["FILL_IN_X", "FILL_IN_Y", "FILL_IN_Z"]}
+                    for bone in bones
+                }
+            }
+        }
+    }
+    
+    # Only add anim_time_update for non-idle animations
+    # For idle, let Minecraft use the default query.anim_time (removes redundancy and prevents logic loops)
+    if anim_type != "idle":
+        anim_data = skeleton_dict["animations"][f"animation.{mob_name}.{anim_type}"]
+        if anim_type in ["walk", "run", "slither"]:
+            # Movement-based animations use distance moved for frame synchronization
+            anim_data["anim_time_update"] = "query.modified_distance_moved"
+        else:
+            # Other animations use time (swim, fly, float, etc.)
+            anim_data["anim_time_update"] = "query.anim_time"
+    
+    return json.dumps(skeleton_dict, indent=2)
+
+
+def _validate_animation_with_retry(
+    animation_dict: dict,
+    mob_name: str,
+    bones: list[str],
+    provider: str,
+    api_key: Optional[str],
+    max_retries: int = 3,
+) -> tuple[Optional[dict], bool]:
+    """Validate animation and retry with LLM feedback if validation fails.
+    
+    Instead of discarding generations with small validation errors, feed the
+    error messages back to the LLM and ask it to fix them. This turns 5-line
+    errors into fixable problems rather than complete failures.
+    
+    Args:
+        animation_dict: The generated animation.json as dict
+        mob_name: Name of the mob (for error messages)
+        bones: List of valid bone names
+        provider: LLM provider to use for fixes
+        api_key: API key for the provider
+        max_retries: Maximum number of validation attempts (default 3)
+    
+    Returns:
+        tuple of (validated_animation_dict or None, was_valid_on_first_try)
+    """
+    print(f"[ANIMATION-VALIDATE] Starting validation with up to {max_retries} retries")
+    
+    for attempt in range(1, max_retries + 1):
+        print(f"[ANIMATION-VALIDATE] Attempt {attempt}/{max_retries}")
+        
+        # Validate current animation
+        try:
+            validation = mcp_validate_sync(
+                content=animation_dict,
+                schema_type="animation",
+            )
+            is_valid = validation.valid if validation else False
+            errors = validation.errors if validation else []
+        except Exception as e:
+            print(f"[ANIMATION-VALIDATE] Validation exception: {e}")
+            is_valid = False
+            errors = [str(e)]
+        
+        if is_valid:
+            print(f"[ANIMATION-VALIDATE] ✓ Validation passed on attempt {attempt}")
+            return (animation_dict, attempt == 1)
+        
+        print(f"[ANIMATION-VALIDATE] ✗ Validation failed: {len(errors)} error(s)")
+        for err in errors[:3]:  # Log first 3 errors
+            print(f"[ANIMATION-VALIDATE]   - {err}")
+        
+        # If this was the last attempt, return None without retrying
+        if attempt >= max_retries:
+            print(f"[ANIMATION-VALIDATE] ✗ Max retries ({max_retries}) reached, giving up")
+            return (None, False)
+        
+        # Build fix-up prompt with current animation and errors
+        error_summary = "\n".join(f"  • {err}" for err in errors[:5])
+        
+        fix_prompt = f"""You previously generated an animation.json for '{mob_name}' that failed validation.
+
+Here are the validation errors you must fix:
+{error_summary}
+
+The current animation is:
+{json.dumps(animation_dict, indent=2)}
+
+Fix these specific errors in the animation above. Return ONLY the corrected animation.json, nothing else. 
+Keep all bones and structure intact - only fix the issues mentioned."""
+        
+        fix_system_prompt = """You are fixing a Minecraft Bedrock animation.json that has validation errors.
+Your task: Read the errors provided and fix ONLY those issues in the animation JSON.
+Do not change bone names, add/remove bones, or alter the overall structure.
+Return only valid JSON that addresses the specific errors mentioned."""
+        
+        print(f"[ANIMATION-VALIDATE] Calling LLM to fix validation errors (attempt {attempt+1})")
+        
+        # Call LLM with fix prompt
+        fixed_dict = _call_animation_provider(
+            fix_prompt, fix_system_prompt, provider, api_key
+        )
+        
+        if fixed_dict:
+            print(f"[ANIMATION-VALIDATE] LLM returned fixed animation, re-validating")
+            animation_dict = fixed_dict
+        else:
+            print(f"[ANIMATION-VALIDATE] LLM failed to return fixed animation, trying again with original")
+            # Try again with original on next iteration
+    
+    print(f"[ANIMATION-VALIDATE] Failed all {max_retries} validation attempts")
+    return (None, False)
+
+
 def _get_animation_system_prompt(
     bone_names: list[str],
     mob_name: str,
@@ -391,76 +803,126 @@ def _get_animation_system_prompt(
 ) -> str:
     """Build system prompt for animation generation with available bones."""
     
-    bones_str = ", ".join(bone_names) if bone_names else "root"
-    
-    return f"""You are an expert Minecraft Bedrock animation developer.
+    return f"""You are an expert Minecraft Bedrock animation developer with deep knowledge of Molang expressions.
 
-Generate a VALID animation.json file for the mob '{mob_name}'.
+YOUR TASK: You will receive THREE pre-structured JSON skeletons (one for idle, walk, run).
+Each skeleton is complete and valid - every bone is already defined.
+You MUST fill in the FILL_IN_X, FILL_IN_Y, FILL_IN_Z placeholders with Molang expressions.
 
-AVAILABLE BONES (from geometry '{geometry_id}'):
-{bones_str}
+⚠️  CRITICAL RULES:
+1. DO NOT add or remove any bones
+2. DO NOT change any keys or structure
+3. DO NOT use keyframe objects (timestamps)
+4. ONLY replace FILL_IN_X/Y/Z with Molang expressions or "0"
+5. Return ONLY the completed JSON, no markdown, no explanation
 
-REQUIRED FORMAT:
-{{
-  "format_version": "1.8.0",
-  "animations": {{
-    "animation.{mob_name}.walk": {{
-      "loop": true,
-      "anim_time_update": "query.modified_distance_moved",
-      "bones": {{
-        // Bone animations here - ONLY use bones from the list above
-      }}
-    }},
-    "animation.{mob_name}.idle": {{
-      "loop": true,
-      "anim_time_update": "query.time_of_day_cycle",
-      "bones": {{
-        // Subtle idle animations
-      }}
-    }}
-  }}
-}}
+═══════════════════════════════════════════════════════════
+MOLANG SINGLE-EXPRESSION FORMAT
+═══════════════════════════════════════════════════════════
 
-CRITICAL RULES:
-1. format_version MUST be "1.8.0"
-2. Animation identifiers MUST start with "animation.{mob_name}."
-3. ALL bone references MUST be from the available bones list above
-4. NEVER reference bones that don't exist
-5. Return ONLY the JSON, no extra text
-6. Include at least 2 animations: walk and idle
-7. Use standard Bedrock keyframe syntax: "rotation", "position", "scale"
+Each rotation is an array of 3 strings: [X_expression, Y_expression, Z_expression]
+Each element is either:
+  - "0" (no rotation on this axis)
+  - A Molang expression like: "math.sin(query.anim_time * 2.5) * 3"
 
-ANIMATION TECHNIQUES:
-- Walk: Rotate legs in opposite phase (leg0 rotates forward, leg1 back)
-- Idle: Subtle head bob or tail rotation (small angles)
-- Run: Faster walk cycle with more rotation
-- Fly: Continuous wing rotation with body lean"""
+MOLANG BASICS:
+- math.sin(t) = oscillates from -1 to +1
+- 57.3 = radians-to-degrees conversion factor (180/π)
+- 57.3 * 0.5 ≈ 28.65° (max ±28.65°)
+- 57.3 * 0.8 ≈ 45.84° (max ±45.84°)
+
+QUERIES:
+- query.anim_time = time counter (used for idle)
+- query.modified_distance_moved = walk distance (used for walk/run)
+
+═══════════════════════════════════════════════════════════
+ANIMATION-SPECIFIC GUIDANCE
+═══════════════════════════════════════════════════════════
+
+IDLE (query.anim_time):
+- Slow gentle oscillation (frequency 1.0-3.0, amplitude usually 0.05-0.15)
+- Head/ears: ±5-8° = math.sin(query.anim_time * 2.0) * 57.3 * 0.1
+- Tail: ±10-15° = math.sin(query.anim_time * 2.2) * 57.3 * 0.2
+- Body: ±2-3° = math.sin(query.anim_time * 1.5) * 57.3 * 0.04
+
+WALK (query.modified_distance_moved, frequency 38.17):
+- ±30-40° leg swings: math.sin(query.modified_distance_moved * 38.17) * 57.3 * 0.5
+- Opposite leg = NEGATE: -math.sin(query.modified_distance_moved * 38.17) * 57.3 * 0.5
+- Body sway: ±2-3° = math.sin(query.modified_distance_moved * 38.17) * 57.3 * 0.04
+
+RUN (query.modified_distance_moved, frequency 76.35 = 2x walk):
+- ±45-60° leg swings: math.sin(query.modified_distance_moved * 76.35) * 57.3 * 0.8
+- Opposite leg = NEGATE: -math.sin(query.modified_distance_moved * 76.35) * 57.3 * 0.8
+- Body lean: ±15-20° = math.sin(query.modified_distance_moved * 76.35) * 57.3 * 0.3
+
+═══════════════════════════════════════════════════════════
+ROTATION MAGNITUDE REFERENCE
+═══════════════════════════════════════════════════════════
+
+Format: max_degrees = 57.3 * multiplier
+
+- 57.3 * 0.03 = ±1.7°
+- 57.3 * 0.04 = ±2.3°
+- 57.3 * 0.05 = ±2.9°
+- 57.3 * 0.1 = ±5.7°
+- 57.3 * 0.15 = ±8.6°
+- 57.3 * 0.2 = ±11.5°
+- 57.3 * 0.3 = ±17.2°
+- 57.3 * 0.4 = ±22.9°
+- 57.3 * 0.5 = ±28.65° (walk leg swing)
+- 57.3 * 0.6 = ±34.4°
+- 57.3 * 0.8 = ±45.84° (run leg swing)
+
+EXAMPLES FOR REFERENCE:
+
+Idle head bob (±5°):
+  "head": {{"rotation": ["math.sin(query.anim_time * 2.0) * 57.3 * 0.08", 0, 0]}}
+
+Walk body sway (±3°):
+  "body": {{"rotation": [0, "math.sin(query.modified_distance_moved * 38.17) * 57.3 * 0.05", 0]}}
+
+Walk left leg (±30°):
+  "leg_front_left": {{"rotation": ["math.sin(query.modified_distance_moved * 38.17) * 57.3 * 0.5", 0, 0]}}
+
+Walk right leg opposite phase (±30°):
+  "leg_front_right": {{"rotation": ["-math.sin(query.modified_distance_moved * 38.17) * 57.3 * 0.5", 0, 0]}}
+
+Run body lean (±20°):
+  "body": {{"rotation": ["math.sin(query.modified_distance_moved * 76.35) * 57.3 * 0.35", 0, 0]}}
+
+═══════════════════════════════════════════════════════════
+YOUR PROCESS
+═══════════════════════════════════════════════════════════
+
+1. Read the skeleton JSON carefully
+2. Identify each bone name (these are correct - use them exactly)
+3. For each FILL_IN_X, FILL_IN_Y, FILL_IN_Z, choose:
+   - "0" if that bone doesn't rotate on that axis in this animation
+   - A Molang expression using the patterns above
+4. Replace all FILL_IN_X/Y/Z values
+5. Return ONLY the completed JSON
+6. DO NOT modify any other part of the structure"""
 
 
 def _fetch_animation_template_sync(animation_type: str) -> Optional[dict]:
-    """Fetch animation template from MCP bedrock-samples.
+    """DEPRECATED: Fetch animation template from MCP bedrock-samples.
     
-    Tries to retrieve example animations (walk, idle, fly) from
-    Mojang's bedrock-samples repository via MCP.
+    This function is no longer used for generation context.
+    We now use only GitHub/Mojang samples (Molang format) to avoid format confusion.
+    
+    Kept for backward compatibility, but animations are generated from Mojang Molang
+    examples (via _fetch_mojang_animation_sample) instead of MCP keyframe templates.
+    
+    Args:
+        animation_type: Type of animation (e.g., "walk", "idle")
+    
+    Returns:
+        dict or None (always returns None in current implementation)
     """
-    try:
-        # First try MCP context retrieval
-        from backend.llm.mcp_context import retrieve_context_sync
-        
-        context = retrieve_context_sync(
-            prompt=f"animation template for {animation_type}",
-            category="animations",
-        )
-        
-        if context and context.template_text:
-            try:
-                return json.loads(context.template_text)
-            except json.JSONDecodeError:
-                log.warning(f"MCP template for {animation_type} is not valid JSON")
-                return None
-    except Exception as e:
-        log.debug(f"MCP animation template retrieval failed: {e}")
-    
+    # This function is deprecated and no longer used for generation
+    # Animation templates are now exclusively sourced from GitHub bedrock-samples
+    # in Molang format to prevent format confusion
+    print(f"[ANIM-TEMPLATE] DEPRECATED: MCP template fetch no longer used for {animation_type}")
     return None
 
 
@@ -762,6 +1224,106 @@ def _call_animation_provider(
         return None
 
 
+def _classify_locomotion(
+    mob_name: str,
+    bones: list[str],
+    provider: Optional[str] = None,
+    api_key: Optional[str] = None,
+) -> dict:
+    """Classify mob locomotion type to determine required animation states.
+    
+    Instead of always generating idle/walk/run, ask the LLM to classify
+    the mob's movement type and return only the states that are needed.
+    
+    Args:
+        mob_name: Short name of the mob
+        bones: List of bone names from geometry
+        provider: LLM provider (openai, deepseek, gemini, claude, ollama)
+        api_key: API key for cloud providers
+    
+    Returns:
+        dict with:
+          - type: locomotion type (e.g., "quadruped", "biped", "flying", etc.)
+          - states: list of required animation states (e.g., ["idle", "walk", "run"])
+          - reasoning: brief explanation of the classification
+    
+    Example outputs:
+        {"type": "biped", "states": ["idle", "walk", "run"], "reasoning": "..."}
+        {"type": "flying", "states": ["idle", "fly"], "reasoning": "..."}
+        {"type": "aquatic", "states": ["idle", "swim"], "reasoning": "..."}
+        {"type": "stationary", "states": ["idle"], "reasoning": "..."}
+    """
+    if not provider:
+        provider = DEFAULT_LLM_PROVIDER
+    
+    bones_str = ", ".join(bones) if bones else "root"
+    
+    system_prompt = f"""You are an expert Minecraft mob animator classifying movement types.
+
+Analyze the mob '{mob_name}' with these bones: {bones_str}
+
+Classify the locomotion type and determine what animation states are needed.
+
+Return ONLY valid JSON (no markdown, no explanation):
+{{
+  "type": "quadruped|biped|flying|aquatic|slithering|stationary|...",
+  "states": ["idle", "walk", "run"],
+  "reasoning": "brief explanation"
+}}
+
+GUIDELINES:
+- type: The primary locomotion style
+- states: Only the animation types this mob actually needs
+- Examples:
+  - Quadruped (horse, wolf): ["idle", "walk", "run"]
+  - Biped (zombie, player): ["idle", "walk", "run"]
+  - Flying (parrot, phantom): ["idle", "fly"]
+  - Aquatic (fish): ["idle", "swim"]
+  - Slithering (snake): ["idle", "slither"]
+  - Stationary (block-like): ["idle"]
+  - Mixed (pegasus): ["idle", "walk", "run", "fly"]"""
+    
+    user_prompt = f"""Classify the locomotion type for mob '{mob_name}' with bones: {bones_str}
+
+Return ONLY the JSON classification."""
+    
+    print(f"[LOCOMOTION-CLASS] Classifying {mob_name} with {len(bones)} bones")
+    
+    classification_dict = _call_animation_provider(
+        user_prompt, system_prompt, provider, api_key
+    )
+    
+    if not classification_dict:
+        # Default to biped if classification fails
+        print(f"[LOCOMOTION-CLASS] ✗ Classification failed, defaulting to biped")
+        return {
+            "type": "biped",
+            "states": ["idle", "walk", "run"],
+            "reasoning": "Classification failed - using standard biped animation set as fallback",
+        }
+    
+    # Validate the classification response
+    required_keys = {"type", "states", "reasoning"}
+    if not all(key in classification_dict for key in required_keys):
+        print(f"[LOCOMOTION-CLASS] ✗ Invalid classification response: missing keys")
+        print(f"[LOCOMOTION-CLASS]   Got: {list(classification_dict.keys())}")
+        return {
+            "type": "biped",
+            "states": ["idle", "walk", "run"],
+            "reasoning": "Classification response was invalid - using standard biped as fallback",
+        }
+    
+    # Ensure states is a list
+    if not isinstance(classification_dict.get("states"), list):
+        print(f"[LOCOMOTION-CLASS] ✗ States must be a list, got: {type(classification_dict.get('states'))}")
+        classification_dict["states"] = ["idle", "walk", "run"]
+    
+    print(f"[LOCOMOTION-CLASS] ✓ Classified as '{classification_dict['type']}' with states: {classification_dict['states']}")
+    print(f"[LOCOMOTION-CLASS]   Reasoning: {classification_dict['reasoning']}")
+    
+    return classification_dict
+
+
 def llm_generate_animation(
     prompt: str,
     geometry_json: dict,
@@ -816,29 +1378,185 @@ def llm_generate_animation(
     # Build system prompt
     system_prompt = _get_animation_system_prompt(bones, mob_name, geometry_id)
     
-    # Fetch MCP templates for context enrichment
-    walk_template = _fetch_animation_template_sync("walk")
-    idle_template = _fetch_animation_template_sync("idle")
+    # Fetch Mojang animation samples from bedrock-samples repository
+    # These are REAL examples from Minecraft in Molang format
+    # We use ONLY Mojang samples to avoid format confusion (no MCP keyframe templates)
+    mojang_anim_sample = _fetch_mojang_animation_sample(mob_name) or _fetch_mojang_animation_sample("chicken")
+    mojang_ctrl_sample = _fetch_mojang_animation_controller_sample(mob_name) or _fetch_mojang_animation_controller_sample("chicken")
     
+    # Build template context using ONLY Mojang samples (Molang format)
+    # We explicitly avoid MCP keyframe templates which would create format confusion
     template_context = ""
-    if walk_template or idle_template:
-        template_context = "\nREFERENCE ANIMATIONS FROM MOJANG:\n"
-        if walk_template:
-            template_context += f"Walk example: {json.dumps(walk_template, indent=2)}\n"
-        if idle_template:
-            template_context += f"Idle example: {json.dumps(idle_template, indent=2)}\n"
+    if mojang_anim_sample or mojang_ctrl_sample:
+        template_context = "\n╔═══════════════════════════════════════════════════════════╗\n"
+        template_context += "║  OFFICIAL MOJANG ANIMATION SAMPLES (Molang Format)          ║\n"
+        template_context += "║  Source: github.com/Mojang/bedrock-samples                  ║\n"
+        template_context += "╚═══════════════════════════════════════════════════════════╝\n"
+        
+        if mojang_anim_sample:
+            template_context += f"\n📋 REAL animation.json from {mob_name} (or chicken as fallback):\n"
+            template_context += "Format: Molang expressions (NOT keyframes)\n"
+            # Show just the first animation as an example
+            anims = mojang_anim_sample.get("animations", {})
+            first_anim = next(iter(anims.items())) if anims else None
+            if first_anim:
+                anim_name, anim_data = first_anim
+                template_context += f"\nExample animation (Molang single-expression format):\n"
+                template_context += f'{json.dumps(anim_data, indent=2)[:1200]}...\n'
+            else:
+                template_context += json.dumps(mojang_anim_sample, indent=2)[:1500] + "...\n"
+        
+        if mojang_ctrl_sample:
+            template_context += f"\n🎬 REAL animation_controllers.json state transitions:\n"
+            ctrls = mojang_ctrl_sample.get("animation_controllers", {})
+            first_ctrl = next(iter(ctrls.items())) if ctrls else None
+            if first_ctrl:
+                ctrl_name, ctrl_data = first_ctrl
+                template_context += f'{json.dumps(ctrl_data, indent=2)[:1200]}...\n'
+            else:
+                template_context += json.dumps(mojang_ctrl_sample, indent=2)[:1500] + "...\n"
+        
+        template_context += "\n⚠️  Use Molang expressions EXACTLY as shown in the samples above.\n"
     
-    # Build user prompt
-    full_prompt = f"""{prompt}
-
-Current mob bones: {', '.join(bones) if bones else 'root'}
-Geometry: {geometry_id}
-
-{template_context}
-
-Generate a complete, valid animation.json with proper bone references."""
+    # Classify locomotion type to determine which animation states are needed
+    print(f"[ANIMATION-GEN] Classifying locomotion type for {mob_name}")
+    locomotion = _classify_locomotion(mob_name, bones, provider, api_key)
+    animation_states = locomotion.get("states", ["idle", "walk", "run"])
+    locomotion_type = locomotion.get("type", "biped")
     
-    print(f"[ANIMATION-GEN] Calling provider: {provider}")
+    print(f"[ANIMATION-GEN] Locomotion type: {locomotion_type}")
+    print(f"[ANIMATION-GEN] Required animation states: {animation_states}")
+    
+    # Build animation skeletons ONLY for the required states (pre-structured JSON for LLM to fill in)
+    skeletons = {}
+    for state in animation_states:
+        skeletons[state] = _get_animation_skeleton(mob_name, state, bones)
+        print(f"[ANIMATION-GEN] Generated skeleton for state: {state}")
+    
+    # Build user prompt that tells LLM to fill in the skeletons
+    skeleton_sections = ""
+    for state in animation_states:
+        skeleton_sections += f"""
+═══════════════════════════════════════════════════════════
+{state.upper()} SKELETON:
+═══════════════════════════════════════════════════════════
+{skeletons[state]}
+"""
+    
+    full_prompt = f"""Complete these animation skeletons for mob '{mob_name}' (type: {locomotion_type}).
+
+Bones available: {', '.join(bones) if bones else 'root'}
+Required states: {', '.join(animation_states)}
+
+Each skeleton below is already valid and complete - all bones are pre-defined.
+Your task: Replace each FILL_IN_X, FILL_IN_Y, FILL_IN_Z with either:
+  - "0" (no rotation on that axis)
+  - A Molang expression (e.g., "math.sin(query.anim_time * 2.0) * 57.3 * 0.1")
+
+DO NOT:
+  - Add or remove any bones
+  - Change any keys or structure
+  - Use keyframe objects (timestamps)
+
+{skeleton_sections}
+═══════════════════════════════════════════════════════════
+CRITICAL BONE ANIMATION RULES FOR THIS MOB:
+═══════════════════════════════════════════════════════════
+Locomotion Type: {locomotion_type.upper()}
+Required Animation States: {', '.join(animation_states)}
+
+⚠️  BONE ANIMATION REQUIREMENTS:
+- For MOVEMENT states (walk, run, slither): Leg/locomotion bones MUST have Molang motion math
+- For IDLE state: Legs typically stay "0", only breathing/idle motion
+- For FLIGHT (fly): Wing bones MUST have flapping motion, legs can be "0"
+- For WATER (swim): Body/tail bones MUST wave, legs can be "0"
+
+Match bone types to your mob:
+- leg_*, limb_*, hind_* → Movement bones (must animate in walk/run)
+- wing_*, arm_* → Appendage bones (animate for flying/arm swinging)
+- body, spine, torso → Core bones (sway/lean in movement)
+- tail, fin_* → Balance bones (oscillate or wave)
+- head, jaw, ear_* → Detail bones (optional mini-animations)
+
+═══════════════════════════════════════════════════════════
+GUIDANCE FOR FILLING IN VALUES:
+═══════════════════════════════════════════════════════════
+
+{template_context}"""
+    
+    # Build animation-specific guidance based on the actual states needed
+    animation_guidance = "\nANIMATION PATTERNS TO FOLLOW:\n\n"
+    
+    for state in animation_states:
+        if state == "idle":
+            animation_guidance += """IDLE (use query.anim_time, slow cycles):
+  - Head bob: math.sin(query.anim_time * 2.0) * 57.3 * 0.08 (≈±5°)
+  - Tail: math.sin(query.anim_time * 2.2) * 57.3 * 0.2 (≈±11°)
+  - Body: math.sin(query.anim_time * 1.5) * 57.3 * 0.04 (≈±2°)
+  - ⚠️  LEGS should be "0" for idle (no motion)
+
+"""
+        elif state == "walk":
+            animation_guidance += """WALK (use query.modified_distance_moved * 38.17):
+  - ALL LEG BONES MUST HAVE ROTATION (do not leave them as "0")
+  - Left leg bones: math.sin(query.modified_distance_moved * 38.17) * 57.3 * 0.5 (≈±29°)
+  - Right leg bones (opposite phase): -math.sin(query.modified_distance_moved * 38.17) * 57.3 * 0.5
+  - Body sway: math.sin(query.modified_distance_moved * 38.17) * 57.3 * 0.04 (≈±2°)
+  - ⚠️  CRITICAL: If the mob has leg bones (leg_*, limb_*, hind_*, etc.), they MUST have motion math
+  - ⚠️  Set bones to "0" ONLY if they don't affect locomotion (e.g., tail, head in some cases)
+
+"""
+        elif state == "run":
+            animation_guidance += """RUN (use query.modified_distance_moved * 76.35 = 2x walk frequency):
+  - ALL LEG BONES MUST HAVE ROTATION (do not leave them as "0")
+  - Left leg bones: math.sin(query.modified_distance_moved * 76.35) * 57.3 * 0.8 (≈±46°)
+  - Right leg bones (opposite phase): -math.sin(query.modified_distance_moved * 76.35) * 57.3 * 0.8
+  - Body lean: math.sin(query.modified_distance_moved * 76.35) * 57.3 * 0.3 (≈±17°)
+  - ⚠️  CRITICAL: Legs must animate faster than walk (76.35 vs 38.17) to match sprint speed
+  - ⚠️  Set bones to "0" ONLY if they don't affect locomotion
+
+"""
+        elif state == "fly":
+            animation_guidance += """FLY (use query.anim_time or query.ground_speed):
+  - WING BONES MUST HAVE ROTATION (all wing_* bones need motion)
+  - Wing flap: math.sin(query.anim_time * 4.0) * 57.3 * 0.8 (fast flapping, ≈±45°)
+  - Body tilt: math.sin(query.anim_time * 2.0) * 57.3 * 0.2 (gentle banking, ≈±11°)
+  - Tail: math.sin(query.anim_time * 2.5) * 57.3 * 0.3 (±17° balance)
+  - ⚠️  CRITICAL: Wings must flap for flight to look convincing
+  - ⚠️  Legs can be "0" (not used in flight)
+
+"""
+        elif state == "swim":
+            animation_guidance += """SWIM (use query.anim_time or query.ground_speed):
+  - BODY WAVE MOTION REQUIRED (all body segments need serpentine movement)
+  - Body wave: math.sin(query.anim_time * 3.0) * 57.3 * 0.5 (serpentine motion, ≈±29°)
+  - Tail swish: math.sin(query.anim_time * 3.5) * 57.3 * 0.6 (±34°)
+  - Fins: math.sin(query.anim_time * 2.5) * 57.3 * 0.4 (±23° balance)
+  - ⚠️  CRITICAL: Body and tail must move for swimming animation
+  - ⚠️  Legs can be "0" (fins/tail do the swimming)
+
+"""
+        elif state == "slither":
+            animation_guidance += """SLITHER (use query.modified_distance_moved * 30):
+  - Body wave: math.sin(query.modified_distance_moved * 30) * 57.3 * 0.4 (lateral undulation, ≈±23°)
+  - Head lead: math.sin(query.modified_distance_moved * 30 - 1) * 57.3 * 0.3 (±17°, offset phase)
+
+"""
+        # For other states, just mention they should use appropriate timing
+        elif state not in ["idle", "walk", "run", "fly", "swim", "slither"]:
+            animation_guidance += f"""{state.upper()} (use appropriate query timing):
+  - Refer to the Mojang samples for reference patterns
+  - Use query.anim_time for idle-like looping states
+  - Use query.modified_distance_moved for movement-based states
+
+"""
+    
+    full_prompt += animation_guidance
+    full_prompt += f"""
+Return ONLY the {len(animation_states)} completed JSON objects combined into one animation.json, nothing else."""
+    
+    print(f"[ANIMATION-GEN] Calling provider with skeleton templates")
+
     # Call LLM
     animation_dict = _call_animation_provider(
         full_prompt, system_prompt, provider, api_key
@@ -859,22 +1577,58 @@ Generate a complete, valid animation.json with proper bone references."""
             "error": "LLM failed to generate animation",
         }
     
-    # Validate via MCP
-    print(f"[ANIMATION-GEN] Validating animation via MCP")
-    mcp_valid = False
-    try:
-        validation = mcp_validate_sync(
-            content=animation_dict,
-            schema_type="animation",
-        )
-        mcp_valid = validation.valid if validation else False
-        print(f"[ANIMATION-GEN] MCP validation result: {mcp_valid}")
-    except Exception as e:
-        print(f"[ANIMATION-GEN] MCP validation exception: {e}")
-        log.warning(f"MCP animation validation failed: {e}")
+    # With skeleton templates, malformed structures should be extremely rare
+    # But keep normalization as fallback in case LLM majorly deviates
+    print(f"[ANIMATION-GEN] Checking animation structure (skeletons should make this unnecessary)")
+    animation_dict = _normalize_animation_json(animation_dict, mob_name, bone_names=bones)
+    if not animation_dict:
+        print(f"[ANIMATION-GEN] ⚠️  Structure was severely malformed despite skeleton template")
+        return {
+            "animation": None,
+            "mcp_verified": False,
+            "bone_count": len(bones),
+            "provider": provider,
+            "error": "Failed to normalize animation structure",
+        }
+    
+    # Post-validation: As a final safety check, verify no "rotation" bone names exist
+    # (with skeletons this should never happen)
+    print(f"[ANIMATION-GEN] Final validation: Checking for 'rotation' as bone name (should not occur with skeletons)")
+    if "animations" in animation_dict:
+        for anim_name, anim_data in animation_dict.get("animations", {}).items():
+            if isinstance(anim_data, dict) and "bones" in anim_data:
+                anim_bones = anim_data["bones"]
+                # Check if ONLY bone name is "rotation" (should not happen with skeletons)
+                if set(anim_bones.keys()) == {"rotation"}:
+                    print(f"[ANIMATION-GEN] ⚠️  UNEXPECTED: animation '{anim_name}' still has 'rotation' as bone name")
+                    rotation_expr = anim_bones["rotation"]
+                    # Replace with actual bone names, keeping the Molang expression
+                    fixed_bones = {}
+                    for bone_name in bones if bones else ["body", "head"]:
+                        fixed_bones[bone_name] = {"rotation": rotation_expr}
+                    anim_data["bones"] = fixed_bones
+                    print(f"[ANIMATION-GEN] ✓ FIXED: Replaced 'rotation' bone name with actual bones: {list(fixed_bones.keys())}")
+    
+    # Validate via MCP with automatic retry on validation errors
+    print(f"[ANIMATION-GEN] Validating animation via MCP (with retry loop)")
+    validated_animation, was_first_try_valid = _validate_animation_with_retry(
+        animation_dict,
+        mob_name=mob_name,
+        bones=bones,
+        provider=provider,
+        api_key=api_key,
+        max_retries=3,
+    )
+    
+    mcp_valid = validated_animation is not None
+    if validated_animation:
+        animation_dict = validated_animation
+        print(f"[ANIMATION-GEN] ✓ MCP validation passed (first try: {was_first_try_valid})")
+    else:
+        print(f"[ANIMATION-GEN] ✗ MCP validation failed after retries, will return null animation")
     
     # Ensure format_version
-    if "format_version" not in animation_dict:
+    if animation_dict and "format_version" not in animation_dict:
         animation_dict["format_version"] = ANIMATION_FORMAT_VERSION
         print(f"[ANIMATION-GEN] Added missing format_version: {ANIMATION_FORMAT_VERSION}")
     
@@ -890,6 +1644,220 @@ Generate a complete, valid animation.json with proper bone references."""
     print(f"[ANIMATION-GEN] === END llm_generate_animation ===")
     print(f"[ANIMATION-GEN] Final result: {json.dumps(final_result, indent=2, default=str)[:1000]}")
     return final_result
+
+
+def validate_physics_animation_sync(
+    animation_json: dict,
+    animation_controller_json: dict,
+    mob_name: str,
+) -> dict:
+    """Validate that physics and animation are properly synced.
+    
+    Checks for two failure modes:
+    1. LOGIC FAILURE: Controller transitions never trigger (wrong state names, missing transitions)
+    2. VISUAL FAILURE: Controller switches states but animations don't move bones
+    
+    Returns:
+        {
+            "is_synced": bool,
+            "issues": list[str],
+            "warnings": list[str],
+            "logic_failure_risk": bool,
+            "visual_failure_risk": bool,
+            "summary": str
+        }
+    """
+    issues = []
+    warnings = []
+    logic_failure_risk = False
+    visual_failure_risk = False
+    
+    if not animation_json or not animation_controller_json:
+        return {
+            "is_synced": False,
+            "issues": ["Missing animation.json or animation_controller.json"],
+            "warnings": [],
+            "logic_failure_risk": True,
+            "visual_failure_risk": False,
+            "summary": "Cannot validate - missing animation files"
+        }
+    
+    # ───────────────────────────────────────────────────────────────────
+    # LOGIC FAILURE CHECK: Controller state transitions must match animation names
+    # ───────────────────────────────────────────────────────────────────
+    print(f"\n[VALIDATE-SYNC] Checking {mob_name} for physics-animation sync issues...")
+    
+    # Get animation names from animation.json
+    anim_names = set(animation_json.get("animations", {}).keys())
+    if not anim_names:
+        issues.append("animation.json has no animations defined")
+        logic_failure_risk = True
+    else:
+        print(f"[VALIDATE-SYNC] Found animations: {anim_names}")
+    
+    # Extract state names and their transitions from controller
+    controllers = animation_controller_json.get("animation_controllers", {})
+    for ctrl_name, ctrl_data in controllers.items():
+        print(f"[VALIDATE-SYNC] Checking controller: {ctrl_name}")
+        
+        states = ctrl_data.get("states", {})
+        if not states:
+            issues.append(f"{ctrl_name}: No states defined")
+            logic_failure_risk = True
+            continue
+        
+        # Check 1: All animations referenced in states must exist
+        for state_name, state_data in states.items():
+            state_anims = state_data.get("animations", [])
+            if not state_anims:
+                warnings.append(f"State '{state_name}' has no animations (OK if it's a transition-only state)")
+                continue
+            
+            for anim_ref in state_anims:
+                # anim_ref should be a SHORT NAME (e.g., "idle", "walk", "run")
+                # NOT a full ID (e.g., "animation.mob.idle")
+                
+                # Find the full ID that matches this short name
+                full_id = f"animation.{mob_name}.{anim_ref}"
+                
+                if full_id not in anim_names:
+                    # If the full ID doesn't exist, check if it's just the short name
+                    if anim_ref in anim_names:
+                        warnings.append(f"State '{state_name}' references '{anim_ref}' (short name), but should reference full ID '{full_id}'")
+                    else:
+                        issues.append(f"State '{state_name}' references animation '{anim_ref}', but it doesn't exist in animation.json")
+                        issues.append(f"  Available animations: {anim_names}")
+                        logic_failure_risk = True
+        
+        # Check 2: Critical transitions for movement must exist
+        has_idle = "idle" in states
+        has_walk = "walk" in states
+        has_run = "run" in states
+        
+        if not has_idle:
+            warnings.append(f"{ctrl_name}: No 'idle' state (mob might not stand still)")
+        
+        if has_walk or has_run:
+            # Check that movement states have transitions back to idle
+            if has_walk:
+                walk_transitions = states["walk"].get("transitions", [])
+                has_return = any("idle" in str(t) for t in walk_transitions)
+                if not has_return:
+                    warnings.append("'walk' state has no transition back to idle")
+            
+            if has_run:
+                run_transitions = states["run"].get("transitions", [])
+                has_return = any("idle" in str(t) for t in run_transitions)
+                if not has_return:
+                    warnings.append("'run' state has no transition back to idle")
+        
+        # Check 3: Verify critical query syntax in transitions
+        for state_name, state_data in states.items():
+            transitions = state_data.get("transitions", [])
+            for transition in transitions:
+                if isinstance(transition, dict):
+                    for target_state, condition in transition.items():
+                        # Check if condition looks valid
+                        if "query" not in str(condition):
+                            if target_state != "idle":  # Transitioning without query might be OK for fallback
+                                warnings.append(f"Transition from '{state_name}' to '{target_state}' has no query condition: {condition}")
+    
+    # ───────────────────────────────────────────────────────────────────
+    # VISUAL FAILURE CHECK: Animations must actually move bones
+    # ───────────────────────────────────────────────────────────────────
+    print(f"[VALIDATE-SYNC] Checking animation bones for motion...")
+    
+    for anim_name, anim_data in animation_json.get("animations", {}).items():
+        bones = anim_data.get("bones", {})
+        if not bones:
+            warnings.append(f"Animation '{anim_name}' has no bones (does it rely on loop-only timing?)")
+            continue
+        
+        # For movement animations (walk, run), all bones should have some rotation
+        is_movement_anim = any(move_type in anim_name.lower() for move_type in ["walk", "run", "slither"])
+        
+        if is_movement_anim:
+            static_bones = []
+            for bone_name, bone_data in bones.items():
+                rotation = bone_data.get("rotation", [0, 0, 0])
+                
+                # Check if rotation is static (all zeros or all strings "0")
+                is_static = (
+                    rotation == [0, 0, 0] or
+                    rotation == ["0", "0", "0"] or
+                    all(str(r) == "0" for r in rotation)
+                )
+                
+                if is_static:
+                    static_bones.append(bone_name)
+            
+            if static_bones:
+                # For walk/run, at least SOME bones should move (legs, body)
+                # Check if static bones are just decorative (head, tail, ears)
+                decorative = {"head", "ear", "tail", "jaw", "snout", "fin"}
+                static_non_decorative = [
+                    b for b in static_bones 
+                    if not any(d in b.lower() for d in decorative)
+                ]
+                
+                if static_non_decorative:
+                    issues.append(f"Movement animation '{anim_name}' has static leg/body bones: {static_non_decorative}")
+                    visual_failure_risk = True
+                elif len(static_bones) > len(bones) * 0.5:  # More than 50% static
+                    warnings.append(f"Movement animation '{anim_name}' is mostly static bones: {static_bones}")
+                    visual_failure_risk = True
+        
+        else:  # Idle animation
+            # For idle, it's OK to have mostly static bones
+            motion_bones = []
+            for bone_name, bone_data in bones.items():
+                rotation = bone_data.get("rotation", [0, 0, 0])
+                is_static = (
+                    rotation == [0, 0, 0] or
+                    rotation == ["0", "0", "0"] or
+                    all(str(r) == "0" for r in rotation)
+                )
+                if not is_static:
+                    motion_bones.append(bone_name)
+            
+            if not motion_bones:
+                warnings.append(f"Idle animation '{anim_name}' has no motion (completely static - OK if intentional)")
+    
+    # ───────────────────────────────────────────────────────────────────
+    # FINAL ASSESSMENT
+    # ───────────────────────────────────────────────────────────────────
+    is_synced = len(issues) == 0
+    
+    summary = ""
+    if logic_failure_risk and visual_failure_risk:
+        summary = "🔴 CRITICAL: Both logic and visual failures detected - mob will definitely glide"
+    elif logic_failure_risk:
+        summary = "🔴 CRITICAL: Logic failure detected - animation controller won't transition to walk/run (will stay idle)"
+    elif visual_failure_risk:
+        summary = "🟡 WARNING: Visual failure detected - controller switches states but legs don't move (gliding effect)"
+    elif warnings:
+        summary = "🟢 OK with warnings - should work but check warnings for edge cases"
+    else:
+        summary = "✅ PASS - Physics and animation should be properly synced"
+    
+    print(f"[VALIDATE-SYNC] {summary}")
+    if issues:
+        print(f"[VALIDATE-SYNC] Issues ({len(issues)}):")
+        for issue in issues:
+            print(f"  - {issue}")
+    if warnings:
+        print(f"[VALIDATE-SYNC] Warnings ({len(warnings)}):")
+        for warning in warnings:
+            print(f"  ⚠️  {warning}")
+    
+    return {
+        "is_synced": is_synced,
+        "issues": issues,
+        "warnings": warnings,
+        "logic_failure_risk": logic_failure_risk,
+        "visual_failure_risk": visual_failure_risk,
+        "summary": summary
+    }
 
 
 def batch_generate_animations(

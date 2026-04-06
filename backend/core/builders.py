@@ -266,8 +266,9 @@ def patch_resource_pack(res_root: Path, specs: list[dict], textures_dir: Path = 
 
     # Use built-in render controllers (controller.render.default, etc.) to avoid pack load order issues.
     # We DO NOT create custom render_controllers.json files—that would cause race conditions.
-    # Instead, animations are linked via behavior pack (minecraft:animation.controller),
-    # keeping animation state management server-side and decoupled from rendering.
+    # Animation controllers are wired in the RESOURCE PACK entity's scripts block.
+    # The scripts block activates animation_controllers.json which drives bone animations client-side.
+    # The behavior pack entity has NO animation.controller component—it's for server-side logic only.
 
     first_png = None
 
@@ -290,7 +291,7 @@ def patch_resource_pack(res_root: Path, specs: list[dict], textures_dir: Path = 
             # Ensure the geometry has a unique identifier based on the mob name.
             # Keep only the first geometry entry to avoid identifier conflicts
             # (some Mojang files contain multiple versions of the same geometry).
-            unique_geo_id = f"geometry.{spec['short_name']}.custom"
+            unique_geo_id = f"geometry.{spec['short_name']}"
             try:
                 custom_geo["minecraft:geometry"] = [custom_geo["minecraft:geometry"][0]]
                 geo_desc = custom_geo["minecraft:geometry"][0]["description"]
@@ -324,7 +325,7 @@ def patch_resource_pack(res_root: Path, specs: list[dict], textures_dir: Path = 
             if vanilla_geo:
                 import copy
                 vanilla_geo = copy.deepcopy(vanilla_geo)
-                unique_geo_id = f"geometry.{spec['short_name']}.custom"
+                unique_geo_id = f"geometry.{spec['short_name']}"
                 try:
                     # Use only the first geometry entry and rename its identifier
                     vanilla_geo["minecraft:geometry"] = [vanilla_geo["minecraft:geometry"][0]]
@@ -414,6 +415,14 @@ def patch_resource_pack(res_root: Path, specs: list[dict], textures_dir: Path = 
 
 
         scale = float(spec.get("scale", 1.0))
+        mob_short = spec['short_name']
+        
+        # Get animation controller ID from spec (set by routes.py when generating)
+        # Fall back to deriving it from mob_short if not explicitly set
+        animation_controller = spec.get("animation_controller") or f"controller.animation.{mob_short}"
+        print(f"[BUILD] Using animation_controller for {mob_short}: {animation_controller}")
+        print(f"[BUILD]   (from spec: {spec.get('animation_controller')}, or derived: controller.animation.{mob_short})")
+        
         client = {
             "format_version": "1.20.0",
             "minecraft:client_entity": {
@@ -430,9 +439,46 @@ def patch_resource_pack(res_root: Path, specs: list[dict], textures_dir: Path = 
                 }
             }
         }
-        if abs(scale - 1.0) > 1e-6:
-            client["minecraft:client_entity"]["description"]["scale"] = scale
+        
+        # NOTE: Do NOT add scale to entity.json - it causes rendering issues in Minecraft
+        # Scale should only be in the geometry description, not the entity description
+        
+        # ALWAYS add scripts block with the current mob's animation controller
+        # This tells the game to use the animation controller for bone animations
+        shortname_controller = f"{mob_short}_controller"
+        client["minecraft:client_entity"]["description"]["scripts"] = {
+            "animate": [shortname_controller]
+        }
+        
+        # Build animations block programmatically using deterministic short-name wiring
+        from backend.llm.animation_generation import _build_entity_animations_block
+        
+        animation_json = spec.get("animation_json")
+        animation_short_names = []
+        if animation_json and isinstance(animation_json, dict) and "animations" in animation_json:
+            # Extract short names from full animation IDs (e.g., "animation.mob.idle" → "idle")
+            for full_id in animation_json["animations"].keys():
+                # Format: "animation.{mob_name}.{shortname}"
+                if full_id.startswith("animation."):
+                    parts = full_id.split(".")
+                    if len(parts) >= 3:
+                        short_name = ".".join(parts[2:])  # Handle cases like "animation.mob.type.idle"
+                        animation_short_names.append(short_name)
+        
+        # Use deterministic, code-based wiring instead of LLM-generated values
+        animations_block = _build_entity_animations_block(mob_short, animation_short_names)
+        client["minecraft:client_entity"]["description"]["animations"] = animations_block
+        print(f"[BUILD] ✓ Added scripts/animations block for {mob_short} with {len(animation_short_names)} animations")
+        
+        # Write entity file
         _write_text(client_file, json.dumps(client, indent=2))
+        
+        # Verify scripts block was written with correct mob name
+        written_content = client_file.read_text()
+        if f'controller.animation.{mob_short}' in written_content:
+            print(f"[BUILD] ✓✓ VERIFIED: scripts block is in {client_file.name} with controller: controller.animation.{mob_short}")
+        else:
+            print(f"[BUILD] ✗✗ ERROR: scripts block NOT correct in {client_file.name}! Expected controller.animation.{mob_short}")
 
         # Write animation files if they exist in spec
         animation_json = spec.get("animation_json")
@@ -658,34 +704,15 @@ def patch_behavior_pack(beh_root: Path, specs: list[dict]):
 
         comps = entity["minecraft:entity"]["components"]
 
-        # Add animation controller if animations exist in spec
-        animation_controller_id = spec.get("animation_controller")
-        if animation_controller_id:
-            comps["minecraft:animation.controller"] = {
-                "controllers": [animation_controller_id]
-            }
+        # Animation controllers for bone rendering belong in the RESOURCE PACK entity's scripts block,
+        # not the behavior pack. The BP entity does not control visual animations.
+        # Visual animation state is driven by the RP's "scripts" block which references
+        # the animation controller from animation_controllers.json in the resource pack.
 
-        # Write animation.json and animation_controllers.json files from spec
-        mob_name = spec["identifier"].split(":")[-1]
-        mob_short = spec["short_name"]
-        
-        # Write animation.json if present in spec
-        animation_json = spec.get("animation_json")
-        if animation_json and isinstance(animation_json, dict) and animation_json.get("animations"):
-            anim_dir = beh_root / "animations"
-            anim_dir.mkdir(parents=True, exist_ok=True)
-            anim_file = anim_dir / f"{mob_short}.json"
-            _write_text(anim_file, json.dumps(animation_json, indent=2))
-            print(f"[BUILD] Created animation file: animations/{mob_short}.json")
-        
-        # Write animation_controllers.json if present in spec
-        animation_controller_json = spec.get("animation_controller_json")
-        if animation_controller_json and isinstance(animation_controller_json, dict) and animation_controller_json.get("animation_controllers"):
-            ac_dir = beh_root / "animation_controllers"
-            ac_dir.mkdir(parents=True, exist_ok=True)
-            ac_file = ac_dir / f"{mob_short}.json"
-            _write_text(ac_file, json.dumps(animation_controller_json, indent=2))
-            print(f"[BUILD] Created animation controller file: animation_controllers/{mob_short}.json")
+        # Animation controllers should ONLY be in the resource pack, not the behavior pack.
+        # Animation controllers are used for rendering bone animations, which is a client-side concern.
+        # Writing them to the behavior pack causes unnecessary duplication and potential conflicts.
+        # The resource pack handles all animation controller logic via the RP entity's "scripts" block.
 
         # If mob has ranged attack (shooter), remove melee_attack so it
         # actually fires projectiles instead of always running up to melee.

@@ -37,6 +37,42 @@ log = logging.getLogger(__name__)
 AC_FORMAT_VERSION = "1.8.0"
 
 
+def _fetch_mojang_animation_controller_sample(mob_name: str) -> Optional[dict]:
+    """Fetch animation_controllers.json sample from Mojang's bedrock-samples GitHub repository.
+    
+    Downloads actual animation controller examples from:
+    https://github.com/Mojang/bedrock-samples/tree/main/resource_pack/animation_controllers
+    
+    Args:
+        mob_name: Mob name (e.g., 'chicken', 'cow', 'zombie')
+    
+    Returns:
+        Parsed animation controller JSON dict or None if not found
+    """
+    import urllib.request
+    import urllib.error
+    
+    base_url = "https://raw.githubusercontent.com/Mojang/bedrock-samples/main/resource_pack/animation_controllers"
+    
+    candidates = [
+        f"{mob_name}.animation_controllers.json",
+    ]
+    
+    for filename in candidates:
+        url = f"{base_url}/{filename}"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "BedrockAddonBuilder/1.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                print(f"[MOJANG-CTRL] ✓ Fetched {filename} from bedrock-samples")
+                return data
+        except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, OSError):
+            continue
+    
+    print(f"[MOJANG-CTRL] ✗ Could not fetch animation controller for '{mob_name}' from bedrock-samples")
+    return None
+
+
 def _extract_json_from_response(content: str) -> Optional[dict]:
     """Robustly extract JSON from LLM response content.
     
@@ -145,6 +181,10 @@ Generate a VALID animation_controllers.json file for the mob '{mob_name}'.
 
 AVAILABLE ANIMATIONS:
 {animations_str}
+
+⚠️  CRITICAL NOTICE: The "animations" arrays in your states will be overwritten by code 
+to ensure correct short-name to full-ID mappings. YOU DO NOT NEED TO GET THEM PERFECT.
+Focus on: state names, transitions, and conditions.
 
 REQUIRED FORMAT:
 {{
@@ -398,6 +438,93 @@ def _call_ac_ollama(
         return None
 
 
+def _validate_animation_controller_with_retry(
+    ac_dict: dict,
+    mob_name: str,
+    provider: str,
+    api_key: Optional[str],
+    max_retries: int = 3,
+) -> tuple[Optional[dict], bool]:
+    """Validate animation controller and retry with LLM feedback if validation fails.
+    
+    Similar to animation validation, feed validation errors back to the LLM to
+    fix small issues rather than discarding the whole generation.
+    
+    Args:
+        ac_dict: The generated animation_controllers.json as dict
+        mob_name: Name of the mob
+        provider: LLM provider to use for fixes
+        api_key: API key for the provider
+        max_retries: Maximum number of validation attempts (default 3)
+    
+    Returns:
+        tuple of (validated_ac_dict or None, was_valid_on_first_try)
+    """
+    print(f"[AC-VALIDATE] Starting validation with up to {max_retries} retries")
+    
+    for attempt in range(1, max_retries + 1):
+        print(f"[AC-VALIDATE] Attempt {attempt}/{max_retries}")
+        
+        # Validate current animation controller
+        try:
+            validation = mcp_validate_sync(
+                content=ac_dict,
+                schema_type="animation_controller",
+            )
+            is_valid = validation.valid if validation else False
+            errors = validation.errors if validation else []
+        except Exception as e:
+            print(f"[AC-VALIDATE] Validation exception: {e}")
+            is_valid = False
+            errors = [str(e)]
+        
+        if is_valid:
+            print(f"[AC-VALIDATE] ✓ Validation passed on attempt {attempt}")
+            return (ac_dict, attempt == 1)
+        
+        print(f"[AC-VALIDATE] ✗ Validation failed: {len(errors)} error(s)")
+        for err in errors[:3]:
+            print(f"[AC-VALIDATE]   - {err}")
+        
+        # If this was the last attempt, return None
+        if attempt >= max_retries:
+            print(f"[AC-VALIDATE] ✗ Max retries ({max_retries}) reached, giving up")
+            return (None, False)
+        
+        # Build fix-up prompt
+        error_summary = "\n".join(f"  • {err}" for err in errors[:5])
+        
+        fix_prompt = f"""You previously generated an animation_controllers.json for '{mob_name}' that failed validation.
+
+Validation errors:
+{error_summary}
+
+Current animation controller:
+{json.dumps(ac_dict, indent=2)}
+
+Fix ONLY the specific errors mentioned above. Keep state structure intact.
+Return only the corrected animation_controllers.json, nothing else."""
+        
+        fix_system_prompt = """You are fixing a Minecraft Bedrock animation_controllers.json with validation errors.
+Read the errors and fix ONLY those issues. Do not change state structure or transitions.
+Return only valid JSON addressing the specific errors."""
+        
+        print(f"[AC-VALIDATE] Calling LLM to fix validation errors (attempt {attempt+1})")
+        
+        fixed_dict = _call_ac_provider(
+            fix_prompt, fix_system_prompt, provider, api_key
+        )
+        
+        if fixed_dict:
+            print(f"[AC-VALIDATE] LLM returned fixed controller, re-validating")
+            ac_dict = fixed_dict
+        else:
+            print(f"[AC-VALIDATE] LLM failed to return fixed controller, trying again")
+    
+    print(f"[AC-VALIDATE] Failed all {max_retries} validation attempts")
+    return (None, False)
+
+
 def _call_ac_provider(
     prompt: str,
     system_prompt: str,
@@ -501,19 +628,51 @@ def llm_generate_animation_controller(
     # Build system prompt with available animations
     system_prompt = _get_ac_system_prompt(animation_json, mob_name)
     
+    # Fetch Mojang animation controller sample from bedrock-samples
+    mojang_ctrl_sample = _fetch_mojang_animation_controller_sample(mob_name) or _fetch_mojang_animation_controller_sample("chicken")
+    
     # Extract animation names for prompt context
     animation_names = list(animation_json.get("animations", {}).keys())
+    
+    # Build template context with Mojang samples
+    template_context = ""
+    if mojang_ctrl_sample:
+        template_context = "\n╔═══════════════════════════════════════════════════════════╗\n"
+        template_context += "║  OFFICIAL MOJANG CONTROLLER SAMPLE FROM BEDROCK-SAMPLES    ║\n"
+        template_context += "╚═══════════════════════════════════════════════════════════╝\n"
+        
+        ctrls = mojang_ctrl_sample.get("animation_controllers", {})
+        first_ctrl = next(iter(ctrls.items())) if ctrls else None
+        if first_ctrl:
+            ctrl_name, ctrl_data = first_ctrl
+            template_context += f"\n🎬 Example controller structure (from Mojang bedrock-samples):\n"
+            template_context += f'{{"  "{ctrl_name}": {json.dumps(ctrl_data, indent=2)[:1500]}...\n\n'
+        else:
+            template_context += json.dumps(mojang_ctrl_sample, indent=2)[:1500] + "...\n\n"
+        
+        template_context += "⚠️  Use this Mojang example as reference for:\n"
+        template_context += "   - State transition conditions (query.is_moving, query.is_sprinting, etc.)\n"
+        template_context += "   - Animation controller naming patterns\n"
+        template_context += "   - Transition logic structure\n"
     
     # Build user prompt
     full_prompt = f"""Generate an animation controller for mob '{mob_name}'.
 
 Available animations: {', '.join(animation_names)}
 
+{template_context}
+
 Create realistic state transitions:
 - idle state when not moving
 - walking state when moving (use query.is_moving)
 - running state if sprinting (use query.is_sprinting)
 - smooth transitions between all states
+
+⚠️  IMPORTANT: The "animations" arrays in your states will be automatically fixed by the system
+to match the available animations. Focus on getting the STATE NAMES, TRANSITIONS, and CONDITIONS right.
+The animation reference names will be corrected in post-processing.
+
+Use the Mojang reference above as a template for state structure and transition syntax.
 
 Make it a complete, valid animation_controllers.json."""
     
@@ -530,19 +689,52 @@ Make it a complete, valid animation_controllers.json."""
             "error": "LLM failed to generate animation controller",
         }
     
-    # Validate via MCP
-    mcp_valid = False
-    try:
-        validation = mcp_validate_sync(
-            content=ac_dict,
-            schema_type="animation_controller",
-        )
-        mcp_valid = validation.valid if validation else False
-    except Exception as e:
-        log.warning(f"MCP animation controller validation failed: {e}")
+    # Validate via MCP with automatic retry on validation errors
+    print(f"[AC-GEN] Validating animation controller via MCP (with retry loop)")
+    validated_ac, was_first_try_valid = _validate_animation_controller_with_retry(
+        ac_dict,
+        mob_name=mob_name,
+        provider=provider,
+        api_key=api_key,
+        max_retries=3,
+    )
+    
+    mcp_valid = validated_ac is not None
+    if validated_ac:
+        ac_dict = validated_ac
+        print(f"[AC-GEN] ✓ MCP validation passed (first try: {was_first_try_valid})")
+    else:
+        print(f"[AC-GEN] ✗ MCP validation failed after retries, will return null controller")
+    
+    # Enforce short-name wiring in controller states
+    # This replaces whatever animations arrays the LLM generated with deterministic
+    # short-name to full-ID mappings, eliminating confusion between names and IDs
+    if ac_dict and "animation_controllers" in ac_dict:
+        from backend.llm.animation_generation import _build_controller_states
+        
+        # Extract animation short names from the animation_json that was passed in
+        animation_short_names = []
+        if animation_json and isinstance(animation_json, dict):
+            for full_id in animation_json.get("animations", {}).keys():
+                # Extract short name from full ID (e.g., "animation.mob.idle" → "idle")
+                if full_id.startswith("animation."):
+                    parts = full_id.split(".")
+                    if len(parts) >= 3:
+                        short_name = ".".join(parts[2:])
+                        animation_short_names.append(short_name)
+        
+        # Fix each controller's states
+        for ctrl_name, ctrl_data in ac_dict["animation_controllers"].items():
+            if isinstance(ctrl_data, dict) and "states" in ctrl_data:
+                ctrl_data["states"] = _build_controller_states(
+                    ctrl_data["states"],
+                    mob_name,
+                    animation_short_names
+                )
+                print(f"[AC-WIRING] Fixed animation references in controller '{ctrl_name}'")
     
     # Ensure format_version
-    if "format_version" not in ac_dict:
+    if ac_dict and "format_version" not in ac_dict:
         ac_dict["format_version"] = AC_FORMAT_VERSION
     
     elapsed = time.time() - start_time
