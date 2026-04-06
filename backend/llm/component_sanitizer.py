@@ -177,7 +177,9 @@ def validate_shooter(components: dict) -> dict:
             "minecraft:fireball": "minecraft:small_fireball",
             "fireball": "minecraft:small_fireball",
             "small_fireball": "minecraft:small_fireball",
+            "large_fireball": "minecraft:large_fireball",
             "arrow": "minecraft:arrow",
+            "snowball": "minecraft:snowball",
         }
         corrected = corrections.get(projectile)
         if corrected:
@@ -195,14 +197,63 @@ def validate_shooter(components: dict) -> dict:
 # Full pipeline
 # ---------------------------------------------------------------------------
 
+def auto_inject_dependencies(components: dict) -> dict:
+    """Auto-inject well-known required companion components that LLMs forget.
+
+    Handles:
+    - minecraft:can_fly for flying mobs
+    - minecraft:behavior.ranged_attack for mobs with minecraft:shooter
+    - minecraft:fire_immune for mobs shooting fireballs
+    """
+    result = dict(components)
+
+    # minecraft:can_fly is required whenever fly navigation or movement is used
+    if (
+        "minecraft:navigation.fly" in result or "minecraft:movement.fly" in result
+    ) and "minecraft:can_fly" not in result:
+        result["minecraft:can_fly"] = {}
+        log.info("[sanitizer] Auto-injected minecraft:can_fly")
+
+    # minecraft:shooter requires minecraft:behavior.ranged_attack to actually fire
+    if "minecraft:shooter" in result and "minecraft:behavior.ranged_attack" not in result:
+        result["minecraft:behavior.ranged_attack"] = {
+            "priority": 3,
+            "attack_interval_min": 2.0,
+            "attack_interval_max": 5.0,
+            "attack_radius": 16.0,
+        }
+        log.info("[sanitizer] Auto-injected minecraft:behavior.ranged_attack for shooter")
+
+    # Mobs that shoot fireballs should be fire immune
+    shooter = result.get("minecraft:shooter")
+    if isinstance(shooter, dict):
+        proj = shooter.get("def", "")
+        if "fireball" in str(proj).lower() and "minecraft:fire_immune" not in result:
+            result["minecraft:fire_immune"] = {}
+            log.info("[sanitizer] Auto-injected minecraft:fire_immune for fireball shooter")
+
+    # Ranged attackers need a target selector
+    if "minecraft:behavior.ranged_attack" in result and "minecraft:behavior.nearest_attackable_target" not in result:
+        result["minecraft:behavior.nearest_attackable_target"] = {
+            "priority": 1,
+            "entity_types": [
+                {"filters": {"test": "is_family", "value": "player"}, "max_dist": 32}
+            ],
+        }
+        log.info("[sanitizer] Auto-injected minecraft:behavior.nearest_attackable_target for ranged attacker")
+
+    return result
+
+
 def sanitize_spec(spec: dict) -> dict:
     """Run the full sanitization pipeline on a mob spec.
 
     1. Strip null components
     2. Strip invalid fields from each component
     3. Resolve conflicts (navigation, movement, ranged vs swell)
-    4. Validate shooter projectiles
-    5. Log dependency warnings
+    4. Auto-inject missing required companion components
+    5. Validate shooter projectiles
+    6. Log any remaining dependency warnings
 
     Returns the spec with cleaned components. Non-destructive to
     non-component fields.
@@ -218,10 +269,13 @@ def sanitize_spec(spec: dict) -> dict:
     # Step 3: resolve conflicts
     components = resolve_conflicts(components)
 
-    # Step 4: validate projectiles
+    # Step 4: auto-inject missing required companions
+    components = auto_inject_dependencies(components)
+
+    # Step 5: validate projectiles
     components = validate_shooter(components)
 
-    # Step 5: log warnings (informational, don't block)
+    # Step 6: log any remaining warnings (informational, don't block)
     dep_warnings = check_dependencies(components)
     conflict_warnings = check_conflicts(components)
     for w in dep_warnings:

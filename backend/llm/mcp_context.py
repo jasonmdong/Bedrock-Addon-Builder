@@ -463,8 +463,10 @@ def _spec_to_bedrock_entity(spec: dict) -> dict:
 def _extract_errors(text_parts: list[str]) -> list[str]:
     """Parse MCP validation output for actionable error messages.
 
-    Skips info/stats lines (e.g. "invalidCommandSyntaxCount": 0) that contain
-    error-like keywords but are just zero-count counters.
+    Skips:
+    - Info/stats lines (e.g. "invalidCommandSyntaxCount": 0)
+    - Pack-manifest checks (MINENGINEVER*) — validateContent expects a full pack
+      ZIP, but we send bare entity JSON, so manifest checks always fire falsely.
     """
     errors = []
     error_indicators = [
@@ -473,11 +475,18 @@ def _extract_errors(text_parts: list[str]) -> list[str]:
     ]
     # Lines that are just JSON stats with zero counts, not real errors
     stats_patterns = ["count", "size", "counts"]
+    # MCP error codes that are artifacts of validating entity JSON without a full
+    # pack manifest — these are not actionable content errors.
+    _MANIFEST_NOISE = {"MINENGINEVER", "TESTFAIL", "No resource/behavior/skin pack manifest"}
 
     for text in text_parts:
         for line in text.splitlines():
             line_stripped = line.strip().rstrip(",")
             if not line_stripped:
+                continue
+
+            # Skip manifest/pack-structure noise
+            if any(noise in line_stripped for noise in _MANIFEST_NOISE):
                 continue
 
             # Skip JSON key-value lines where the value is 0 or a small number

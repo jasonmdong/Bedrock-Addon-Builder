@@ -610,6 +610,45 @@
 
           </div>
 
+          <!-- Animation selector dropdown (populated dynamically) -->
+          <div class="timeline-controls" style="margin-top: 0.4rem;">
+            <label style="color: var(--text-muted); font-size: 0.8rem; margin-right: 0.4rem;">Clip:</label>
+            <select id="anim-clip-select" style="background: var(--card-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 0.2rem 0.4rem; font-size: 0.82rem; flex: 1;">
+              <option value="">-- no animation --</option>
+            </select>
+          </div>
+
+        </div>
+
+        <!-- AI Animation Generator -->
+        <div id="animation-generator" style="margin-top: 1rem; padding: 1rem; background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; color: var(--text);">
+
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+            <span style="font-weight: 600; color: #e0e0e0; font-size: 0.9rem;">🎬 AI Animation Generator</span>
+            <button type="button" id="anim-panel-toggle" class="secondary" style="font-size: 0.75rem; padding: 0.2rem 0.6rem;">Hide</button>
+          </div>
+
+          <div id="anim-panel-body">
+            <textarea id="anim-prompt" placeholder="Describe the animations... (e.g. 'walking, idle breathing, and attack swing')" style="width: 100%; height: 60px; resize: vertical; background: var(--editor-bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text); padding: 0.5rem; font-size: 0.85rem; box-sizing: border-box;"></textarea>
+
+            <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem; flex-wrap: wrap;">
+              <button type="button" class="primary" id="anim-generate-btn" style="flex: 1; min-width: 140px;">Generate Animations</button>
+              <button type="button" class="secondary" id="anim-regen-btn" style="flex: 1; min-width: 140px;">Regenerate</button>
+            </div>
+
+            <div id="anim-status" style="margin-top: 0.5rem; font-size: 0.8rem; color: var(--text-muted); min-height: 1.2em;"></div>
+
+            <!-- Collapsible JSON preview -->
+            <details id="anim-json-details" style="margin-top: 0.75rem;">
+              <summary style="cursor: pointer; font-size: 0.82rem; color: var(--text-muted);">View animation JSON</summary>
+              <div style="display: flex; gap: 0.5rem; margin-top: 0.4rem; flex-wrap: wrap;">
+                <button type="button" class="secondary" id="anim-json-tab" style="font-size: 0.75rem; padding: 0.2rem 0.6rem; opacity: 1; border-bottom: 2px solid var(--accent);">animation.json</button>
+                <button type="button" class="secondary" id="anim-controller-tab" style="font-size: 0.75rem; padding: 0.2rem 0.6rem;">controller.json</button>
+              </div>
+              <pre id="anim-json-preview" style="background: var(--editor-bg); color: var(--editor-text); padding: 0.75rem; border-radius: 6px; border: 1px solid var(--border); overflow-x: auto; overflow-y: auto; max-height: 240px; margin-top: 0.4rem; font-size: 0.78rem;"></pre>
+            </details>
+          </div>
+
         </div>
 
         
@@ -678,25 +717,25 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/diff/5.1.0/diff.min.js"></script>
 
-<script src="js/user.js?v=10"></script>
+<script src="js/core/user.js?v=11"></script>
 
-<script src="js/modals.js?v=10"></script>
+<script src="js/ui/modals.js?v=11"></script>
 
-<script src="js/viewer3d.js?v=10"></script>
+<script src="js/viewer/viewer3d.js?v=11"></script>
 
-<script src="js/painter.js?v=10"></script>
+<script src="js/viewer/painter.js?v=11"></script>
 
-<script src="js/editor.js?v=10"></script>
+<script src="js/editor/editor.js?v=11"></script>
 
-<script src="js/form-editor.js?v=10"></script>
+<script src="js/editor/form-editor.js?v=11"></script>
 
-<script src="js/llm.js?v=10"></script>
+<script src="js/build/llm.js?v=11"></script>
 
-<script src="js/builder.js?v=10"></script>
+<script src="js/build/builder.js?v=11"></script>
 
-<script src="js/mctools.js?v=10"></script>
+<script src="js/build/mctools.js?v=11"></script>
 
-<script src="js/app.js?v=10"></script>
+<script src="js/core/app.js?v=11"></script>
 
 
 

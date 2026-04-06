@@ -332,6 +332,42 @@ async def build_mcworld(mobs: list[dict], pack_name: str = "custom_mobs") -> str
             lang_entries.append((identifier, display_name))
             mob_identifiers.append(identifier)
 
+            # Sanitize behavior entity before writing
+            bp_comps = mc_entity.get("components", {})
+
+            # Normalize unreliable fireball projectiles
+            if "minecraft:shooter" in bp_comps:
+                _proj = bp_comps["minecraft:shooter"].get("def", "")
+                if _proj in ("minecraft:fireball", "minecraft:dragon_fireball",
+                             "minecraft:large_fireball"):
+                    bp_comps["minecraft:shooter"]["def"] = "minecraft:small_fireball"
+
+            # Remove melee when ranged attack is present
+            if "minecraft:shooter" in bp_comps and "minecraft:behavior.ranged_attack" in bp_comps:
+                bp_comps.pop("minecraft:behavior.melee_attack", None)
+
+            # Auto-inject fly components when mob has fly animations
+            _has_fly = mob.get("animation_json") and any(
+                "fly" in k for k in (mob.get("animation_json") or {}).get("animations", {})
+            )
+            if _has_fly and "minecraft:movement.fly" not in bp_comps:
+                bp_comps.pop("minecraft:movement.basic", None)
+                bp_comps["minecraft:movement.fly"] = {}
+                bp_comps.pop("minecraft:navigation.walk", None)
+                bp_comps["minecraft:navigation.fly"] = {
+                    "can_path_over_water": True,
+                    "can_path_over_lava": True,
+                }
+                bp_comps["minecraft:can_fly"] = {}
+                bp_comps.setdefault("minecraft:flying_speed", {"value": 0.4})
+
+            # Ensure targeting filter has required "subject" field
+            _nat = bp_comps.get("minecraft:behavior.nearest_attackable_target", {})
+            for _et in _nat.get("entity_types", []):
+                _f = _et.get("filters", {})
+                if _f.get("test") == "is_family" and "subject" not in _f:
+                    _f["subject"] = "other"
+
             # Entity behavior file
             zf.writestr(
                 f"{bp_prefix}/entities/{mob_name}.json",
@@ -394,6 +430,8 @@ async def build_mcworld(mobs: list[dict], pack_name: str = "custom_mobs") -> str
             metadata = mob.get("metadata", {})
             texture_b64 = mob.get("texture_base64", None)
             geometry_data = mob.get("geometry_data", None)
+            anim_json = mob.get("animation_json", None)
+            anim_ctrl_json = mob.get("animation_controller_json", None)
 
             mc_entity = entity_data.get("minecraft:entity", {})
             identifier = mc_entity.get("description", {}).get(
@@ -420,9 +458,35 @@ async def build_mcworld(mobs: list[dict], pack_name: str = "custom_mobs") -> str
             else:
                 geometry_id = None
 
-            # Client entity
+            # Build short-name map and remap controller references
+            anim_short_map = {}
+            if anim_json and isinstance(anim_json, dict) and anim_json.get("animations"):
+                for anim_key in anim_json["animations"]:
+                    short_key = anim_key.replace(f"animation.{mob_name}.", "")
+                    anim_short_map[short_key] = anim_key
+
+                zf.writestr(
+                    f"{rp_prefix}/animations/{mob_name}.animation.json",
+                    json.dumps(anim_json, indent=2),
+                )
+
+            if anim_ctrl_json and isinstance(anim_ctrl_json, dict) and anim_ctrl_json.get("animation_controllers"):
+                if anim_short_map:
+                    anim_ctrl_json = _remap_controller_to_short_names(
+                        anim_ctrl_json, anim_short_map
+                    )
+                zf.writestr(
+                    f"{rp_prefix}/animation_controllers/{mob_name}.controllers.json",
+                    json.dumps(anim_ctrl_json, indent=2),
+                )
+
+            # Client entity (with animation/controller refs wired in)
             if geometry_id:
-                client_entity = _build_client_entity(identifier, mob_name, geometry_id)
+                client_entity = _build_client_entity(
+                    identifier, mob_name, geometry_id,
+                    animation_json=anim_json,
+                    animation_controller_json=anim_ctrl_json,
+                )
             else:
                 client_entity = generate_client_entity(identifier, mob_name, style)
 
@@ -517,26 +581,116 @@ def _build_loot_table(loot_drops: list, mob_name: str) -> dict:
     return {"pools": pools}
 
 
-def _build_client_entity(identifier: str, mob_name: str, geometry_id: str) -> dict:
-    """Build a client entity definition pointing to a custom geometry ID."""
+def _remap_controller_to_short_names(
+    animation_controller_json: dict,
+    anim_short_map: dict,
+) -> dict:
+    """Rewrite animation controller to use short names instead of full IDs.
+
+    Bedrock requires animation controllers to reference animations by the
+    short names defined in the client entity's 'animations' dict, NOT by
+    full identifiers like 'animation.mob.walk'.
+    """
+    import copy
+    ctrl = copy.deepcopy(animation_controller_json)
+    reverse = {v: k for k, v in anim_short_map.items()}
+
+    for controller in ctrl.get("animation_controllers", {}).values():
+        for state in controller.get("states", {}).values():
+            anims = state.get("animations")
+            if not isinstance(anims, list):
+                continue
+            new_anims = []
+            for entry in anims:
+                if isinstance(entry, str):
+                    new_anims.append(reverse.get(entry, entry))
+                elif isinstance(entry, dict):
+                    new_anims.append(
+                        {reverse.get(k, k): v for k, v in entry.items()}
+                    )
+                else:
+                    new_anims.append(entry)
+            state["animations"] = new_anims
+    return ctrl
+
+
+def _build_client_entity(
+    identifier: str,
+    mob_name: str,
+    geometry_id: str,
+    animation_json: dict = None,
+    animation_controller_json: dict = None,
+) -> dict:
+    """Build a client entity definition with optional animation/controller refs."""
+    desc = {
+        "identifier": identifier,
+        "materials": {"default": "entity_alphatest"},
+        "textures": {
+            "default": f"textures/entity/{mob_name}"
+        },
+        "geometry": {
+            "default": geometry_id
+        },
+        "render_controllers": ["controller.render.default"],
+        "spawn_egg": {
+            "base_color": "#4A7023",
+            "overlay_color": "#2E4F1E"
+        }
+    }
+
+    # Register individual animation clips in the animations dict
+    anim_refs = {}
+    if animation_json and isinstance(animation_json, dict) and animation_json.get("animations"):
+        for anim_key in animation_json["animations"]:
+            short_key = anim_key.replace(f"animation.{mob_name}.", "")
+            anim_refs[short_key] = anim_key
+
+    # Also register animation controller shortname (keeps it loadable)
+    has_controller = (
+        animation_controller_json
+        and isinstance(animation_controller_json, dict)
+        and animation_controller_json.get("animation_controllers")
+    )
+    if has_controller:
+        for ctrl_key in animation_controller_json["animation_controllers"]:
+            short_ctrl_key = ctrl_key.replace(
+                f"controller.animation.{mob_name}.", ""
+            ).replace("controller.animation.", "")
+            anim_refs[short_ctrl_key] = ctrl_key
+
+    if anim_refs:
+        desc["animations"] = anim_refs
+
+        # Drive animations directly via Molang in scripts.animate.
+        # This is more reliable than routing everything through an
+        # animation controller, which can silently fail on custom entities.
+        has_walk = any(
+            k in ("walk", "walking", "run", "running")
+            for k, v in anim_refs.items()
+            if not v.startswith("controller.animation.")
+        )
+        animate_list = []
+        for short_key, full_id in anim_refs.items():
+            if full_id.startswith("controller.animation."):
+                continue
+            if short_key == "idle":
+                # Only play idle when not moving (prevents jitter from
+                # two animations fighting over shared bones like body/tail)
+                cond = "!query.is_moving" if has_walk else "1.0"
+                animate_list.append({short_key: cond})
+            elif short_key in ("walk", "walking", "run", "running"):
+                animate_list.append({short_key: "query.is_moving"})
+            elif short_key in ("fly", "flying"):
+                animate_list.append({short_key: "!query.is_on_ground"})
+            else:
+                pass
+        if animate_list:
+            desc["scripts"] = {"animate": animate_list}
+
     return {
         "format_version": "1.10.0",
         "minecraft:client_entity": {
-            "description": {
-                "identifier": identifier,
-                "materials": {"default": "entity_alphatest"},
-                "textures": {
-                    "default": f"textures/entity/{mob_name}"
-                },
-                "geometry": {
-                    "default": geometry_id
-                },
-                "render_controllers": ["controller.render.default"],
-                "spawn_egg": {
-                    "base_color": "#4A7023",
-                    "overlay_color": "#2E4F1E"
-                }
-            }
+            "description": desc
         }
     }
 

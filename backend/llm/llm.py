@@ -5,7 +5,7 @@ import os
 import time
 from typing import Optional
 
-from backend.core.core import LLM_MODEL_NAME, DEEPSEEK_MODEL_NAME, GEMINI_MODEL_NAME, CLAUDE_MODEL_NAME, OLLAMA_MODEL_NAME, OLLAMA_BASE_URL, DEFAULT_LLM_PROVIDER, LLM_SYSTEM_PROMPT, BACKEND_DIR
+from backend.config.settings import LLM_MODEL_NAME, DEEPSEEK_MODEL_NAME, GEMINI_MODEL_NAME, CLAUDE_MODEL_NAME, OLLAMA_MODEL_NAME, OLLAMA_BASE_URL, DEFAULT_LLM_PROVIDER, LLM_SYSTEM_PROMPT, BACKEND_DIR
 from backend.schemas.schemas_loader import SPEC_SCHEMA
 from backend.schemas.spec_utils import validate_spec, sanitize_spec, SpecValidationError
 from backend.llm.category_context import (
@@ -45,16 +45,16 @@ except ImportError:
 def _prepare_spec_for_llm(spec: dict) -> str:
     """Serialize a spec for inclusion in the LLM user message.
 
-    Strips bulky fields the LLM doesn't need (raw geometry data, internal
-    metadata) to stay within token budgets.  Keeps the geometry *reference*
-    (e.g. "geometry.ghast") so the LLM knows what model is active.
-    Includes a summary of custom geometry bones so the LLM knows NOT to
-    replace it with a vanilla geometry.
+    Strips bulky fields the LLM doesn't need (raw geometry/animation data,
+    internal metadata) to stay within token budgets.  Keeps short summaries
+    of custom geometry and animations so the LLM knows they exist and
+    doesn't replace or drop them.
     """
-    slim = {k: v for k, v in spec.items()
-            if k not in ("geometry_json", "_template_base", "_texture_b64",
-                         "_mcp_meta", "_mcp_design")}
-    # Summarize custom geometry so the LLM knows it exists
+    _STRIP = {"geometry_json", "animation_json", "animation_controller_json",
+              "_template_base", "_texture_b64", "_mcp_meta", "_mcp_design"}
+    slim = {k: v for k, v in spec.items() if k not in _STRIP}
+
+    # Summarize custom geometry so the LLM knows it exists and not to replace it
     geo = spec.get("geometry_json")
     if geo and isinstance(geo, dict) and geo.get("minecraft:geometry"):
         bones = []
@@ -72,6 +72,18 @@ def _prepare_spec_for_llm(spec: dict) -> str:
             f"id={geo_id}, atlas={tw}x{th}, "
             f"bones=[{', '.join(bones)}]"
         )
+
+    # Summarize animation data so the LLM knows it exists and not to drop it
+    anim = spec.get("animation_json")
+    if anim and isinstance(anim, dict) and anim.get("animations"):
+        anim_keys = list(anim["animations"].keys())
+        slim["animation_json"] = f"(ANIMATIONS PRESENT — DO NOT REMOVE) clips=[{', '.join(anim_keys)}]"
+
+    ac = spec.get("animation_controller_json")
+    if ac and isinstance(ac, dict) and ac.get("animation_controllers"):
+        ac_keys = list(ac["animation_controllers"].keys())
+        slim["animation_controller_json"] = f"(ANIMATION CONTROLLER PRESENT — DO NOT REMOVE) controllers=[{', '.join(ac_keys)}]"
+
     return json.dumps(slim, indent=2)
 
 
@@ -86,6 +98,52 @@ def _sanitize_geometry_json(candidate: dict) -> dict:
     if isinstance(geo, str):
         candidate["geometry_json"] = {}
     return candidate
+
+
+def _sanitize_animation_fields(candidate: dict) -> dict:
+    """Clean up animation_json and animation_controller_json.
+
+    The LLM doesn't receive full animation data — it gets a placeholder string.
+    If it echoes the placeholder back, replace it with {} so downstream checks
+    correctly see animations as missing and trigger regeneration.
+    """
+    anim = candidate.get("animation_json")
+    if isinstance(anim, str) or (isinstance(anim, dict) and "animations" not in anim):
+        candidate["animation_json"] = {}
+
+    ac = candidate.get("animation_controller_json")
+    if isinstance(ac, str) or (isinstance(ac, dict) and "animation_controllers" not in ac):
+        candidate["animation_controller_json"] = {}
+
+    return candidate
+
+
+def _has_valid_animations(spec: dict) -> bool:
+    """Return True if the spec has properly structured animation_json."""
+    anim = spec.get("animation_json")
+    return bool(anim and isinstance(anim, dict) and anim.get("animations"))
+
+
+def _preserve_animations(output_spec: dict, input_spec: dict) -> dict:
+    """Carry forward animation data from input if the LLM dropped or mangled it."""
+    # Preserve animation_json
+    if not _has_valid_animations(output_spec):
+        input_anim = input_spec.get("animation_json")
+        if input_anim and isinstance(input_anim, dict) and input_anim.get("animations"):
+            output_spec["animation_json"] = input_anim
+            print(f"[LLM] Preserved animation_json from input spec")
+
+    # Preserve animation_controller_json
+    out_ac = output_spec.get("animation_controller_json")
+    if not (out_ac and isinstance(out_ac, dict) and out_ac.get("animation_controllers")):
+        input_ac = input_spec.get("animation_controller_json")
+        if input_ac and isinstance(input_ac, dict) and input_ac.get("animation_controllers"):
+            output_spec["animation_controller_json"] = input_ac
+            if input_spec.get("animation_controller"):
+                output_spec["animation_controller"] = input_spec["animation_controller"]
+            print(f"[LLM] Preserved animation_controller_json from input spec")
+
+    return output_spec
 
 
 def _has_custom_geometry(spec: dict) -> bool:
@@ -268,7 +326,11 @@ def _auto_fetch_geometry(
     return output_spec
 
 
-MAX_SYSTEM_PROMPT_CHARS = 25_000  # ~6K tokens — keeps total well under 80K
+MAX_SYSTEM_PROMPT_CHARS = 25_000  # ~6K tokens — safe for large-context models
+# GitHub Models (models.github.ai) routes gpt-4.1 with an 8K-token hard cap on the
+# *entire request* (system + user + response).  Reserve ~2K tokens for the user
+# message and ~2K for the response, leaving only ~4K for the system prompt (~16K chars).
+GITHUB_MODELS_MAX_SYSTEM_CHARS = 16_000
 
 
 def _get_full_system_prompt(
@@ -276,6 +338,7 @@ def _get_full_system_prompt(
     mcp_context: Optional[MCPContext] = None,
     dynamic_ctx: Optional[DynamicContext] = None,
     intent_profile: Optional[PromptIntentProfile] = None,
+    max_chars: Optional[int] = None,
 ) -> str:
     """Build a system prompt dynamically based on the content category.
 
@@ -329,9 +392,10 @@ def _get_full_system_prompt(
         intent_names = [i.name for i in dynamic_ctx.intents]
         dyn_tag = f", dynamic_intents={intent_names}"
 
-    if len(prompt) > MAX_SYSTEM_PROMPT_CHARS:
-        prompt = prompt[:MAX_SYSTEM_PROMPT_CHARS] + "\n... [system prompt truncated for token budget]"
-        print(f"[LLM] WARNING: System prompt truncated from {len(prompt)} to {MAX_SYSTEM_PROMPT_CHARS} chars")
+    budget = max_chars if max_chars is not None else MAX_SYSTEM_PROMPT_CHARS
+    if len(prompt) > budget:
+        prompt = prompt[:budget] + "\n... [system prompt truncated for token budget]"
+        print(f"[LLM] WARNING: System prompt truncated to {budget} chars (~{budget//4} tokens)")
 
     print(f"[LLM] System prompt built for category={category} "
           f"(context={'yes' if cat_context else 'no'}, "
@@ -379,7 +443,12 @@ def _call_openai(prompt: str, current: dict, api_key: Optional[str],
     """Call OpenAI to rewrite a spec based on a user prompt."""
     print("[LLM] calling OpenAI model", LLM_MODEL_NAME)
     client = _get_openai_client(api_key)
-    sys_prompt = _get_full_system_prompt(category, mcp_context, dynamic_ctx, intent_profile)
+    # GitHub Models has an 8K-token hard cap on the full request body.
+    # Use a tighter system-prompt budget so system + user stays under the limit.
+    sys_prompt = _get_full_system_prompt(
+        category, mcp_context, dynamic_ctx, intent_profile,
+        max_chars=GITHUB_MODELS_MAX_SYSTEM_CHARS,
+    )
     user_content = f"Current spec:\n{_prepare_spec_for_llm(current)}\n\nInstruction:\n{prompt.strip()}"
     total_chars = len(sys_prompt) + len(user_content)
     print(f"[LLM] Request size: system={len(sys_prompt)} user={len(user_content)} total={total_chars} chars (~{total_chars//4} tokens)")
@@ -401,6 +470,7 @@ def _call_openai(prompt: str, current: dict, api_key: Optional[str],
     except Exception as exc:
         raise RuntimeError(f"LLM returned invalid JSON: {exc}") from exc
     _sanitize_geometry_json(candidate)
+    _sanitize_animation_fields(candidate)
     if category == "entity_logic_ai":
         candidate = sanitize_spec(candidate)
         return validate_spec(candidate)
@@ -439,6 +509,7 @@ def _call_deepseek(prompt: str, current: dict, api_key: Optional[str],
         content = response.choices[0].message.content
         candidate = json.loads(content)
         _sanitize_geometry_json(candidate)
+        _sanitize_animation_fields(candidate)
         if category == "entity_logic_ai":
             return validate_spec(candidate)
         return candidate
@@ -474,6 +545,7 @@ def _call_gemini(prompt: str, current: dict, api_key: Optional[str],
         content = response.text
         candidate = json.loads(content)
         _sanitize_geometry_json(candidate)
+        _sanitize_animation_fields(candidate)
         if category == "entity_logic_ai":
             candidate = sanitize_spec(candidate)
             return validate_spec(candidate)
@@ -529,6 +601,7 @@ def _call_ollama(prompt: str, current: dict, api_key: Optional[str] = None,
         
         candidate = json.loads(content.strip())
         _sanitize_geometry_json(candidate)
+        _sanitize_animation_fields(candidate)
         if category == "entity_logic_ai":
             return validate_spec(candidate)
         return candidate
@@ -574,6 +647,7 @@ def _call_claude(prompt: str, current: dict, api_key: Optional[str],
             
         candidate = json.loads(content)
         _sanitize_geometry_json(candidate)
+        _sanitize_animation_fields(candidate)
         candidate = sanitize_spec(candidate)
         candidate = sanitize_spec(candidate)
         candidate = sanitize_spec(candidate)
@@ -851,6 +925,7 @@ def llm_rewrite_spec(prompt: str, current: dict, provider: str,
         # --- Step 2b: Preserve custom geometry if LLM dropped it ---
         if output_spec and category == "entity_logic_ai":
             output_spec = _preserve_geometry(output_spec, current)
+            output_spec = _preserve_animations(output_spec, current)
 
         # --- Step 2c: Auto-fetch geometry for non-vanilla mobs with empty geometry ---
         if output_spec and category == "entity_logic_ai":

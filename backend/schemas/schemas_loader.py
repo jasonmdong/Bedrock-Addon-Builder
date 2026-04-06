@@ -1,7 +1,7 @@
 """Schema loading and management."""
 import json
 from pathlib import Path
-from backend.core.core import SCHEMA_PATH
+from backend.config.settings import SCHEMA_PATH
 
 
 def load_schema() -> dict:

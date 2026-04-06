@@ -123,7 +123,7 @@ class PromptIntentProfile:
 
 _SIGNAL_KEYWORDS: dict[str, list[str]] = {
     "flying": ["fly", "flying", "hover", "hovering", "winged", "wings", "airborne"],
-    "ranged_attack": ["ranged", "projectile", "shoot", "shooting", "fireball", "arrow", "beam"],
+    "ranged_attack": ["ranged", "projectile", "shoot", "shooting", "fireball", "fire breath", "fire-breath", "flame", "arrow", "beam", "blast", "spit"],
     "exploding": ["explode", "exploding", "explosion", "detonate", "bomb", "self-destruct"],
     "passive": ["passive", "friendly", "peaceful", "docile", "harmless"],
     "tameable": ["tame", "tameable", "tamable", "pet", "mount", "rideable", "ridable"],
