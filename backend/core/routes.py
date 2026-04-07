@@ -1107,7 +1107,8 @@ def llm_spec_editor(payload: dict = Body(...)):
                 if not animation_json and not animation_controller_json:
                     print(f"[LLM-SPEC-EDITOR] RETRY: Warning: retry also failed to generate animations")
             except Exception as retry_err:
-                print(f"[LLM-SPEC-EDITOR] RETRY: Warning: animation retry failed: {retry_err}")
+                err_msg = str(retry_err).replace("{", "{{").replace("}", "}}")
+                print(f"[LLM-SPEC-EDITOR] RETRY: Warning: animation retry failed: {err_msg}")
         else:
             print(f"[LLM-SPEC-EDITOR] VALIDATION: Both animation files missing but no geometry to generate from")
 

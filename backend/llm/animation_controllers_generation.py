@@ -29,7 +29,6 @@ from backend.core.core import (
     OLLAMA_BASE_URL,
     DEFAULT_LLM_PROVIDER,
 )
-from backend.llm.mcp_context import mcp_validate_sync
 
 log = logging.getLogger(__name__)
 
@@ -196,22 +195,22 @@ REQUIRED FORMAT:
         "idle": {{
           "animations": ["animation.{mob_name}.idle"],
           "transitions": [
-            {{"walking": "query.is_moving && query.modified_move_speed < 0.2"}},
-            {{"running": "query.is_moving && query.modified_move_speed >= 0.2"}}
+            {{"walking": "query.is_moving && query.modified_move_speed < 0.05"}},
+            {{"running": "query.is_moving && query.modified_move_speed >= 0.05"}}
           ]
         }},
         "walking": {{
           "animations": ["animation.{mob_name}.walk"],
           "transitions": [
             {{"idle": "!query.is_moving"}},
-            {{"running": "query.modified_move_speed >= 0.2"}}
+            {{"running": "query.modified_move_speed >= 0.05"}}
           ]
         }},
         "running": {{
           "animations": ["animation.{mob_name}.walk"],
           "transitions": [
             {{"idle": "!query.is_moving"}},
-            {{"walking": "query.modified_move_speed < 0.2"}}
+            {{"walking": "query.modified_move_speed < 0.05"}}
           ]
         }}
       }}
@@ -460,16 +459,16 @@ def _validate_animation_controller_with_retry(
     Returns:
         tuple of (validated_ac_dict or None, was_valid_on_first_try)
     """
+    from backend.llm.animation_generation import validate_animation_controller_format
     print(f"[AC-VALIDATE] Starting validation with up to {max_retries} retries")
     
     for attempt in range(1, max_retries + 1):
         print(f"[AC-VALIDATE] Attempt {attempt}/{max_retries}")
         
-        # Validate current animation controller
+        # Validate current animation controller using local format validation
+        # (avoids slow MCP network calls that can hang for 45+ seconds each)
         try:
-            validation = mcp_validate_sync(ac_dict)
-            is_valid = validation.valid if validation else False
-            errors = validation.errors if validation else []
+            is_valid, errors = validate_animation_controller_format(ac_dict, mob_name)
         except Exception as e:
             print(f"[AC-VALIDATE] Validation exception: {e}")
             is_valid = False
@@ -660,9 +659,9 @@ Available animations: {', '.join(animation_names)}
 {template_context}
 
 Create realistic state transitions:
-- idle state when not moving
-- walking state when moving (use query.is_moving && query.modified_move_speed < 0.2)
-- running state if sprinting (use query.modified_move_speed >= 0.2)
+- idle state when not moving (query.is_moving = false)
+- walking state when moving slowly (query.modified_move_speed < 0.05)
+- running state when moving fast (query.modified_move_speed >= 0.05)
 - smooth transitions between all states
 
 ⚠️  IMPORTANT: The "animations" arrays in your states will be automatically fixed by the system
@@ -750,6 +749,24 @@ Make it a complete, valid animation_controllers.json."""
     # Ensure format_version
     if ac_dict and "format_version" not in ac_dict:
         ac_dict["format_version"] = AC_FORMAT_VERSION
+    
+    # DIAGNOSTIC: Log state transitions
+    if ac_dict:
+        print(f"\n[AC-GEN] === CONTROLLER DIAGNOSTIC ===")
+        for ctrl_name, ctrl_data in ac_dict.get("animation_controllers", {}).items():
+            if isinstance(ctrl_data, dict) and "states" in ctrl_data:
+                print(f"[AC-GEN] Controller: {ctrl_name}")
+                print(f"[AC-GEN] Initial state: {ctrl_data.get('initial_state', 'N/A')}")
+                for state_name, state_def in ctrl_data["states"].items():
+                    animations = state_def.get("animations", []) if isinstance(state_def, dict) else []
+                    print(f"[AC-GEN]   State '{state_name}':")
+                    print(f"[AC-GEN]     Animations: {animations}")
+                    if isinstance(state_def, dict) and "transitions" in state_def:
+                        for trans in state_def["transitions"]:
+                            if isinstance(trans, dict):
+                                for next_state, condition in trans.items():
+                                    print(f"[AC-GEN]     → {next_state}: {condition}")
+        print(f"[AC-GEN] === END CONTROLLER DIAGNOSTIC ===\n")
     
     elapsed = time.time() - start_time
     

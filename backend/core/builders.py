@@ -443,48 +443,64 @@ def patch_resource_pack(res_root: Path, specs: list[dict], textures_dir: Path = 
         # NOTE: Do NOT add scale to entity.json - it causes rendering issues in Minecraft
         # Scale should only be in the geometry description, not the entity description
         
-        # ALWAYS add scripts block with the current mob's animation controller
-        # This tells the game to use the animation controller for bone animations
-        shortname_controller = f"{mob_short}_controller"
-        animation_controller = spec.get("animation_controller") or f"controller.animation.{mob_short}"
-        client["minecraft:client_entity"]["description"]["scripts"] = {
-            "animate": [shortname_controller]
-        }
-        
-        # Build animations block mapping short names to full animation IDs
-        # CRITICAL: Must include the controller mapping so scripts.animate reference resolves!
+        # VANILLA BLEND-WEIGHT PATTERN (matches Mojang bedrock-samples)
+        # Instead of animation controller state machine, use direct blend weights
+        # in scripts.animate. This is how vanilla cow/pig/sheep work:
+        #   "animate": ["idle", {"walk": "query.modified_move_speed"}]
+        # The walk animation plays at a blend weight proportional to move speed.
         animation_json = spec.get("animation_json")
         animations_block = {}
+        animate_list = []
         
-        # First, add the controller mapping (what scripts.animate["elephant_controller"] refers to)
-        animations_block[shortname_controller] = animation_controller
-        
-        # Then add animation mappings from animation_json
+        # Build animation short name mappings from animation_json
         if animation_json and isinstance(animation_json, dict) and "animations" in animation_json:
-            # Extract short names from full animation IDs and build mapping
-            # e.g., "animation.mob.idle" has key "idle", maps to {"idle": "animation.mob.idle"}
             for full_id in animation_json["animations"].keys():
                 if full_id.startswith("animation."):
                     parts = full_id.split(".")
                     if len(parts) >= 3:
-                        short_name = ".".join(parts[2:])  # Handle cases like "animation.mob.type.idle"
+                        short_name = ".".join(parts[2:])
                         animations_block[short_name] = full_id
+        
+        # Build scripts.animate list using vanilla blend-weight pattern
+        if "idle" in animations_block:
+            animate_list.append("idle")  # idle always plays (body sway)
+        if "walk" in animations_block:
+            # Walk blended by move speed (vanilla pattern from cow/pig/sheep)
+            animate_list.append({"walk": "query.modified_move_speed"})
+        
+        # Also include animation controller mapping (as fallback / for users who want it)
+        animation_controller = spec.get("animation_controller") or f"controller.animation.{mob_short}"
+        shortname_controller = f"{mob_short}_controller"
+        animation_controller_json = spec.get("animation_controller_json")
+        if animation_controller_json:
+            animations_block[shortname_controller] = animation_controller
+        
+        if animate_list:
+            client["minecraft:client_entity"]["description"]["scripts"] = {
+                "animate": animate_list
+            }
+        elif animation_controller_json:
+            # Fallback: use animation controller if no walk/idle animations found
+            client["minecraft:client_entity"]["description"]["scripts"] = {
+                "animate": [shortname_controller]
+            }
         
         if animations_block:
             client["minecraft:client_entity"]["description"]["animations"] = animations_block
-            print(f"[BUILD] ✓ Added scripts/animations block for {mob_short} with {len(animations_block)} entries (1 controller + {len(animations_block)-1} animations)")
+            print(f"[BUILD] ✓ Added animations block for {mob_short} with {len(animations_block)} entries")
+            print(f"[BUILD]   scripts.animate = {animate_list or [shortname_controller]}")
         else:
             print(f"[BUILD] ⚠ Empty animations block for {mob_short}")
         
         # Write entity file
         _write_text(client_file, json.dumps(client, indent=2))
         
-        # Verify scripts block was written with correct mob name
+        # Verify entity file was written correctly
         written_content = client_file.read_text()
-        if f'controller.animation.{mob_short}' in written_content:
-            print(f"[BUILD] ✓✓ VERIFIED: scripts block is in {client_file.name} with controller: controller.animation.{mob_short}")
+        if "animations" in written_content:
+            print(f"[BUILD] ✓✓ VERIFIED: animations block present in {client_file.name}")
         else:
-            print(f"[BUILD] ✗✗ ERROR: scripts block NOT correct in {client_file.name}! Expected controller.animation.{mob_short}")
+            print(f"[BUILD] ✗✗ ERROR: animations block NOT in {client_file.name}!")
 
         # Write animation files if they exist in spec
         animation_json = spec.get("animation_json")

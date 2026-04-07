@@ -29,7 +29,7 @@ from backend.core.core import (
     DEFAULT_LLM_PROVIDER,
 )
 from backend.llm.mcp_context import (
-    MCPContext, MCPValidationResult, retrieve_context_sync, mcp_validate_sync
+    retrieve_context_sync,
 )
 from backend.schemas.spec_utils import SpecValidationError
 
@@ -84,53 +84,79 @@ def _build_motion_skeleton(
     if animation_state == "idle":
         # Idle: subtle sway for core bones only (avoid clashing with walk/run)
         if core_bones:
-            for bone in core_bones[:3]:  # body, head, trunk
+            for i, bone in enumerate(core_bones[:3]):  # body, head, trunk
+                # Alternate sign for variation
+                sign = "" if i % 2 == 0 else "-"
                 bones_dict[bone] = {
-                    "rotation": {
-                        "0.0": [0, 0, 0],
-                        "2.0": [2, 0, 0],
-                        "4.0": [0, 0, 0]
-                    }
+                    "rotation": [f"{sign}math.cos(query.anim_time * 1.57) * 3", 0, 0]
                 }
     
     elif animation_state == "walk":
         if locomotion_type == "quadruped" and len(leg_bones) >= 4:
-            # Quadruped walk: diagonal pairs, period ~1.3 blocks, ±35°
-            bones_dict["leg0"] = {"rotation": {"0.0": [0, 0, 0], "0.325": [35, 0, 0], "0.65": [0, 0, 0]}}
-            bones_dict["leg1"] = {"rotation": {"0.0": [-35, 0, 0], "0.325": [0, 0, 0], "0.65": [-35, 0, 0]}}
-            bones_dict["leg2"] = {"rotation": {"0.0": [-35, 0, 0], "0.325": [0, 0, 0], "0.65": [-35, 0, 0]}}
-            bones_dict["leg3"] = {"rotation": {"0.0": [0, 0, 0], "0.325": [35, 0, 0], "0.65": [0, 0, 0]}}
+            # VANILLA PATTERN: anim_time_update = query.modified_distance_moved
+            # then use query.anim_time in rotation (the animation-local time)
+            # Quadruped walk uses diagonal alternation with 180° phase offset
+            # leg0 & leg3: math.cos(query.anim_time * 38.17) * 80.0
+            # leg1 & leg2: -math.cos(...) which is 180° out of phase
+            
+            bones_dict["leg0"] = {
+                "rotation": ["math.cos(query.anim_time * 38.17) * 80.0", 0, 0]
+            }
+            bones_dict["leg1"] = {
+                "rotation": ["math.cos(query.anim_time * 38.17) * -80.0", 0, 0]
+            }
+            bones_dict["leg2"] = {
+                "rotation": ["math.cos(query.anim_time * 38.17) * -80.0", 0, 0]
+            }
+            bones_dict["leg3"] = {
+                "rotation": ["math.cos(query.anim_time * 38.17) * 80.0", 0, 0]
+            }
         elif locomotion_type == "biped" and len(leg_bones) >= 2:
-            # Biped walk: alternating legs, ±40°
-            bones_dict[leg_bones[0]] = {"rotation": {"0.0": [0, 0, 0], "0.25": [40, 0, 0], "0.5": [0, 0, 0]}}
-            bones_dict[leg_bones[1]] = {"rotation": {"0.0": [-40, 0, 0], "0.25": [0, 0, 0], "0.5": [-40, 0, 0]}}
+            # Biped walk: alternating using opposite cosine functions
+            bones_dict[leg_bones[0]] = {"rotation": ["math.cos(query.anim_time * 38.17) * 80.0", 0, 0]}
+            bones_dict[leg_bones[1]] = {"rotation": ["math.cos(query.anim_time * 38.17) * -80.0", 0, 0]}
         else:
             # Fallback: animate available legs if type uncertain
             for i, leg in enumerate(leg_bones[:4]):
-                phase_offset = 180 if i % 2 else 0
-                bones_dict[leg] = {"rotation": {"0.0": [0, 0, 0], "0.5": [30 if i % 2 else -30, 0, 0], "1.0": [0, 0, 0]}}
+                if i % 2 == 0:
+                    bones_dict[leg] = {"rotation": ["math.cos(query.anim_time * 38.17) * 80.0", 0, 0]}
+                else:
+                    bones_dict[leg] = {"rotation": ["math.cos(query.anim_time * 38.17) * -80.0", 0, 0]}
     
     elif animation_state == "run":
         if locomotion_type == "quadruped" and len(leg_bones) >= 4:
-            # Quadruped run: faster diagonal, period ~0.8 blocks, ±45°
-            bones_dict["leg0"] = {"rotation": {"0.0": [0, 0, 0], "0.2": [45, 0, 0], "0.4": [0, 0, 0]}}
-            bones_dict["leg1"] = {"rotation": {"0.0": [-45, 0, 0], "0.2": [0, 0, 0], "0.4": [-45, 0, 0]}}
-            bones_dict["leg2"] = {"rotation": {"0.0": [-45, 0, 0], "0.2": [0, 0, 0], "0.4": [-45, 0, 0]}}
-            bones_dict["leg3"] = {"rotation": {"0.0": [0, 0, 0], "0.2": [45, 0, 0], "0.4": [0, 0, 0]}}
+            # VANILLA PATTERN: same as walk but higher frequency for faster leg swing
+            # anim_time_update = query.modified_distance_moved (increases faster when running)
+            # Higher multiplier (50 vs 38.17) = faster leg cycles
+            
+            bones_dict["leg0"] = {
+                "rotation": ["math.cos(query.anim_time * 50.0) * 80.0", 0, 0]
+            }
+            bones_dict["leg1"] = {
+                "rotation": ["math.cos(query.anim_time * 50.0) * -80.0", 0, 0]
+            }
+            bones_dict["leg2"] = {
+                "rotation": ["math.cos(query.anim_time * 50.0) * -80.0", 0, 0]
+            }
+            bones_dict["leg3"] = {
+                "rotation": ["math.cos(query.anim_time * 50.0) * 80.0", 0, 0]
+            }
         elif locomotion_type == "biped" and len(leg_bones) >= 2:
-            # Biped run: faster alternating, ±50°
-            bones_dict[leg_bones[0]] = {"rotation": {"0.0": [0, 0, 0], "0.15": [50, 0, 0], "0.3": [0, 0, 0]}}
-            bones_dict[leg_bones[1]] = {"rotation": {"0.0": [-50, 0, 0], "0.15": [0, 0, 0], "0.3": [-50, 0, 0]}}
+            # Biped run: higher frequency
+            bones_dict[leg_bones[0]] = {"rotation": ["math.cos(query.anim_time * 50.0) * 80.0", 0, 0]}
+            bones_dict[leg_bones[1]] = {"rotation": ["math.cos(query.anim_time * 50.0) * -80.0", 0, 0]}
     
     elif animation_state == "fly" and wing_bones:
-        # Flying: wings flap, ±60°, period ~0.3
+        # Flying: wings flap using MoLang, ±60°
         for i, wing in enumerate(wing_bones[:2]):
-            bones_dict[wing] = {"rotation": {"0.0": [0, 0, 0], "0.15": [60, 0, 0], "0.3": [0, 0, 0]}}
+            # Opposite phase for left/right wings
+            phase = "" if i % 2 == 0 else "-"
+            bones_dict[wing] = {"rotation": [f"{phase}math.cos(query.anim_time * 6.28) * 60", 0, 0]}
     
     elif animation_state == "swim" and (tail_bones or core_bones):
-        # Swimming: body/tail wave, ±30°
+        # Swimming: body/tail wave using MoLang, ±30°
         for bone in (tail_bones or core_bones)[:2]:
-            bones_dict[bone] = {"rotation": {"0.0": [0, 0, 0], "0.4": [30, 0, 0], "0.8": [0, 0, 0]}}
+            bones_dict[bone] = {"rotation": ["math.cos(query.anim_time * 3.14) * 30", 0, 0]}
     
     elif animation_state == "slither" and (tail_bones or core_bones):
         # Slithering: body wave, ±25°
@@ -670,36 +696,51 @@ BONE NAMES vs BONE PROPERTIES
       }}
     }}
   }}
-}}
-
-✅ CORRECT - Real bone names with rotation property:
+✅ CORRECT - Use MoLang expressions ONLY:
 {{
   "animations": {{
     "animation.elephant.idle": {{
       "loop": true,
       "anim_time_update": "query.anim_time",
       "bones": {{
-        "body": {{                  ← CORRECT: "body" is a real bone
-          "rotation": {{            ← CORRECT: "rotation" is a property
-            "0.0": [0, 0, 0],
-            "2.0": [3, 0, 0],
-            "4.0": [0, 0, 0]
-          }}
-        }},
-        "leg0": {{
-          "rotation": {{
-            "0.0": [0, 0, 0],
-            "0.25": [35, 0, 0],
-            "0.5": [0, 0, 0]
-          }}
-        }}
+        "body": {{"rotation": ["math.cos(query.anim_time * 1.57) * 3", 0, 0]}},
+        "head": {{"rotation": ["-math.cos(query.anim_time * 1.57) * 2", 0, 0]}},
+        "leg0": {{"rotation": [0, 0, 0]}},
+        "leg1": {{"rotation": [0, 0, 0]}},
+        "leg2": {{"rotation": [0, 0, 0]}},
+        "leg3": {{"rotation": [0, 0, 0]}}
+      }}
+    }},
+    "animation.elephant.walk": {{
+      "loop": true,
+      "anim_time_update": "query.modified_distance_moved",
+      "bones": {{
+        "leg0": {{"rotation": ["math.cos(query.anim_time * 38.17) * 80.0", 0, 0]}},
+        "leg1": {{"rotation": ["-math.cos(query.anim_time * 38.17) * 80.0", 0, 0]}},
+        "leg2": {{"rotation": ["-math.cos(query.anim_time * 38.17) * 80.0", 0, 0]}},
+        "leg3": {{"rotation": ["math.cos(query.anim_time * 38.17) * 80.0", 0, 0]}}
+      }}
+    }},
+    "animation.elephant.run": {{
+      "loop": true,
+      "anim_time_update": "query.modified_distance_moved",
+      "bones": {{
+        "leg0": {{"rotation": ["math.cos(query.anim_time * 50.0) * 80.0", 0, 0]}},
+        "leg1": {{"rotation": ["-math.cos(query.anim_time * 50.0) * 80.0", 0, 0]}},
+        "leg2": {{"rotation": ["-math.cos(query.anim_time * 50.0) * 80.0", 0, 0]}},
+        "leg3": {{"rotation": ["math.cos(query.anim_time * 50.0) * 80.0", 0, 0]}}
       }}
     }}
   }}
 }}
 
+❌ NEVER use timestamp-based keyframe objects:
+Never use "rotation" as an object with numeric keys like "0.0", "0.1625", "0.325", etc.
+This format is WRONG and will be rejected.
+Always use MoLang expressions in arrays only.
+
 ═══════════════════════════════════════════════════════════
-REQUIRED STRUCTURE WITH PROPER ROTATION VALUES
+REQUIRED STRUCTURE WITH MOLANG EXPRESSIONS
 ═══════════════════════════════════════════════════════════
 
 {{
@@ -709,28 +750,28 @@ REQUIRED STRUCTURE WITH PROPER ROTATION VALUES
       "loop": true,
       "anim_time_update": "query.anim_time",
       "bones": {{
-        "body": {{"rotation": {{"0.0": [0, 0, 0], "2.0": [3, 0, 0], "4.0": [0, 0, 0]}} }},
-        "head": {{"rotation": {{"0.0": [0, 0, 0], "2.0": [-2, 0, 0], "4.0": [0, 0, 0]}} }}
+        "body": {{"rotation": ["math.cos(query.anim_time * 1.57) * 3", 0, 0]}},
+        "head": {{"rotation": ["-math.cos(query.anim_time * 1.57) * 2", 0, 0]}}
       }}
     }},
     "animation.{mob_name}.walk": {{
       "loop": true,
       "anim_time_update": "query.modified_distance_moved",
       "bones": {{
-        "leg0": {{"rotation": {{"0.0": [0, 0, 0], "0.1625": [35, 0, 0], "0.325": [0, 0, 0]}} }},
-        "leg1": {{"rotation": {{"0.0": [-35, 0, 0], "0.1625": [0, 0, 0], "0.325": [-35, 0, 0]}} }},
-        "leg2": {{"rotation": {{"0.0": [-35, 0, 0], "0.1625": [0, 0, 0], "0.325": [-35, 0, 0]}} }},
-        "leg3": {{"rotation": {{"0.0": [0, 0, 0], "0.1625": [35, 0, 0], "0.325": [0, 0, 0]}} }}
+        "leg0": {{"rotation": ["math.cos(query.anim_time * 38.17) * 80.0", 0, 0]}},
+        "leg1": {{"rotation": ["-math.cos(query.anim_time * 38.17) * 80.0", 0, 0]}},
+        "leg2": {{"rotation": ["-math.cos(query.anim_time * 38.17) * 80.0", 0, 0]}},
+        "leg3": {{"rotation": ["math.cos(query.anim_time * 38.17) * 80.0", 0, 0]}}
       }}
     }},
     "animation.{mob_name}.run": {{
       "loop": true,
       "anim_time_update": "query.modified_distance_moved",
       "bones": {{
-        "leg0": {{"rotation": {{"0.0": [0, 0, 0], "0.1": [45, 0, 0], "0.2": [0, 0, 0]}} }},
-        "leg1": {{"rotation": {{"0.0": [-45, 0, 0], "0.1": [0, 0, 0], "0.2": [-45, 0, 0]}} }},
-        "leg2": {{"rotation": {{"0.0": [-45, 0, 0], "0.1": [0, 0, 0], "0.2": [-45, 0, 0]}} }},
-        "leg3": {{"rotation": {{"0.0": [0, 0, 0], "0.1": [45, 0, 0], "0.2": [0, 0, 0]}} }}
+        "leg0": {{"rotation": ["math.cos(query.anim_time * 50.0) * 80.0", 0, 0]}},
+        "leg1": {{"rotation": ["-math.cos(query.anim_time * 50.0) * 80.0", 0, 0]}},
+        "leg2": {{"rotation": ["-math.cos(query.anim_time * 50.0) * 80.0", 0, 0]}},
+        "leg3": {{"rotation": ["math.cos(query.anim_time * 50.0) * 80.0", 0, 0]}}
       }}
     }}
   }}
@@ -760,13 +801,24 @@ CRITICAL RULES
    - RUN: 40-50° (e.g., [45, 0, 0] or [-45, 0, 0])
    - DO NOT use 1° rotations—they're invisible!
 
-7. LEG PATTERNS FOR STANDARD QUADRUPEDS:
-   - leg0 & leg3 must have OPPOSITE phases (0° at different times)
-   - leg1 & leg2 must have OPPOSITE phases
-   - Walk cycle: ~0.65s (0.325s per leg) for natural gait
-   - Run cycle: ~0.4s (0.2s per leg) for fast movement
+7. LEG PATTERNS FOR STANDARD QUADRUPEDS (ABSOLUTE REQUIREMENT):
+   - Legs 0 & 3 (diagonal pair 1): Use POSITIVE cosine
+     "rotation": ["math.cos(query.anim_time * 38.17) * 80.0", 0, 0]
+   - Legs 1 & 2 (diagonal pair 2): Use NEGATIVE cosine (180° phase opposite)
+     "rotation": ["-math.cos(query.anim_time * 38.17) * 80.0", 0, 0]
+   - This creates natural diagonal walking: front-left+back-right move together, opposite to front-right+back-left
+   - DO NOT animate body during walk/run - keep body at [0,0,0]
+   - Example peak: leg0=[35,0,0], leg1=[-35,0,0], leg2=[-35,0,0], leg3=[35,0,0]
 
-8. Return ONLY valid JSON, no markdown, no explanation, no code blocks"""
+8. BODY vs LEGS (CRITICAL for parent-child hierarchies):
+   - Legs are children of body in the geometry hierarchy
+   - If you apply body rotation AND leg rotation, they STACK (double rotation)
+   - For walk/run: Keep body at [0,0,0], use ONLY "rotation": [expression, 0, 0] for legs
+   - For idle: Can animate body with "rotation": ["math.cos(query.anim_time * 1.57) * 3", 0, 0] for sway
+   - Example WRONG: body has [expression, 0, 0] AND leg0 has [expression, 0, 0] = double rotation
+   - Example CORRECT: body [0,0,0] and leg0 has [expression, 0, 0] = leg moves relative to body
+
+9. Return ONLY valid JSON, no markdown, no explanation, no code blocks"""
 
 
 def _fetch_animation_template_sync(animation_type: str) -> Optional[dict]:
@@ -1094,6 +1146,77 @@ def _call_animation_provider(
         return None
 
 
+def _fix_underrotated_legs(animation_dict: dict) -> dict:
+    """Scale up leg rotations that are too small (< 15°) in MoLang expressions.
+    
+    For walk animations: legs should be 30-45°
+    For run animations: legs should be 40-50°
+    
+    Works with MoLang expressions: extracts amplitude from "math.cos(...) * AMPLITUDE"
+    """
+    import re
+    
+    if not isinstance(animation_dict, dict) or "animations" not in animation_dict:
+        return animation_dict
+    
+    for anim_name, anim_data in animation_dict.get("animations", {}).items():
+        # Determine animation type and target rotation ranges
+        if "idle" in anim_name:
+            continue  # Idle animations should stay subtle
+        elif "walk" in anim_name:
+            target_min = 30
+            anim_type = "walk"
+        else:  # run
+            target_min = 45
+            anim_type = "run"
+        
+        if not isinstance(anim_data, dict) or "bones" not in anim_data:
+            continue
+        
+        # Process each bone
+        for bone_name, bone_data in anim_data["bones"].items():
+            # Skip non-leg bones
+            if "leg" not in bone_name.lower():
+                continue
+            
+            if not isinstance(bone_data, dict) or "rotation" not in bone_data:
+                continue
+            
+            rotation_value = bone_data["rotation"]
+            
+            # Check if this is a MoLang expression (array with string)
+            if isinstance(rotation_value, list) and len(rotation_value) > 0:
+                first_element = rotation_value[0]
+                
+                # If it's a string, it's a MoLang expression
+                if isinstance(first_element, str):
+                    # Extract amplitude from pattern like "math.cos(...) * 35"
+                    match = re.search(r'\*\s*([\d.]+)(?:\s*[,\]]|$)', first_element)
+                    if match:
+                        try:
+                            amplitude = float(match.group(1))
+                            
+                            # If amplitude is too small, scale it up
+                            if 0 < amplitude < 15:
+                                scale_factor = target_min / amplitude
+                                
+                                # Replace the amplitude in the expression
+                                scaled_expr = re.sub(
+                                    r'(\*\s*)([\d.]+)',
+                                    lambda m: f"{m.group(1)}{amplitude * scale_factor:.1f}",
+                                    first_element
+                                )
+                                
+                                # Update the rotation with scaled expression
+                                bone_data["rotation"][0] = scaled_expr
+                                print(f"[ANIMATION-FIX] Scaled {bone_name} in {anim_name}: {amplitude:.1f}° → {amplitude * scale_factor:.1f}° (scale: {scale_factor:.2f}x)")
+                        except (ValueError, IndexError):
+                            # Failed to parse, skip
+                            pass
+    
+    return animation_dict
+
+
 def llm_generate_animation(
     prompt: str,
     geometry_json: dict,
@@ -1187,32 +1310,133 @@ def llm_generate_animation(
         }
     }
     
+    # Build bones string for prompt reference
+    bones_str = ", ".join(bones) if bones else "root"
+    
     full_prompt = f"""{prompt}
 
-⚠️ CRITICAL: Below are pre-built animation skeletons for {mob_name} ({locomotion_type}).
-YOU MUST USE THESE AS YOUR FOUNDATION. Do not simplify or reduce rotation values.
+═══════════════════════════════════════════════════════════════════════════════
+ANIMATION GENERATION REQUIREMENTS - MANDATORY ROTATION VALUES
+═══════════════════════════════════════════════════════════════════════════════
 
-Your task:
-1. ✅ KEEP all leg rotation magnitudes (30-45° for walk, 40-50° for run)
-2. ✅ KEEP alternating leg phases (diagonal pairs for quadrupeds)
-3. ✅ KEEP timing differences (walk ~0.65s cycle, run ~0.4s cycle)
-4. ✅ ADJUST only if needed for the specific bone names: {bones_str}
-5. ✅ REMOVE any bones that don't exist in the available list above
-6. ✅ ADD subtle motion only to idle (2-5° sway, never rotations like 1°)
+Available bones: {bones_str}
 
-⚠️ DO NOT:
-- Reduce leg swings to 1° (too subtle, invisible on mobs)
-- Make all bones move identically
-- Make walk and run identical
-- Use symmetrical timing (legs must alternate 180°)
-- Simplify to minimal motion
+REQUIRED BONE ANIMATION PATTERNS:
 
-PRE-BUILT SKELETONS FOR {mob_name} (locomotion type: {locomotion_type}):
+IDLE Animation (animation.{mob_name}.idle):
+- Body: Subtle 2-3° front/back sway over 4 seconds (query.anim_time)
+- Head: Subtle -2 to 2° side-to-side nod
+- Legs: STAY AT ZERO (0, 0, 0) - no movement
+- Tail (if exists): Gentle -5 to 5° side sway
+- Duration: 4.0 seconds per cycle
+
+═══════════════════════════════════════════════════════════
+WALK ANIMATION (uses query.anim_time driven by anim_time_update)
+═══════════════════════════════════════════════════════════
+
+⚠️ CRITICAL: Use ONLY MoLang expressions!
+
+Correct format with math.cos() expressions:
+  "leg0": {{"rotation": ["math.cos(query.anim_time * 38.17) * 80.0", 0, 0]}},
+  "leg1": {{"rotation": ["-math.cos(query.anim_time * 38.17) * 80.0", 0, 0]}},
+  "leg2": {{"rotation": ["-math.cos(query.anim_time * 38.17) * 80.0", 0, 0]}},
+  "leg3": {{"rotation": ["math.cos(query.anim_time * 38.17) * 80.0", 0, 0]}}
+
+Pattern:
+- Legs 0 & 3: "math.cos(query.anim_time * 38.17) * 80.0"
+- Legs 1 & 2: "-math.cos(query.anim_time * 38.17) * 80.0" (negative = opposite phase)
+- Multiplier 40 = frequency (cycles per block)
+- Amplitude 35 = peak rotation in degrees
+
+RUN ANIMATION (faster):
+  "leg0": {{"rotation": ["math.cos(query.anim_time * 50.0) * 80.0", 0, 0]}}
+  "leg1": {{"rotation": ["-math.cos(query.anim_time * 50.0) * 80.0", 0, 0]}}
+  (Higher multiplier 50 = faster cycles than walk's 40)
+  (Higher amplitude 45 = more pronounced than walk's 35)
+
+═══════════════════════════════════════════════════════════════════════════════
+ROTATION VALUE RANGES (ABSOLUTE REQUIREMENT)
+═══════════════════════════════════════════════════════════════════════════════
+
+✅ ACCEPTABLE:
+- Idle: 0-5° (subtle)
+- Walk legs: 30-45° (clearly visible)
+- Run legs: 40-50° (pronounced)
+- Walk/run body: 0-10° (minimal)
+
+❌ UNACCEPTABLE (will cause re-submission):
+- Using keyframe-based rotations (any "rotation" object with numeric timestamp keys)
+- Any leg rotation formula with amplitude < 15°
+- All legs moving the same direction at the same time (NO synchronized leg movement)
+- Walk and run animations with identical formulas (run must have higher frequency)
+- Body rotating during walk/run (body should stay at [0,0,0], only legs move)
+- MoLang expressions that don't use math.cos
+- Using query.modified_distance_moved directly in rotation (MUST use query.anim_time with anim_time_update)
+
+═══════════════════════════════════════════════════════════════════════════════
+JSON STRUCTURE REQUIRED (MOLANG EXPRESSIONS ONLY)
+═══════════════════════════════════════════════════════════════════════════════
+
+CORRECT FORMAT - MoLang Expressions:
+{{
+  "format_version": "1.8.0",
+  "animations": {{
+    "animation.{mob_name}.idle": {{
+      "loop": true,
+      "anim_time_update": "query.anim_time",
+      "bones": {{
+        "body": {{"rotation": ["math.cos(query.anim_time * 1.57) * 3", 0, 0]}},
+        "head": {{"rotation": ["-math.cos(query.anim_time * 1.57) * 2", 0, 0]}},
+        "leg0": {{"rotation": [0, 0, 0]}},
+        "leg1": {{"rotation": [0, 0, 0]}},
+        "leg2": {{"rotation": [0, 0, 0]}},
+        "leg3": {{"rotation": [0, 0, 0]}}
+      }}
+    }},
+    "animation.{mob_name}.walk": {{
+      "loop": true,
+      "anim_time_update": "query.modified_distance_moved",
+      "bones": {{
+        "leg0": {{"rotation": ["math.cos(query.anim_time * 38.17) * 80.0", 0, 0]}},
+        "leg1": {{"rotation": ["-math.cos(query.anim_time * 38.17) * 80.0", 0, 0]}},
+        "leg2": {{"rotation": ["-math.cos(query.anim_time * 38.17) * 80.0", 0, 0]}},
+        "leg3": {{"rotation": ["math.cos(query.anim_time * 38.17) * 80.0", 0, 0]}}
+      }}
+    }},
+    "animation.{mob_name}.run": {{
+      "loop": true,
+      "anim_time_update": "query.modified_distance_moved",
+      "bones": {{
+        "leg0": {{"rotation": ["math.cos(query.anim_time * 50.0) * 80.0", 0, 0]}},
+        "leg1": {{"rotation": ["-math.cos(query.anim_time * 50.0) * 80.0", 0, 0]}},
+        "leg2": {{"rotation": ["-math.cos(query.anim_time * 50.0) * 80.0", 0, 0]}},
+        "leg3": {{"rotation": ["math.cos(query.anim_time * 50.0) * 80.0", 0, 0]}}
+      }}
+    }}
+  }}
+}}
+
+WRONG - DO NOT USE KEYFRAMES:
+Do not use timestamp-based keyframes like:
+  "leg0": {{"rotation": {{"0.0": [0, 0, 0], "0.1625": [35, 0, 0], "0.325": [0, 0, 0]}}}}
+ALWAYS use MoLang expressions in arrays:
+  "leg0": {{"rotation": ["math.cos(...) * 35", 0, 0]}}
+
+═══════════════════════════════════════════════════════════════════════════════
+SKELETON TEMPLATE TO COMPLETE (MoLang expressions)
+═══════════════════════════════════════════════════════════════════════════════
+
+Fill in and expand this template WITH ONLY MOLANG EXPRESSIONS:
+
 {json.dumps(skeletons_json, indent=2)}
 
-{template_context}
-
-Return the complete animation.json with these skeletons as the foundation. Keep the motion values realistic (30-50° for locomotion animations)."""
+YOUR TASK:
+1. Use this skeleton as your starting point
+2. Verify all bones match your available bones: {bones_str}
+3. Adjust frequencies/amplitudes if needed, but keep MoLang format
+4. Remove any bones not in the geometry
+5. Generate complete animation.json with idle, walk, run
+Return ONLY valid JSON."""
     
     print(f"[ANIMATION-GEN] Calling provider: {provider}")
     # Call LLM to refine the skeletons
@@ -1265,21 +1489,115 @@ Return the complete animation.json with these skeletons as the foundation. Keep 
                     anim_data["bones"] = fixed_bones
                     print(f"[ANIMATION-GEN] ✓ FIXED: Replaced 'rotation' bone with actual bones: {list(fixed_bones.keys())}")
     
-    # Validate via MCP
-    print(f"[ANIMATION-GEN] Validating animation via MCP")
+    # Post-validation: Check rotation magnitudes (warn if too small)
+    print(f"[ANIMATION-GEN] Checking rotation magnitudes for realistic motion...")
+    rotation_issues = []
+    if "animations" in animation_dict:
+        for anim_name, anim_data in animation_dict.get("animations", {}).items():
+            anim_type = "idle" if "idle" in anim_name else ("walk" if "walk" in anim_name else "run")
+            is_leg_motion = anim_type in ["walk", "run"]
+            
+            if isinstance(anim_data, dict) and "bones" in anim_data:
+                for bone_name, bone_data in anim_data["bones"].items():
+                    if isinstance(bone_data, dict) and "rotation" in bone_data:
+                        rotation_value = bone_data["rotation"]
+                        max_rot = 0
+                        
+                        # Handle MoLang expressions (list with string)
+                        if isinstance(rotation_value, list) and len(rotation_value) > 0:
+                            first_element = rotation_value[0]
+                            if isinstance(first_element, str):
+                                # Extract amplitude from MoLang expression
+                                import re
+                                match = re.search(r'\*\s*([\d.]+)', first_element)
+                                if match:
+                                    max_rot = float(match.group(1))
+                        
+                        # Handle keyframes (dict - legacy format)
+                        elif isinstance(rotation_value, dict):
+                            for timestamp, values in rotation_value.items():
+                                if isinstance(values, list) and len(values) >= 1:
+                                    rot_x = abs(values[0])
+                                    rot_y = abs(values[1]) if len(values) > 1 else 0
+                                    rot_z = abs(values[2]) if len(values) > 2 else 0
+                                    max_rot = max(max_rot, rot_x, rot_y, rot_z)
+                        
+                        # Check if rotation is suspiciously small for leg motion
+                        if is_leg_motion and "leg" in bone_name.lower():
+                            if max_rot < 15 and max_rot > 0:
+                                            rotation_issues.append(
+                                                f"⚠️ {anim_name}: leg '{bone_name}' has only {max_rot}° rotation "
+                                                f"(expected 30-50° for {anim_type})"
+                                            )
+    
+    if rotation_issues:
+        print(f"[ANIMATION-GEN] ⚠️ ROTATION MAGNITUDE WARNINGS:")
+        for issue in rotation_issues[:5]:  # Show first 5
+            print(f"[ANIMATION-GEN]   {issue}")
+        print(f"[ANIMATION-GEN] Fixing under-rotated animations...")
+        
+        # Fix under-rotated legs by scaling them up
+        animation_dict = _fix_underrotated_legs(animation_dict)
+        print(f"[ANIMATION-GEN] ✓ Applied rotation fixes")
+
+    
+    # Validate animation format locally (fast, no network call)
+    print(f"[ANIMATION-GEN] Validating animation format locally")
     mcp_valid = False
     try:
-        validation = mcp_validate_sync(animation_dict)
-        mcp_valid = validation.valid if validation else False
-        print(f"[ANIMATION-GEN] MCP validation result: {mcp_valid}")
+        is_valid, val_errors = validate_animation_format(animation_dict, mob_name)
+        mcp_valid = is_valid
+        if is_valid:
+            print(f"[ANIMATION-GEN] Local validation passed")
+        else:
+            print(f"[ANIMATION-GEN] Local validation errors: {val_errors}")
     except Exception as e:
-        print(f"[ANIMATION-GEN] MCP validation exception: {e}")
-        log.warning(f"MCP animation validation failed: {e}")
+        print(f"[ANIMATION-GEN] Validation exception: {e}")
+        log.warning(f"Animation validation failed: {e}")
     
     # Ensure format_version
     if "format_version" not in animation_dict:
         animation_dict["format_version"] = ANIMATION_FORMAT_VERSION
         print(f"[ANIMATION-GEN] Added missing format_version: {ANIMATION_FORMAT_VERSION}")
+    
+    # DIAGNOSTIC: Log animation bone coverage and rotation values
+    print(f"\n[ANIMATION-GEN] === ANIMATION DIAGNOSTIC SUMMARY ===")
+    print(f"[ANIMATION-GEN] Geometry bones available: {bones}")
+    if "animations" in animation_dict:
+        for anim_name, anim_data in animation_dict.get("animations", {}).items():
+            if isinstance(anim_data, dict) and "bones" in anim_data:
+                anim_bones = list(anim_data["bones"].keys())
+                print(f"[ANIMATION-GEN] {anim_name}: {anim_bones}")
+                
+                # Show actual rotation magnitudes
+                for bone_name, bone_data in anim_data["bones"].items():
+                    if isinstance(bone_data, dict) and "rotation" in bone_data:
+                        rotation_value = bone_data["rotation"]
+                        max_rot = 0
+                        
+                        # Handle MoLang expressions (list with string)
+                        if isinstance(rotation_value, list) and len(rotation_value) > 0:
+                            first_element = rotation_value[0]
+                            if isinstance(first_element, str):
+                                # Extract amplitude from MoLang expression
+                                import re
+                                match = re.search(r'\*\s*([\d.]+)', first_element)
+                                if match:
+                                    max_rot = float(match.group(1))
+                        
+                        # Handle keyframes (dict - legacy, might still be present)
+                        elif isinstance(rotation_value, dict):
+                            for timestamp, values in rotation_value.items():
+                                if isinstance(values, list) and len(values) >= 1:
+                                    rot_x = abs(values[0])
+                                    rot_y = abs(values[1]) if len(values) > 1 else 0
+                                    rot_z = abs(values[2]) if len(values) > 2 else 0
+                                    max_rot = max(max_rot, rot_x, rot_y, rot_z)
+                        
+                        anim_type = "idle" if "idle" in anim_name else ("walk" if "walk" in anim_name else "run")
+                        status = "✓" if anim_type == "idle" or max_rot >= 15 else "⚠️ SUBTLE"
+                        print(f"  {status} {bone_name}: max {max_rot:.1f}°")
+    print(f"[ANIMATION-GEN] === END DIAGNOSTIC ===\n")
     
     elapsed = time.time() - start_time
     
