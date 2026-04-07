@@ -7,7 +7,7 @@ from typing import Optional
 
 from backend.core.core import LLM_MODEL_NAME, DEEPSEEK_MODEL_NAME, GEMINI_MODEL_NAME, CLAUDE_MODEL_NAME, OLLAMA_MODEL_NAME, OLLAMA_BASE_URL, DEFAULT_LLM_PROVIDER, LLM_SYSTEM_PROMPT, BACKEND_DIR
 from backend.schemas.schemas_loader import SPEC_SCHEMA
-from backend.schemas.spec_utils import validate_spec, sanitize_spec, SpecValidationError
+from backend.schemas.spec_utils import validate_spec, SpecValidationError
 from backend.llm.category_context import (
     CATEGORY_CONTEXT, CATEGORY_SCHEMAS, VANILLA_REF, detect_category,
 )
@@ -154,10 +154,14 @@ _VANILLA_GEOMETRY_NAMES = {
 
 
 def _is_vanilla_mob(display_name: str, geometry_ref: str) -> bool:
-    """Check if the mob can be resolved from vanilla Bedrock geometry."""
+    """Check if the mob can be resolved from vanilla Bedrock geometry.
+
+    Only checks the display name — a custom mob (e.g. 'sloth') that uses a
+    vanilla geometry ref as a placeholder (e.g. 'geometry.cow') should NOT
+    be treated as vanilla.
+    """
     name = display_name.lower().replace(" ", "_")
-    geo_name = geometry_ref.replace("geometry.", "").lower()
-    return name in _VANILLA_GEOMETRY_NAMES or geo_name in _VANILLA_GEOMETRY_NAMES
+    return name in _VANILLA_GEOMETRY_NAMES
 
 
 
@@ -172,11 +176,6 @@ def _auto_fetch_geometry(
 
     Modifies output_spec in place and returns it.
     """
-    # Skip if already has custom geometry
-    if _has_custom_geometry(output_spec):
-        print(f"[LLM-GEOFETCH] Skipping auto-fetch: spec already has custom geometry")
-        return output_spec
-
     display_name = output_spec.get("display_name", "")
     geometry_ref = output_spec.get("geometry", "")
 
@@ -324,8 +323,12 @@ def _call_openai(prompt: str, current: dict, api_key: Optional[str],
                  category: str = "entity_logic_ai",
                  mcp_context: Optional[MCPContext] = None,
                  dynamic_ctx: Optional[DynamicContext] = None,
-                 intent_profile: Optional[PromptIntentProfile] = None) -> dict:
-    """Call OpenAI to rewrite a spec based on a user prompt."""
+                 intent_profile: Optional[PromptIntentProfile] = None) -> tuple[dict, dict]:
+    """Call OpenAI to rewrite a spec based on a user prompt.
+
+    Returns (spec, token_usage) where token_usage has prompt_tokens,
+    completion_tokens, and total_tokens keys.
+    """
     print("[LLM] calling OpenAI model", LLM_MODEL_NAME)
     client = _get_openai_client(api_key)
     sys_prompt = _get_full_system_prompt(category, mcp_context, dynamic_ctx, intent_profile)
@@ -343,6 +346,12 @@ def _call_openai(prompt: str, current: dict, api_key: Optional[str],
             messages=messages
         )
         content = resp.choices[0].message.content
+        u = resp.usage
+        token_usage = {
+            "prompt_tokens": u.prompt_tokens if u else 0,
+            "completion_tokens": u.completion_tokens if u else 0,
+            "total_tokens": u.total_tokens if u else 0,
+        }
     except Exception as exc:
         raise RuntimeError(f"LLM request failed: {exc}") from exc
     try:
@@ -351,16 +360,15 @@ def _call_openai(prompt: str, current: dict, api_key: Optional[str],
         raise RuntimeError(f"LLM returned invalid JSON: {exc}") from exc
     _sanitize_geometry_json(candidate)
     if category == "entity_logic_ai":
-        candidate = sanitize_spec(candidate)
-        return validate_spec(candidate)
-    return candidate
+        return validate_spec(candidate), token_usage
+    return candidate, token_usage
 
 
 def _call_deepseek(prompt: str, current: dict, api_key: Optional[str],
                    category: str = "entity_logic_ai",
                    mcp_context: Optional[MCPContext] = None,
                    dynamic_ctx: Optional[DynamicContext] = None,
-                   intent_profile: Optional[PromptIntentProfile] = None) -> dict:
+                   intent_profile: Optional[PromptIntentProfile] = None) -> tuple[dict, dict]:
     """Call DeepSeek to rewrite a spec based on a user prompt."""
     key = api_key or os.environ.get("DEEPSEEK_API_KEY")
     if not key:
@@ -386,11 +394,17 @@ def _call_deepseek(prompt: str, current: dict, api_key: Optional[str],
             response_format={"type": "json_object"}
         )
         content = response.choices[0].message.content
+        u = response.usage
+        token_usage = {
+            "prompt_tokens": u.prompt_tokens if u else 0,
+            "completion_tokens": u.completion_tokens if u else 0,
+            "total_tokens": u.total_tokens if u else 0,
+        }
         candidate = json.loads(content)
         _sanitize_geometry_json(candidate)
         if category == "entity_logic_ai":
-            return validate_spec(candidate)
-        return candidate
+            return validate_spec(candidate), token_usage
+        return candidate, token_usage
     except Exception as exc:
         print(f"[LLM] DeepSeek request failed: {exc}")
         raise RuntimeError(f"DeepSeek request failed: {exc}") from exc
@@ -400,7 +414,7 @@ def _call_gemini(prompt: str, current: dict, api_key: Optional[str],
                  category: str = "entity_logic_ai",
                  mcp_context: Optional[MCPContext] = None,
                  dynamic_ctx: Optional[DynamicContext] = None,
-                 intent_profile: Optional[PromptIntentProfile] = None) -> dict:
+                 intent_profile: Optional[PromptIntentProfile] = None) -> tuple[dict, dict]:
     """Call Google Gemini to rewrite a spec based on a user prompt."""
     if not GENAI_AVAILABLE:
         raise RuntimeError("google-genai package is not installed. Run: pip install google-genai")
@@ -411,7 +425,7 @@ def _call_gemini(prompt: str, current: dict, api_key: Optional[str],
     print("[LLM] calling Gemini model", GEMINI_MODEL_NAME)
     try:
         client = genai.Client(api_key=key)
-        
+
         response = client.models.generate_content(
             model=GEMINI_MODEL_NAME,
             contents=f"Current spec:\n{_prepare_spec_for_llm(current)}\n\nInstruction:\n{prompt.strip()}",
@@ -421,11 +435,19 @@ def _call_gemini(prompt: str, current: dict, api_key: Optional[str],
             }
         )
         content = response.text
+        um = getattr(response, "usage_metadata", None)
+        token_usage = {
+            "prompt_tokens": getattr(um, "prompt_token_count", 0) or 0,
+            "completion_tokens": getattr(um, "candidates_token_count", 0) or 0,
+            "total_tokens": getattr(um, "total_token_count", 0) or 0,
+        }
+        if token_usage["total_tokens"] == 0:
+            token_usage["total_tokens"] = token_usage["prompt_tokens"] + token_usage["completion_tokens"]
         candidate = json.loads(content)
         _sanitize_geometry_json(candidate)
         if category == "entity_logic_ai":
-            return validate_spec(candidate)
-        return candidate
+            return validate_spec(candidate), token_usage
+        return candidate, token_usage
     except Exception as exc:
         print(f"[LLM] Gemini request failed: {exc}")
         raise RuntimeError(f"Gemini request failed: {exc}") from exc
@@ -435,22 +457,22 @@ def _call_ollama(prompt: str, current: dict, api_key: Optional[str] = None,
                  category: str = "entity_logic_ai",
                  mcp_context: Optional[MCPContext] = None,
                  dynamic_ctx: Optional[DynamicContext] = None,
-                 intent_profile: Optional[PromptIntentProfile] = None) -> dict:
+                 intent_profile: Optional[PromptIntentProfile] = None) -> tuple[dict, dict]:
     """Call local Ollama to rewrite a spec based on a user prompt.
-    
+
     Ollama uses OpenAI-compatible API, so we use the OpenAI client with a custom base URL.
     No API key required for local Ollama.
     """
     if OpenAI is None:
         raise RuntimeError("openai package is not installed. Install the 'openai' package.")
-    
+
     print("[LLM] calling Ollama model", OLLAMA_MODEL_NAME)
     try:
         client = OpenAI(
             base_url=f"{OLLAMA_BASE_URL}/v1",
             api_key="ollama"
         )
-        
+
         messages = [
             {
                 "role": "system",
@@ -461,25 +483,31 @@ def _call_ollama(prompt: str, current: dict, api_key: Optional[str] = None,
                 "content": f"Current spec:\n{_prepare_spec_for_llm(current)}\n\nInstruction:\n{prompt.strip()}\n\nRespond with ONLY the updated JSON spec, no explanation."
             }
         ]
-        
+
         response = client.chat.completions.create(
             model=OLLAMA_MODEL_NAME,
             messages=messages,
             temperature=0.2
         )
-        
+
         content = response.choices[0].message.content
-        
+        u = response.usage
+        token_usage = {
+            "prompt_tokens": u.prompt_tokens if u else 0,
+            "completion_tokens": u.completion_tokens if u else 0,
+            "total_tokens": u.total_tokens if u else 0,
+        }
+
         if "```json" in content:
             content = content.split("```json")[1].split("```")[0]
         elif "```" in content:
             content = content.split("```")[1].split("```")[0]
-        
+
         candidate = json.loads(content.strip())
         _sanitize_geometry_json(candidate)
         if category == "entity_logic_ai":
-            return validate_spec(candidate)
-        return candidate
+            return validate_spec(candidate), token_usage
+        return candidate, token_usage
     except Exception as exc:
         print(f"[LLM] Ollama request failed: {exc}")
         raise RuntimeError(f"Ollama request failed: {exc}") from exc
@@ -489,8 +517,7 @@ def _call_claude(prompt: str, current: dict, api_key: Optional[str],
                  category: str = "entity_logic_ai",
                  mcp_context: Optional[MCPContext] = None,
                  dynamic_ctx: Optional[DynamicContext] = None,
-                 intent_profile: Optional[PromptIntentProfile] = None,
-                 model_name: Optional[str] = None) -> dict:
+                 intent_profile: Optional[PromptIntentProfile] = None) -> dict:
     """Call Anthropic Claude to rewrite a spec based on a user prompt."""
     if anthropic is None:
         raise RuntimeError("anthropic package is not installed.")
@@ -498,13 +525,12 @@ def _call_claude(prompt: str, current: dict, api_key: Optional[str],
     if not key:
         raise RuntimeError("Provide ANTHROPIC_API_KEY (either in the form field or as an environment variable).")
 
-    model_to_use = model_name or CLAUDE_MODEL_NAME
-    print("[LLM] calling Claude model", model_to_use)
+    print("[LLM] calling Claude model", CLAUDE_MODEL_NAME)
     try:
         client = anthropic.Anthropic(api_key=key)
         
         response = client.messages.create(
-            model=model_to_use,
+            model=CLAUDE_MODEL_NAME,
             max_tokens=2048,
             system=_get_full_system_prompt(category, mcp_context, dynamic_ctx, intent_profile),
             messages=[
@@ -515,20 +541,29 @@ def _call_claude(prompt: str, current: dict, api_key: Optional[str],
             ]
         )
         content = response.content[0].text
+        print(f"[LLM] Claude raw response length: {len(content)} chars")
+        u = response.usage
+        token_usage = {
+            "prompt_tokens": u.input_tokens if u else 0,
+            "completion_tokens": u.output_tokens if u else 0,
+            "total_tokens": (u.input_tokens + u.output_tokens) if u else 0,
+        }
         if "```json" in content:
             content = content.split("```json")[1].split("```")[0]
         elif "```" in content:
             content = content.split("```")[1].split("```")[0]
-            
-        candidate = json.loads(content)
+        else:
+            # No code fences — find the first { and last }
+            start = content.find("{")
+            end = content.rfind("}")
+            if start != -1 and end != -1:
+                content = content[start:end + 1]
+
+        candidate = json.loads(content.strip())
         _sanitize_geometry_json(candidate)
-        candidate = sanitize_spec(candidate)
-        candidate = sanitize_spec(candidate)
-        candidate = sanitize_spec(candidate)
-        candidate = sanitize_spec(candidate)
         if category == "entity_logic_ai":
-            return validate_spec(candidate)
-        return candidate
+            return validate_spec(candidate), token_usage
+        return candidate, token_usage
     except Exception as exc:
         print(f"[LLM] Claude request failed: {exc}")
         raise RuntimeError(f"Claude request failed: {exc}") from exc
@@ -540,16 +575,17 @@ def _call_provider(
     mcp_context: Optional[MCPContext] = None,
     dynamic_ctx: Optional[DynamicContext] = None,
     intent_profile: Optional[PromptIntentProfile] = None,
-) -> dict:
-    """Route to the appropriate LLM provider."""
+) -> tuple[dict, dict]:
+    """Route to the appropriate LLM provider.
+
+    Returns (spec, token_usage).
+    """
     if provider_key == "deepseek":
         return _call_deepseek(prompt, current, api_key, category, mcp_context, dynamic_ctx, intent_profile)
     elif provider_key == "gemini":
         return _call_gemini(prompt, current, api_key, category, mcp_context, dynamic_ctx, intent_profile)
-    elif provider_key == "claude" or provider_key == "claude-sonnet":
-        return _call_claude(prompt, current, api_key, category, mcp_context, dynamic_ctx, intent_profile, model_name="claude-sonnet-4-20250514")
-    elif provider_key == "claude-opus":
-        return _call_claude(prompt, current, api_key, category, mcp_context, dynamic_ctx, intent_profile, model_name="claude-opus-4-20250514")
+    elif provider_key == "claude":
+        return _call_claude(prompt, current, api_key, category, mcp_context, dynamic_ctx, intent_profile)
     elif provider_key == "ollama":
         return _call_ollama(prompt, current, api_key, category, mcp_context, dynamic_ctx, intent_profile)
     else:
@@ -702,6 +738,7 @@ def llm_rewrite_spec(prompt: str, current: dict, provider: str,
     validation_passed = True
     semantic_score = None
     mcp_validation: Optional[MCPValidationResult] = None
+    token_usage: dict = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
     # --- Step 1c: Orchestration — plan then execute (auto for ollama, opt-in otherwise) ---
     orchestrated_prompt = effective_prompt
@@ -714,7 +751,6 @@ def llm_rewrite_spec(prompt: str, current: dict, provider: str,
                 try:
                     output_spec = apply_plan(plan, current)
                     if category == "entity_logic_ai":
-                        output_spec = sanitize_spec(output_spec)
                         output_spec = validate_spec(output_spec)
                     orchestrator_meta = {
                         "plan": plan.to_dict(),
@@ -780,9 +816,14 @@ def llm_rewrite_spec(prompt: str, current: dict, provider: str,
     try:
         # --- Step 2: LLM call with enriched prompt (skip if plan was applied directly) ---
         if output_spec is None:
-            output_spec = _call_provider(
+            output_spec, _usage = _call_provider(
                 orchestrated_prompt, current, provider_key, api_key, category, mcp_ctx, dyn_ctx, intent_profile,
             )
+            for k in token_usage:
+                token_usage[k] += _usage.get(k, 0)
+            print(f"[LLM] Token usage: prompt={token_usage['prompt_tokens']} "
+                  f"completion={token_usage['completion_tokens']} "
+                  f"total={token_usage['total_tokens']}")
             pipeline_meta["stages"].append(
                 _stage_record(
                     "generation",
@@ -840,10 +881,12 @@ def llm_rewrite_spec(prompt: str, current: dict, provider: str,
             repair_meta["attempted"] = True
             repair_meta["errors"] = mcp_validation.errors[:10]
             try:
-                output_spec = _call_provider(
+                output_spec, _retry_usage = _call_provider(
                     retry_prompt, output_spec, provider_key,
                     api_key, category, mcp_ctx, dyn_ctx, intent_profile,
                 )
+                for k in token_usage:
+                    token_usage[k] += _retry_usage.get(k, 0)
                 # Re-validate after retry
                 mcp_validation = mcp_validate_sync(output_spec)
                 repair_meta["succeeded"] = bool(mcp_validation and mcp_validation.valid)
@@ -885,7 +928,8 @@ def llm_rewrite_spec(prompt: str, current: dict, provider: str,
                 error=error_msg,
                 validation_passed=validation_passed,
                 semantic_score=semantic_score,
-                duration_ms=duration_ms
+                duration_ms=duration_ms,
+                token_usage=token_usage,
             )
     
     # --- Step 5: Texture generation ---
@@ -1096,10 +1140,8 @@ def llm_generate_geometry(
             output = _call_geometry_deepseek(user_content, api_key, mcp_template_text)
         elif provider_key == "gemini":
             output = _call_geometry_gemini(user_content, api_key, mcp_template_text)
-        elif provider_key == "claude" or provider_key == "claude-sonnet":
-            output = _call_geometry_claude(user_content, api_key, mcp_template_text, model_name="claude-sonnet-4-20250514")
-        elif provider_key == "claude-opus":
-            output = _call_geometry_claude(user_content, api_key, mcp_template_text, model_name="claude-opus-4-20250514")
+        elif provider_key == "claude":
+            output = _call_geometry_claude(user_content, api_key, mcp_template_text)
         elif provider_key == "ollama":
             output = _call_geometry_ollama(user_content, api_key, mcp_template_text)
         else:
@@ -1206,8 +1248,7 @@ def _call_geometry_gemini(user_content: str, api_key: str | None,
 
 
 def _call_geometry_claude(user_content: str, api_key: str | None,
-                          mcp_template_text: str = "",
-                          model_name: Optional[str] = None) -> dict:
+                          mcp_template_text: str = "") -> dict:
     """Call Claude to generate geometry."""
     if anthropic is None:
         raise RuntimeError("anthropic package not installed")
@@ -1215,10 +1256,8 @@ def _call_geometry_claude(user_content: str, api_key: str | None,
     if not key:
         raise RuntimeError("Provide ANTHROPIC_API_KEY")
     client = anthropic.Anthropic(api_key=key)
-    model_to_use = model_name or CLAUDE_MODEL_NAME
-    print("[LLM] calling Claude model for geometry", model_to_use)
     response = client.messages.create(
-        model=model_to_use,
+        model=CLAUDE_MODEL_NAME,
         max_tokens=4096,
         system=_get_geometry_system_prompt(mcp_template_text),
         messages=[{"role": "user", "content": user_content}]

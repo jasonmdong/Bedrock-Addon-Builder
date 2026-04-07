@@ -37,16 +37,18 @@ def log_llm_call(
     validation_passed: bool = True,
     semantic_score: Optional[float] = None,
     duration_ms: Optional[int] = None,
+    token_usage: Optional[dict] = None,
     metadata: Optional[dict] = None
 ) -> str:
     """Log an LLM call to disk.
-    
+
     Returns the log ID (filename without extension).
+    token_usage should have keys: prompt_tokens, completion_tokens, total_tokens.
     """
     _ensure_log_dir()
-    
+
     log_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:8]
-    
+
     log_entry = {
         "id": log_id,
         "timestamp": datetime.now().isoformat(),
@@ -58,6 +60,7 @@ def log_llm_call(
         "validation_passed": validation_passed,
         "semantic_score": semantic_score,
         "duration_ms": duration_ms,
+        "token_usage": token_usage or {},
         "metadata": metadata or {}
     }
     
@@ -140,12 +143,15 @@ def get_provider_stats(since: Optional[datetime] = None) -> dict:
                 "error_count": 0,
                 "validation_fail_count": 0,
                 "semantic_scores": [],
-                "durations": []
+                "durations": [],
+                "prompt_tokens": [],
+                "completion_tokens": [],
+                "total_tokens": [],
             }
-        
+
         s = stats[provider]
         s["total_calls"] += 1
-        
+
         if log.get("error"):
             s["error_count"] += 1
         if not log.get("validation_passed", True):
@@ -154,16 +160,29 @@ def get_provider_stats(since: Optional[datetime] = None) -> dict:
             s["semantic_scores"].append(log["semantic_score"])
         if log.get("duration_ms") is not None:
             s["durations"].append(log["duration_ms"])
-    
+        usage = log.get("token_usage") or {}
+        if usage.get("total_tokens"):
+            s["prompt_tokens"].append(usage.get("prompt_tokens", 0))
+            s["completion_tokens"].append(usage.get("completion_tokens", 0))
+            s["total_tokens"].append(usage.get("total_tokens", 0))
+
     # Calculate averages
     for provider, s in stats.items():
         scores = s.pop("semantic_scores")
         durations = s.pop("durations")
-        
+        pt = s.pop("prompt_tokens")
+        ct = s.pop("completion_tokens")
+        tt = s.pop("total_tokens")
+
         s["avg_semantic_score"] = sum(scores) / len(scores) if scores else None
         s["avg_duration_ms"] = sum(durations) / len(durations) if durations else None
         s["error_rate"] = s["error_count"] / s["total_calls"] if s["total_calls"] > 0 else 0
-    
+        s["avg_prompt_tokens"] = int(sum(pt) / len(pt)) if pt else None
+        s["avg_completion_tokens"] = int(sum(ct) / len(ct)) if ct else None
+        s["avg_total_tokens"] = int(sum(tt) / len(tt)) if tt else None
+        s["sum_total_tokens"] = sum(tt) if tt else 0
+        s["calls_with_token_data"] = len(tt)
+
     return stats
 
 
