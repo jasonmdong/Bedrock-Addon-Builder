@@ -620,22 +620,51 @@ def _get_animation_system_prompt(
     
     return f"""You are an expert Minecraft Bedrock animation developer.
 
-Generate a VALID animation.json file for the mob '{mob_name}'.
+Your task: Generate a VALID animation.json file for the mob '{mob_name}'.
 
 AVAILABLE BONES (from geometry '{geometry_id}'):
 {bones_str}
 
 ═══════════════════════════════════════════════════════════
-CRITICAL: BONE NAMES vs BONE PROPERTIES
+⚠️ CRITICAL ANIMATION QUALITY REQUIREMENTS ⚠️
 ═══════════════════════════════════════════════════════════
 
-❌ WRONG - "rotation" used as bone name (GAME IGNORES THIS):
+FAILURE CASES (DO NOT DO THESE):
+❌ Using 1-degree rotations (e.g., "35": [1, 0, 0]) - TOO SUBTLE, invisible on scaled mobs
+❌ All bones moving identically - no variation, looks robotic
+❌ Walk and run being identical - they MUST be different
+❌ Legs not alternating - all legs swinging in sync (wrong gait pattern)
+
+SUCCESS CASES (DO THIS):
+✅ IDLE: Subtle 2-5° bobbing in body/head only (allows natural standing)
+✅ WALK (quadrupeds): 30-40° leg swings, alternating pairs
+   - leg0 and leg3 swing forward together (front-left/back-right diagonal)
+   - leg1 and leg2 swing forward together (front-right/back-left diagonal)
+   - opposite 180° phase offset
+✅ WALK (bipeds): 35-40° leg swings, strict alternation
+   - leg0 forward at 0.0-0.25s, leg1 forward at 0.25-0.5s
+✅ RUN: 40-50° leg swings, faster timing (0.4s cycle instead of 0.65s)
+   - MORE pronounced than walk, different timing
+✅ Each state unique: idle ≠ walk ≠ run in both amplitude AND timing
+
+ROTATION MAGNITUDES (in degrees, multiply rotation[X] value by 57.3):
+- Idle body sway: 2-5°
+- Walking leg swing: 30-45°
+- Running leg swing: 40-50°
+- Flying wing flap: 50-70°
+- Swimming body wave: 30-40°
+
+═══════════════════════════════════════════════════════════
+BONE NAMES vs BONE PROPERTIES
+═══════════════════════════════════════════════════════════
+
+❌ WRONG - "rotation" used as bone name:
 {{
   "animations": {{
     "animation.elephant.idle": {{
       "loop": true,
       "bones": {{
-        "rotation": {{              ← WRONG: "rotation" is NOT a bone! The game sees no valid bones.
+        "rotation": {{              ← WRONG: "rotation" is NOT a bone!
           "0.0": [0, 0, 0]
         }}
       }}
@@ -650,14 +679,18 @@ CRITICAL: BONE NAMES vs BONE PROPERTIES
       "loop": true,
       "anim_time_update": "query.anim_time",
       "bones": {{
-        "body": {{                  ← CORRECT: "body" is a real bone from the geometry
-          "rotation": {{            ← CORRECT: "rotation" is a property of the bone
-            "0.0": [0, 0, 0]
+        "body": {{                  ← CORRECT: "body" is a real bone
+          "rotation": {{            ← CORRECT: "rotation" is a property
+            "0.0": [0, 0, 0],
+            "2.0": [3, 0, 0],
+            "4.0": [0, 0, 0]
           }}
         }},
-        "head": {{                  ← CORRECT: "head" is another real bone
+        "leg0": {{
           "rotation": {{
-            "0.0": [0, 0, 5]
+            "0.0": [0, 0, 0],
+            "0.25": [35, 0, 0],
+            "0.5": [0, 0, 0]
           }}
         }}
       }}
@@ -666,7 +699,7 @@ CRITICAL: BONE NAMES vs BONE PROPERTIES
 }}
 
 ═══════════════════════════════════════════════════════════
-EXACT STRUCTURE TO MATCH
+REQUIRED STRUCTURE WITH PROPER ROTATION VALUES
 ═══════════════════════════════════════════════════════════
 
 {{
@@ -676,32 +709,35 @@ EXACT STRUCTURE TO MATCH
       "loop": true,
       "anim_time_update": "query.anim_time",
       "bones": {{
-        "body": {{"rotation": {{"0.0": [0, 0, 0], "0.5": [2, 0, 0], "1.0": [0, 0, 0]}} }},
-        "head": {{"rotation": {{"0.0": [0, 0, 0], "0.5": [-3, 0, 0], "1.0": [0, 0, 0]}} }}
+        "body": {{"rotation": {{"0.0": [0, 0, 0], "2.0": [3, 0, 0], "4.0": [0, 0, 0]}} }},
+        "head": {{"rotation": {{"0.0": [0, 0, 0], "2.0": [-2, 0, 0], "4.0": [0, 0, 0]}} }}
       }}
     }},
     "animation.{mob_name}.walk": {{
       "loop": true,
       "anim_time_update": "query.modified_distance_moved",
       "bones": {{
-        "body": {{"rotation": {{"0.0": [0, 0, 0]}} }},
-        "front_left_leg": {{"rotation": {{"0.0": [0, 0, 0], "0.25": [35, 0, 0], "0.5": [0, 0, 0]}} }},
-        "front_right_leg": {{"rotation": {{"0.0": [0, 0, 0], "0.5": [-35, 0, 0], "0.75": [0, 0, 0]}} }}
+        "leg0": {{"rotation": {{"0.0": [0, 0, 0], "0.1625": [35, 0, 0], "0.325": [0, 0, 0]}} }},
+        "leg1": {{"rotation": {{"0.0": [-35, 0, 0], "0.1625": [0, 0, 0], "0.325": [-35, 0, 0]}} }},
+        "leg2": {{"rotation": {{"0.0": [-35, 0, 0], "0.1625": [0, 0, 0], "0.325": [-35, 0, 0]}} }},
+        "leg3": {{"rotation": {{"0.0": [0, 0, 0], "0.1625": [35, 0, 0], "0.325": [0, 0, 0]}} }}
       }}
     }},
     "animation.{mob_name}.run": {{
       "loop": true,
       "anim_time_update": "query.modified_distance_moved",
       "bones": {{
-        "body": {{"rotation": {{"0.0": [0, 0, 0], "0.25": [5, 0, 0], "0.75": [-5, 0, 0]}} }},
-        "head": {{"rotation": {{"0.0": [0, 0, 0]}} }}
+        "leg0": {{"rotation": {{"0.0": [0, 0, 0], "0.1": [45, 0, 0], "0.2": [0, 0, 0]}} }},
+        "leg1": {{"rotation": {{"0.0": [-45, 0, 0], "0.1": [0, 0, 0], "0.2": [-45, 0, 0]}} }},
+        "leg2": {{"rotation": {{"0.0": [-45, 0, 0], "0.1": [0, 0, 0], "0.2": [-45, 0, 0]}} }},
+        "leg3": {{"rotation": {{"0.0": [0, 0, 0], "0.1": [45, 0, 0], "0.2": [0, 0, 0]}} }}
       }}
     }}
   }}
 }}
 
 ═══════════════════════════════════════════════════════════
-CRITICAL RULES (MUST DO ALL OF THESE):
+CRITICAL RULES
 ═══════════════════════════════════════════════════════════
 
 1. format_version MUST be "1.8.0" at top level
@@ -709,25 +745,28 @@ CRITICAL RULES (MUST DO ALL OF THESE):
 3. EVERY animation MUST have ALL 3 of these:
    - "loop": true
    - "anim_time_update": "query.anim_time" (for idle) OR "query.modified_distance_moved" (for walk/run)
-   - "bones": {{ ... }}  (object with bone names as keys)
+   - "bones": {{ ... }}
 
-4. INSIDE THE "bones" OBJECT:
+4. INSIDE "bones" OBJECT:
    - Keys = ACTUAL BONE NAMES from: {bones_str}
-   - Values = bone definition with "rotation" (or "position", "scale") as properties
-   - NEVER use "rotation" as a key at the bones level
+   - NEVER use "rotation" as a bone name—it's a property, not a bone
    - Example: "body": {{ "rotation": {{ "0.0": [x, y, z] }} }}
-   - NEVER do: "rotation": {{ "0.0": [x, y, z] }}
 
-5. ANIMATION NAMES must follow pattern: "animation.{mob_name}.ANIMTYPE"
-   - "animation.{mob_name}.idle"
-   - "animation.{mob_name}.walk"
-   - "animation.{mob_name}.run"
+5. ANIMATION NAMES must follow: "animation.{mob_name}.idle|walk|run"
 
-6. Keyframe format: "timestamp": [rotation_x, rotation_y, rotation_z]
-   - Example: "0.0": [0, 0, 0], "0.5": [10, 0, 0], "1.0": [0, 0, 0]
-   - Timestamps can be decimals (0.0, 0.25, 0.5, etc.)
+6. ROTATION VALUES MUST BE SIGNIFICANT:
+   - IDLE: 2-5° (e.g., [3, 0, 0])
+   - WALK: 30-45° (e.g., [35, 0, 0] or [-35, 0, 0])
+   - RUN: 40-50° (e.g., [45, 0, 0] or [-45, 0, 0])
+   - DO NOT use 1° rotations—they're invisible!
 
-7. Return ONLY valid JSON, no markdown, no explanation, no code blocks"""
+7. LEG PATTERNS FOR STANDARD QUADRUPEDS:
+   - leg0 & leg3 must have OPPOSITE phases (0° at different times)
+   - leg1 & leg2 must have OPPOSITE phases
+   - Walk cycle: ~0.65s (0.325s per leg) for natural gait
+   - Run cycle: ~0.4s (0.2s per leg) for fast movement
+
+8. Return ONLY valid JSON, no markdown, no explanation, no code blocks"""
 
 
 def _fetch_animation_template_sync(animation_type: str) -> Optional[dict]:
@@ -1150,19 +1189,30 @@ def llm_generate_animation(
     
     full_prompt = f"""{prompt}
 
-IMPORTANT: Below are pre-built animation skeletons for a {locomotion_type} mob.
-Your job is to REFINE THEM, not generate from scratch.
-- Adjust keyframe timing if needed
-- Change rotation values to be more pronounced/realistic
-- Remove any bones that don't make sense for {mob_name}
-- Add subtle motion to idle if the bones support it
+⚠️ CRITICAL: Below are pre-built animation skeletons for {mob_name} ({locomotion_type}).
+YOU MUST USE THESE AS YOUR FOUNDATION. Do not simplify or reduce rotation values.
+
+Your task:
+1. ✅ KEEP all leg rotation magnitudes (30-45° for walk, 40-50° for run)
+2. ✅ KEEP alternating leg phases (diagonal pairs for quadrupeds)
+3. ✅ KEEP timing differences (walk ~0.65s cycle, run ~0.4s cycle)
+4. ✅ ADJUST only if needed for the specific bone names: {bones_str}
+5. ✅ REMOVE any bones that don't exist in the available list above
+6. ✅ ADD subtle motion only to idle (2-5° sway, never rotations like 1°)
+
+⚠️ DO NOT:
+- Reduce leg swings to 1° (too subtle, invisible on mobs)
+- Make all bones move identically
+- Make walk and run identical
+- Use symmetrical timing (legs must alternate 180°)
+- Simplify to minimal motion
 
 PRE-BUILT SKELETONS FOR {mob_name} (locomotion type: {locomotion_type}):
 {json.dumps(skeletons_json, indent=2)}
 
 {template_context}
 
-Return the complete, refined animation.json. Keep the same animation IDs and bone names, just improve the motion values."""
+Return the complete animation.json with these skeletons as the foundation. Keep the motion values realistic (30-50° for locomotion animations)."""
     
     print(f"[ANIMATION-GEN] Calling provider: {provider}")
     # Call LLM to refine the skeletons
