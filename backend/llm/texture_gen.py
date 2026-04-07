@@ -6,11 +6,11 @@ atlas pixel-by-pixel against that map.
 
 Pipeline:
   1. Fill entire atlas with opaque base color (no transparent gaps)
-  2. Walk geometry: bone → cube → compute all 6 face UV rects
+  2. Walk geometry: bone -> cube -> compute all 6 face UV rects
   3. Paint each face rect with role-specific color + per-face shading
   4. Overlay patterns (spots, stripes, etc.) on painted UV regions only
-  5. Paint features (eyes on head front face)
-  6. Encode to PNG → base64 data URL
+  5. Paint features (eyes, mouth on head front face)
+  6. Encode to PNG -> base64 data URL
 
 No external dependencies beyond Python stdlib (raw PNG encoding).
 """
@@ -25,7 +25,7 @@ from typing import Optional
 
 
 # ---------------------------------------------------------------------------
-# PNG encoder for per-pixel RGBA data
+# PNG encoder
 # ---------------------------------------------------------------------------
 
 def _make_png_from_pixels(width: int, height: int, pixels: list) -> bytes:
@@ -40,7 +40,7 @@ def _make_png_from_pixels(width: int, height: int, pixels: list) -> bytes:
 
     raw_rows = []
     for y in range(height):
-        row_bytes = b'\x00'  # filter byte (none)
+        row_bytes = b'\x00'
         for x in range(width):
             r, g, b, a = pixels[y][x]
             row_bytes += bytes([r & 0xFF, g & 0xFF, b & 0xFF, a & 0xFF])
@@ -71,6 +71,67 @@ def _blend(c1: tuple, c2: tuple, t: float) -> tuple:
     return tuple(_clamp(a + (b - a) * t) for a, b in zip(c1, c2))
 
 
+def _hue_shift(rgb: tuple, degrees: float) -> tuple:
+    """Shift hue by rotating RGB channels through HSV space."""
+    r, g, b = rgb[0] / 255.0, rgb[1] / 255.0, rgb[2] / 255.0
+    mx, mn = max(r, g, b), min(r, g, b)
+    diff = mx - mn
+    if diff < 0.001:
+        return rgb
+    if mx == r:
+        h = 60.0 * (((g - b) / diff) % 6)
+    elif mx == g:
+        h = 60.0 * (((b - r) / diff) + 2)
+    else:
+        h = 60.0 * (((r - g) / diff) + 4)
+    s = diff / mx if mx > 0 else 0
+    v = mx
+    h = (h + degrees) % 360
+    c = v * s
+    x = c * (1 - abs((h / 60) % 2 - 1))
+    m = v - c
+    if h < 60:
+        r2, g2, b2 = c, x, 0
+    elif h < 120:
+        r2, g2, b2 = x, c, 0
+    elif h < 180:
+        r2, g2, b2 = 0, c, x
+    elif h < 240:
+        r2, g2, b2 = 0, x, c
+    elif h < 300:
+        r2, g2, b2 = x, 0, c
+    else:
+        r2, g2, b2 = c, 0, x
+    return (_clamp((r2 + m) * 255), _clamp((g2 + m) * 255), _clamp((b2 + m) * 255))
+
+
+def _generate_palette(base_rgb: tuple) -> dict:
+    """Generate a multi-color palette from a base color.
+
+    Returns distinct colors for different body roles so the mob doesn't
+    look like a single-colored blob.
+    """
+    belly = _lighten(base_rgb, 1.35)
+    belly = _blend(belly, (230, 220, 200), 0.3)
+
+    accent = _hue_shift(base_rgb, 30)
+    accent = _lighten(accent, 1.1)
+
+    membrane = _blend(base_rgb, (180, 140, 100), 0.4)
+    membrane = _lighten(membrane, 1.15)
+
+    return {
+        "head":  _lighten(base_rgb, 1.08),
+        "face":  _lighten(base_rgb, 1.04),
+        "body":  base_rgb,
+        "belly": belly,
+        "leg":   _darken(base_rgb, 0.78),
+        "arm":   membrane,
+        "tail":  _darken(accent, 0.85),
+        "ear":   _lighten(accent, 1.15),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Bone role classification
 # ---------------------------------------------------------------------------
@@ -95,23 +156,22 @@ def _classify_bone(bone_name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Face shading multipliers — makes 3D look more natural
+# Face shading multipliers
 # ---------------------------------------------------------------------------
 
 _FACE_SHADE = {
-    "top":    1.15,   # brightest — lit from above
-    "front":  1.0,    # neutral
-    "right":  0.92,
-    "back":   0.85,
-    "left":   0.88,
-    "bottom": 0.75,   # darkest — underside
-    # Per-face UV dict keys (Bedrock uses these names)
+    "top":    1.12,
+    "front":  1.0,
+    "right":  0.90,
+    "back":   0.82,
+    "left":   0.86,
+    "bottom": 0.72,
     "north":  1.0,
-    "south":  0.85,
-    "east":   0.92,
-    "west":   0.88,
-    "up":     1.15,
-    "down":   0.75,
+    "south":  0.82,
+    "east":   0.90,
+    "west":   0.86,
+    "up":     1.12,
+    "down":   0.72,
 }
 
 
@@ -120,25 +180,10 @@ _FACE_SHADE = {
 # ---------------------------------------------------------------------------
 
 def _box_uv_faces(u: int, v: int, w: int, h: int, d: int) -> dict:
-    """Compute all 6 face UV rects for Bedrock box UV mapping.
-
-    Standard Bedrock box UV layout for cube at uv=[u,v], size=[w,h,d]:
-
-         u    u+d   u+d+w  u+2d+w
-      v  ┌─────┬──────┬──────┬──────┐
-         │     │ Top  │      │Bottom│
-    v+d  ├─────┼──────┼──────┼──────┤
-         │Right│Front │ Left │ Back │
-   v+d+h └─────┴──────┴──────┴──────┘
-
-    Right = East (+X), Left = West (-X), Front = North (-Z), Back = South (+Z)
-
-    Returns dict of face_name → (fu, fv, fw, fh).
-    """
+    """Compute all 6 face UV rects for Bedrock box UV mapping."""
     w = max(w, 0)
     h = max(h, 0)
     d = max(d, 0)
-
     return {
         "top":    (u + d,       v,       w, d),
         "bottom": (u + d + w,   v,       w, d),
@@ -150,19 +195,15 @@ def _box_uv_faces(u: int, v: int, w: int, h: int, d: int) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Per-face UV dict handling (new Bedrock format)
+# Per-face UV dict handling
 # ---------------------------------------------------------------------------
 
 def _perface_uv_rects(uv_dict: dict, cube_size: list) -> dict:
-    """Extract face rects from per-face UV format.
+    """Extract face rects from per-face UV format."""
+    w = int(cube_size[0]) if len(cube_size) > 0 else 0
+    h = int(cube_size[1]) if len(cube_size) > 1 else 0
+    d = int(cube_size[2]) if len(cube_size) > 2 else 0
 
-    Per-face UV looks like:
-      {"north": {"uv": [0,0], "uv_size": [8,8]}, ...}
-    """
-    w, h, d = (int(cube_size[0]), int(cube_size[1]), int(cube_size[2])
-               if len(cube_size) >= 3 else (0, 0, 0))
-
-    # Default uv_size per face based on cube dimensions
     _defaults = {
         "north": (w, h), "south": (w, h),
         "east":  (d, h), "west":  (d, h),
@@ -179,7 +220,6 @@ def _perface_uv_rects(uv_dict: dict, cube_size: list) -> dict:
         fu, fv = int(fuv[0]), int(fuv[1])
         fw = int(abs(fsize[0])) if len(fsize) > 0 else 0
         fh = int(abs(fsize[1])) if len(fsize) > 1 else 0
-        # Handle negative uv_size (Bedrock flips the face)
         if len(fsize) > 0 and fsize[0] < 0:
             fu += int(fsize[0])
         if len(fsize) > 1 and fsize[1] < 0:
@@ -189,7 +229,7 @@ def _perface_uv_rects(uv_dict: dict, cube_size: list) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Color word lookup for texture_instructions parsing
+# Texture instruction parsing
 # ---------------------------------------------------------------------------
 
 _COLOR_WORDS: dict[str, tuple] = {
@@ -209,7 +249,6 @@ _COLOR_WORDS: dict[str, tuple] = {
     "silver": (190, 190, 200), "tan": (200, 170, 120), "olive": (120, 130, 40),
 }
 
-# Role aliases the LLM might use instead of exact role names
 _ROLE_ALIASES: dict[str, str] = {
     "legs": "leg", "arms": "arm", "tails": "tail", "ears": "ear",
     "wings": "arm", "wing": "arm", "claws": "arm",
@@ -220,7 +259,6 @@ _ROLE_ALIASES: dict[str, str] = {
 
 
 def _parse_hex_color(text: str) -> Optional[tuple]:
-    """Extract a hex color like #CC0000 or #c00 from text."""
     import re
     m = re.search(r'#([0-9a-fA-F]{6})\b', text)
     if m:
@@ -234,7 +272,6 @@ def _parse_hex_color(text: str) -> Optional[tuple]:
 
 
 def _find_color_in_text(text: str) -> Optional[tuple]:
-    """Find a color in text: tries hex first, then color words (longest first)."""
     hex_color = _parse_hex_color(text)
     if hex_color:
         return hex_color
@@ -247,28 +284,14 @@ def _find_color_in_text(text: str) -> Optional[tuple]:
 def _parse_texture_instructions(
     instructions: Optional[list],
 ) -> tuple[dict[str, tuple], list[str]]:
-    """Parse texture_instructions into per-role color overrides and extra patterns.
-
-    Handles LLM output formats like:
-      - "red head"
-      - "Head area: bright red scales"
-      - "Body, legs, tail, wings: dark green scales"
-      - "scales"
-
-    Returns (role_overrides, extra_patterns) where:
-      - role_overrides: {"head": (r,g,b), "body": (r,g,b), ...}
-      - extra_patterns: ["stripes", "scales", ...]
-    """
+    """Parse texture_instructions into per-role color overrides and patterns."""
     if not instructions:
         return {}, []
 
-    # Pre-process: split comma-separated entries that the LLM combined
-    # e.g. "Head: red, Body: green" → ["Head: red", "Body: green"]
     expanded: list[str] = []
     for instr in instructions:
         if not isinstance(instr, str):
             continue
-        # Split on commas but only if both sides contain a role-like word
         parts = [p.strip() for p in instr.split(",")]
         if len(parts) > 1:
             expanded.extend(p for p in parts if p)
@@ -277,7 +300,7 @@ def _parse_texture_instructions(
 
     role_overrides: dict[str, tuple] = {}
     extra_patterns: list[str] = []
-    canonical_roles = set(_ROLE_KEYWORDS.keys())  # head, face, body, leg, arm, tail, ear
+    canonical_roles = set(_ROLE_KEYWORDS.keys())
 
     for instr in expanded:
         if not isinstance(instr, str):
@@ -285,11 +308,7 @@ def _parse_texture_instructions(
         text = instr.strip().lower()
         if not text:
             continue
-
-        # Find color in this instruction
         color = _find_color_in_text(text)
-
-        # Find all roles mentioned (including aliases)
         found_roles: list[str] = []
         for role in canonical_roles:
             if role in text:
@@ -297,15 +316,11 @@ def _parse_texture_instructions(
         for alias, canonical in _ROLE_ALIASES.items():
             if alias in text and canonical not in found_roles:
                 found_roles.append(canonical)
-
         if color and found_roles:
-            # Apply color to all mentioned roles
             for role in found_roles:
                 role_overrides[role] = color
         elif not found_roles:
-            # No role found — treat entire string as pattern/extra keywords
             extra_patterns.append(text)
-        # If roles found but no color, ignore (just descriptive text)
 
     return role_overrides, extra_patterns
 
@@ -316,10 +331,6 @@ def _parse_texture_instructions(
 
 def _detect_patterns(display_name: str, texture_hint: str,
                      extra_keywords: Optional[list] = None) -> list[str]:
-    """Detect all applicable patterns from name, hint, and extra keywords.
-
-    Returns a list of pattern names (may be empty).
-    """
     text = f"{display_name} {texture_hint}".lower()
     if extra_keywords:
         text += " " + " ".join(extra_keywords)
@@ -348,7 +359,6 @@ def _detect_patterns(display_name: str, texture_hint: str,
 
 
 def _apply_patterns(pixels, rects, patterns: list[str], base_rgb, tex_w, tex_h):
-    """Apply one or more patterns over a list of UV rects."""
     for pattern in patterns:
         for (fx, fy, fw, fh) in rects:
             if fw < 3 or fh < 3:
@@ -425,14 +435,12 @@ def _paint_scales(pixels, x, y, w, h, base_rgb, tw, th):
 
 
 def _paint_fur(pixels, x, y, w, h, base_rgb, tw, th, seed):
-    """Subtle directional noise simulating fur texture."""
     rng = random.Random(seed)
     light = _lighten(base_rgb, 1.15)
     dark = _darken(base_rgb, 0.80)
     for py in range(y, min(y + h, th)):
         for px in range(x, min(x + w, tw)):
             if 0 <= px < tw and 0 <= py < th:
-                # Vertical bias for fur direction
                 v = rng.random()
                 if v < 0.15:
                     pixels[py][px] = (*light, 255)
@@ -441,7 +449,6 @@ def _paint_fur(pixels, x, y, w, h, base_rgb, tw, th, seed):
 
 
 def _paint_glow(pixels, x, y, w, h, base_rgb, tw, th):
-    """Lighter center per face, simulating inner glow / magma cracks."""
     cx, cy = x + w // 2, y + h // 2
     max_dist = math.sqrt((w / 2) ** 2 + (h / 2) ** 2) or 1
     glow_color = _lighten(base_rgb, 1.5)
@@ -456,7 +463,6 @@ def _paint_glow(pixels, x, y, w, h, base_rgb, tw, th):
 
 
 def _paint_rocky(pixels, x, y, w, h, base_rgb, tw, th, seed):
-    """Irregular dark splotches for stone/rock textures."""
     rng = random.Random(seed)
     dark = _darken(base_rgb, 0.55)
     mid = _darken(base_rgb, 0.75)
@@ -475,30 +481,146 @@ def _paint_rocky(pixels, x, y, w, h, base_rgb, tw, th, seed):
 
 
 # ---------------------------------------------------------------------------
-# Feature painters
+# Feature painters — eyes, mouth, nose proportional to face size
 # ---------------------------------------------------------------------------
 
 def _paint_eyes(pixels, x, y, w, h, tw, th):
-    """Paint 2-pixel eyes on a head front face."""
+    """Paint proportionally-sized eyes with iris, pupil, and highlight."""
     if w < 4 or h < 4:
         return
-    ey = y + h // 3
-    lx = x + w // 3
-    rx = x + (2 * w) // 3
-    white = (255, 255, 255, 255)
-    black = (20, 20, 20, 255)
-    for ex in (lx, rx):
-        for dy in range(min(2, th - ey)):
-            for dx in range(min(2, tw - ex)):
-                px, py = ex + dx, ey + dy
+
+    eye_size = max(2, min(w // 5, h // 4))
+    eye_y = y + h // 3
+
+    left_eye_x = x + w // 4 - eye_size // 2
+    right_eye_x = x + (3 * w) // 4 - eye_size // 2
+
+    white = (255, 255, 255)
+    iris_color = (60, 40, 20)
+    pupil_color = (10, 10, 10)
+    highlight = (240, 240, 255)
+
+    for ex_start in (left_eye_x, right_eye_x):
+        # White sclera
+        for dy in range(eye_size):
+            for dx in range(eye_size):
+                px = ex_start + dx
+                py = eye_y + dy
                 if 0 <= px < tw and 0 <= py < th:
-                    pixels[py][px] = white
-        if 0 <= ex < tw and 0 <= ey < th:
-            pixels[ey][ex] = black
-    # Nose
-    nx, ny = x + w // 2, ey + max(2, h // 4)
-    if 0 <= nx < tw and 0 <= ny < th:
-        pixels[ny][nx] = (60, 40, 30, 255)
+                    pixels[py][px] = (*white, 255)
+
+        # Iris (centered, slightly smaller)
+        iris_size = max(1, eye_size * 2 // 3)
+        iris_x = ex_start + (eye_size - iris_size) // 2
+        iris_y = eye_y + (eye_size - iris_size) // 2
+        for dy in range(iris_size):
+            for dx in range(iris_size):
+                px = iris_x + dx
+                py = iris_y + dy
+                if 0 <= px < tw and 0 <= py < th:
+                    pixels[py][px] = (*iris_color, 255)
+
+        # Pupil (center dot)
+        pupil_size = max(1, iris_size // 2)
+        pupil_x = iris_x + (iris_size - pupil_size) // 2
+        pupil_y = iris_y + (iris_size - pupil_size) // 2
+        for dy in range(pupil_size):
+            for dx in range(pupil_size):
+                px = pupil_x + dx
+                py = pupil_y + dy
+                if 0 <= px < tw and 0 <= py < th:
+                    pixels[py][px] = (*pupil_color, 255)
+
+        # Highlight (top-right pixel of each eye)
+        hx = ex_start + eye_size - max(1, eye_size // 3)
+        hy = eye_y + max(0, eye_size // 4)
+        if 0 <= hx < tw and 0 <= hy < th:
+            pixels[hy][hx] = (*highlight, 255)
+
+    # Nose/nostrils centered below eyes
+    nose_y = eye_y + eye_size + max(1, h // 6)
+    nose_w = max(2, w // 6)
+    nose_color = (50, 35, 30)
+    for dx in range(nose_w):
+        nx = x + w // 2 - nose_w // 2 + dx
+        if 0 <= nx < tw and 0 <= nose_y < th:
+            pixels[nose_y][nx] = (*nose_color, 255)
+
+    # Mouth line
+    mouth_y = nose_y + max(1, h // 8)
+    mouth_w = max(2, w // 3)
+    mouth_color = (40, 25, 25)
+    if mouth_y < y + h - 1:
+        for dx in range(mouth_w):
+            mx = x + w // 2 - mouth_w // 2 + dx
+            if 0 <= mx < tw and 0 <= mouth_y < th:
+                pixels[mouth_y][mx] = (*mouth_color, 255)
+
+
+# ---------------------------------------------------------------------------
+# Shading helpers
+# ---------------------------------------------------------------------------
+
+def _fill_region_shaded(pixels, x, y, w, h, rgb, tex_w, tex_h, seed=0,
+                        face_name="front"):
+    """Fill a rectangular UV region with gradient shading and edge darkening."""
+    rng = random.Random(seed * 31 + x * 7 + y)
+    edge_dark = _darken(rgb, 0.65)
+
+    is_top = face_name in ("top", "up")
+    is_bottom = face_name in ("bottom", "down")
+
+    for py_idx in range(max(0, y), min(y + h, tex_h)):
+        for px_idx in range(max(0, x), min(x + w, tex_w)):
+            local_x = px_idx - x
+            local_y = py_idx - y
+
+            # Edge darkening (1-2px border)
+            dist_to_edge = min(local_x, local_y, w - 1 - local_x, h - 1 - local_y)
+            if dist_to_edge <= 0 and w > 4 and h > 4:
+                pixels[py_idx][px_idx] = (*edge_dark, 255)
+                continue
+
+            # Vertical gradient: lighter at top, darker at bottom
+            v_ratio = local_y / max(1, h - 1)
+            if is_bottom:
+                grad_factor = 0.85
+            elif is_top:
+                grad_factor = 1.05
+            else:
+                grad_factor = 1.08 - (v_ratio * 0.2)
+
+            noise = rng.randint(-6, 6)
+            pixels[py_idx][px_idx] = (
+                _clamp(rgb[0] * grad_factor + noise),
+                _clamp(rgb[1] * grad_factor + noise),
+                _clamp(rgb[2] * grad_factor + noise),
+                255,
+            )
+
+
+def _fill_belly_shading(pixels, x, y, w, h, body_color, belly_color,
+                        tex_w, tex_h, seed=0):
+    """Fill a body face with two-tone belly shading (lighter bottom half)."""
+    rng = random.Random(seed)
+    for py_idx in range(max(0, y), min(y + h, tex_h)):
+        for px_idx in range(max(0, x), min(x + w, tex_w)):
+            local_y = py_idx - y
+            v_ratio = local_y / max(1, h - 1)
+
+            if v_ratio > 0.55:
+                t = (v_ratio - 0.55) / 0.45
+                color = _blend(body_color, belly_color, min(t, 1.0))
+            else:
+                color = body_color
+
+            noise = rng.randint(-5, 5)
+            pixels[py_idx][px_idx] = (
+                _clamp(color[0] + noise),
+                _clamp(color[1] + noise),
+                _clamp(color[2] + noise),
+                255,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -513,11 +635,8 @@ def generate_mob_texture(
     short_name: str = "custom_mob",
     texture_instructions: Optional[list] = None,
 ) -> str:
-    """Generate a fully geometry-aware procedural texture.
-
-    Reads every bone → cube → UV coordinate in the geometry and paints
-    the texture atlas so every referenced pixel is covered with the
-    correct body-part color, shading, and optional pattern.
+    """Generate a geometry-aware procedural texture with proper shading,
+    distinct body-part colors, proportional eyes, and edge detail.
 
     Returns base64 data URL (data:image/png;base64,...) or "".
     """
@@ -535,48 +654,32 @@ def generate_mob_texture(
     if not bones:
         return ""
 
-    # Resolve base color
     if color_rgb and len(color_rgb) >= 3:
         base_rgb = (int(color_rgb[0]), int(color_rgb[1]), int(color_rgb[2]))
     else:
         base_rgb = _guess_base_color(display_name)
 
-    # Parse texture_instructions for per-bone color overrides and extra patterns
     role_overrides, extra_patterns = _parse_texture_instructions(texture_instructions)
-
     patterns = _detect_patterns(display_name, texture_hint, extra_patterns)
 
-    # Role → color mapping
-    role_colors = {
-        "head":  _lighten(base_rgb, 1.10),
-        "face":  _lighten(base_rgb, 1.05),
-        "body":  base_rgb,
-        "leg":   _darken(base_rgb, 0.75),
-        "arm":   _darken(base_rgb, 0.80),
-        "tail":  _darken(base_rgb, 0.85),
-        "ear":   _lighten(base_rgb, 1.15),
-    }
-
-    # Apply per-bone color overrides from texture_instructions
+    palette = _generate_palette(base_rgb)
     for role, color in role_overrides.items():
-        role_colors[role] = color
+        palette[role] = color
 
-    # ── Step 1: Fill entire atlas with opaque base color ──
-    # This guarantees NO transparent pixels anywhere. Even if a UV
-    # region is missed, the mob won't have black/invisible patches.
+    # Step 1: Fill atlas with noisy base color (no transparent pixels)
     rng_base = random.Random(42)
     pixels = [
         [(*_noisy(base_rgb, 4, rng_base), 255) for _ in range(tex_w)]
         for _ in range(tex_h)
     ]
 
-    # ── Step 2: Walk geometry and paint every face UV rect ──
-    head_fronts = []     # for eye painting
-    pattern_rects = []   # for pattern overlay
+    # Step 2: Walk geometry and paint each face UV rect
+    head_fronts = []
+    pattern_rects = []
 
     for bone in bones:
         role = _classify_bone(bone.get("name", ""))
-        bone_color = role_colors.get(role, base_rgb)
+        bone_color = palette.get(role, base_rgb)
 
         for cube_idx, cube in enumerate(bone.get("cubes", [])):
             uv = cube.get("uv")
@@ -584,7 +687,6 @@ def generate_mob_texture(
             if uv is None or not size:
                 continue
 
-            # Determine face rects depending on UV format
             if isinstance(uv, dict):
                 face_rects = _perface_uv_rects(uv, size)
             elif isinstance(uv, (list, tuple)) and len(uv) >= 2:
@@ -596,7 +698,6 @@ def generate_mob_texture(
             else:
                 continue
 
-            # Paint each face
             seed = cube_idx * 31 + hash(bone.get("name", "")) % 10000
             for face_name, (fu, fv, fw, fh) in face_rects.items():
                 if fw <= 0 or fh <= 0:
@@ -605,53 +706,62 @@ def generate_mob_texture(
                 shade = _FACE_SHADE.get(face_name, 1.0)
                 face_color = tuple(_clamp(c * shade) for c in bone_color)
 
-                _fill_region(pixels, fu, fv, fw, fh,
-                             face_color, tex_w, tex_h, seed + hash(face_name) % 1000)
+                is_body_underside = (
+                    role == "body"
+                    and face_name in ("bottom", "down")
+                )
+                is_body_front = (
+                    role == "body"
+                    and face_name in ("front", "north")
+                )
 
-                # Track for feature painting
+                if is_body_underside:
+                    _fill_region_shaded(
+                        pixels, fu, fv, fw, fh,
+                        palette.get("belly", _lighten(base_rgb, 1.3)),
+                        tex_w, tex_h, seed, face_name,
+                    )
+                elif is_body_front:
+                    _fill_belly_shading(
+                        pixels, fu, fv, fw, fh,
+                        face_color, palette.get("belly", _lighten(base_rgb, 1.3)),
+                        tex_w, tex_h, seed,
+                    )
+                else:
+                    _fill_region_shaded(
+                        pixels, fu, fv, fw, fh, face_color,
+                        tex_w, tex_h, seed + hash(face_name) % 1000,
+                        face_name,
+                    )
+
                 if role == "head" and face_name in ("front", "north"):
                     head_fronts.append((fu, fv, fw, fh))
                 if role in ("body", "head", "tail"):
                     pattern_rects.append((fu, fv, fw, fh))
 
-    # ── Step 3: Apply patterns over relevant UV regions ──
+    # Step 3: Patterns
     _apply_patterns(pixels, pattern_rects, patterns, base_rgb, tex_w, tex_h)
 
-    # ── Step 4: Paint features (eyes on head) ──
+    # Step 4: Eyes and facial features
     for (fx, fy, fw, fh) in head_fronts:
         _paint_eyes(pixels, fx, fy, fw, fh, tex_w, tex_h)
 
-    # ── Step 5: Encode PNG → base64 ──
+    # Step 5: Encode
     png_bytes = _make_png_from_pixels(tex_w, tex_h, pixels)
     b64 = base64.b64encode(png_bytes).decode('ascii')
     return f"data:image/png;base64,{b64}"
 
 
 # ---------------------------------------------------------------------------
-# Pixel painting helpers
+# Helpers
 # ---------------------------------------------------------------------------
 
 def _noisy(rgb: tuple, amount: int, rng: random.Random) -> tuple:
-    """Return rgb with subtle per-pixel noise."""
     return tuple(_clamp(c + rng.randint(-amount, amount)) for c in rgb)
 
 
-def _fill_region(pixels, x, y, w, h, rgb, tex_w, tex_h, seed=0):
-    """Fill a rectangular UV region with color + subtle noise."""
-    rng = random.Random(seed * 31 + x * 7 + y)
-    for py in range(max(0, y), min(y + h, tex_h)):
-        for px in range(max(0, x), min(x + w, tex_w)):
-            noise = rng.randint(-5, 5)
-            pixels[py][px] = (
-                _clamp(rgb[0] + noise),
-                _clamp(rgb[1] + noise),
-                _clamp(rgb[2] + noise),
-                255,
-            )
-
-
 # ---------------------------------------------------------------------------
-# Color guessing from display name
+# Color guessing — returns multi-tone base colors for known mob types
 # ---------------------------------------------------------------------------
 
 def _guess_base_color(display_name: str) -> tuple:
@@ -666,7 +776,7 @@ def _guess_base_color(display_name: str) -> tuple:
         "pig": (230, 170, 160),      "sheep": (220, 220, 215),
         "chicken": (210, 200, 180),  "duck": (200, 190, 50),
         "frog": (80, 160, 60),       "snake": (80, 120, 50),
-        "spider": (60, 50, 45),      "dragon": (100, 40, 40),
+        "spider": (60, 50, 45),      "dragon": (160, 40, 40),
         "fire": (200, 80, 20),       "ice": (150, 200, 230),
         "water": (60, 120, 200),     "shark": (120, 130, 145),
         "whale": (70, 90, 120),      "dolphin": (140, 160, 180),
@@ -685,6 +795,10 @@ def _guess_base_color(display_name: str) -> tuple:
         "owl": (140, 120, 80),       "bat": (60, 50, 50),
         "scorpion": (80, 60, 30),    "beetle": (40, 50, 30),
         "butterfly": (180, 100, 200),"bee": (220, 190, 50),
+        "unicorn": (240, 235, 245),  "phoenix": (230, 100, 20),
+        "griffin": (180, 150, 90),    "wyvern": (100, 60, 80),
+        "dinosaur": (100, 130, 70),  "raptor": (90, 110, 60),
+        "charizard": (230, 130, 40), "pikachu": (240, 210, 60),
     }
     for key, color in _MAP.items():
         if key in name:

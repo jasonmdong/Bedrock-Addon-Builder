@@ -1018,16 +1018,33 @@ def llm_rewrite_spec(prompt: str, current: dict, provider: str,
     # --- Step 5: Texture generation ---
     # Always generate a texture for entity specs so the 3D viewer and
     # painter have something to display.  Priority:
-    #   1. MCP designModel (best quality, requires mctools running)
-    #   2. Procedural UV-aware generator (always available, body-part
-    #      coloring, patterns, eyes, etc.)
+    #   1. Procedural UV-aware generator (geometry-driven body-part
+    #      coloring, proportional eyes, shading, patterns)
+    #   2. MCP designModel fallback (if procedural fails)
     texture_b64 = ""
     if output_spec and category == "entity_logic_ai":
         geo = output_spec.get("geometry_json")
         has_geo = geo and isinstance(geo, dict) and geo.get("minecraft:geometry")
 
-        # Try MCP texture first
+        # Procedural UV-mapped texture (preferred — geometry-aware with
+        # distinct body-part colors, proportional eyes, edge shading)
         if has_geo:
+            try:
+                texture_b64 = generate_mob_texture(
+                    geometry_json=geo,
+                    display_name=output_spec.get("display_name", ""),
+                    color_rgb=output_spec.get("color_rgb"),
+                    texture_hint=output_spec.get("texture_hint", ""),
+                    short_name=output_spec.get("short_name", "custom_mob"),
+                    texture_instructions=output_spec.get("texture_instructions"),
+                )
+                if texture_b64:
+                    print(f"[LLM] Procedural texture generated ({len(texture_b64)} chars)")
+            except Exception as tex_exc:
+                log.warning("[LLM] Procedural texture generation failed: %s", tex_exc)
+
+        # Fallback: MCP designModel
+        if not texture_b64 and has_geo:
             safe_id = (output_spec.get("short_name") or "custom_mob").replace(":", "_")
             try:
                 design_result = mcp_design_model_sync(
@@ -1042,22 +1059,6 @@ def llm_rewrite_spec(prompt: str, current: dict, provider: str,
                     print(f"[LLM] MCP texture generated ({len(texture_b64)} chars)")
             except Exception as tex_exc:
                 log.warning("[LLM] MCP texture generation failed: %s", tex_exc)
-
-        # Fallback: procedural UV-mapped texture
-        if not texture_b64 and has_geo:
-            try:
-                texture_b64 = generate_mob_texture(
-                    geometry_json=geo,
-                    display_name=output_spec.get("display_name", ""),
-                    color_rgb=output_spec.get("color_rgb"),
-                    texture_hint=output_spec.get("texture_hint", ""),
-                    short_name=output_spec.get("short_name", "custom_mob"),
-                    texture_instructions=output_spec.get("texture_instructions"),
-                )
-                if texture_b64:
-                    print(f"[LLM] Procedural texture generated ({len(texture_b64)} chars)")
-            except Exception as tex_exc:
-                log.warning("[LLM] Procedural texture generation failed: %s", tex_exc)
 
     pipeline_meta["stages"].append(
         _stage_record(
@@ -1105,6 +1106,12 @@ def llm_rewrite_spec(prompt: str, current: dict, provider: str,
 
 GEOMETRY_SYSTEM_PROMPT = """You are a Minecraft Bedrock Edition geometry generator. You generate valid minecraft:geometry JSON for custom mobs and entities.
 
+CRITICAL — USE MINECRAFT BLOCK SCALE:
+Cube sizes must use Minecraft pixel units where 16 pixels = 1 block.
+A cow body is about [14, 10, 8]. A chicken body is [6, 6, 6]. A spider body is [14, 8, 6].
+DO NOT use tiny fractional sizes like [4.2, 3.5, 2.4] — those produce invisible mobs.
+All leg origins must have Y >= 0 (never negative — negative Y goes underground).
+
 Output format is a valid minecraft:geometry JSON object. The structure must be:
 {
   "format_version": "1.12.0",
@@ -1144,11 +1151,18 @@ Key rules:
 1. All coordinates use Y-up coordinate system (Y is vertical)
 2. pivot defines the rotation point for a bone
 3. origin is the minimum corner of a cube (not center)
-4. size is [width_x, height_y, depth_z]
+4. size is [width_x, height_y, depth_z] — use WHOLE NUMBERS or near-whole sizes (e.g. 8, 10, 14)
 5. Parent bones must be defined before children reference them
 6. Humanoid mobs typically have: root, body, head, left_arm, right_arm, left_leg, right_leg
 7. Quadruped mobs typically have: root, body, head, leg0-3
 8. Use appropriate UV coordinates for box UV mapping
+9. Legs should start at Y=0 and extend upward; body sits on top of legs
+
+Scale reference (cube sizes in pixels):
+- Small mob (chicken): body [6, 6, 6], head [4, 6, 3], legs [1, 5, 1]
+- Medium mob (cow):    body [14, 10, 8], head [8, 8, 6], legs [4, 12, 4]
+- Large mob (horse):   body [16, 12, 10], head [8, 10, 6], legs [4, 14, 4]
+- Huge mob (elephant): body [18, 14, 12], head [10, 10, 10], legs [5, 12, 5]
 
 When modifying existing geometry, preserve the structure and only change what's requested.
 Output ONLY valid JSON, no explanations."""
@@ -1240,37 +1254,39 @@ def llm_generate_geometry(
         print(f"[LLM] Geometry generation took {duration_ms}ms, provider={provider_key}")
 
     # After LLM generates geometry, create a matching texture
-    # Priority: MCP designModel → procedural generator
+    # Priority: procedural UV-aware generator → MCP designModel fallback
     texture_b64 = ""
     mcp_design_used = False
     if output and isinstance(output, dict) and output.get("minecraft:geometry"):
         safe_name = mob_name.replace(":", "_").replace(" ", "_").lower()
-        print(f"[LLM-GEOMETRY] Calling MCP designModel for texture (model={safe_name})")
-        design_result = mcp_design_model_sync(
-            output, safe_name, prompt,
-            display_name=mob_name,
-        )
-        if design_result.available and design_result.texture_b64:
-            texture_b64 = design_result.texture_b64
-            mcp_design_used = True
-            print(f"[LLM-GEOMETRY] MCP texture generated ({len(texture_b64)} chars)")
-            if design_result.geometry:
-                output = design_result.geometry
-        elif design_result.error:
-            print(f"[LLM-GEOMETRY] MCP texture failed: {design_result.error}")
 
-        # Fallback: procedural UV-mapped texture
+        # Procedural UV-mapped texture (preferred)
+        try:
+            texture_b64 = generate_mob_texture(
+                geometry_json=output,
+                display_name=mob_name,
+                short_name=safe_name,
+            )
+            if texture_b64:
+                print(f"[LLM-GEOMETRY] Procedural texture generated ({len(texture_b64)} chars)")
+        except Exception as tex_exc:
+            log.warning("[LLM-GEOMETRY] Procedural texture failed: %s", tex_exc)
+
+        # Fallback: MCP designModel
         if not texture_b64:
-            try:
-                texture_b64 = generate_mob_texture(
-                    geometry_json=output,
-                    display_name=mob_name,
-                    short_name=safe_name,
-                )
-                if texture_b64:
-                    print(f"[LLM-GEOMETRY] Procedural texture generated ({len(texture_b64)} chars)")
-            except Exception as tex_exc:
-                log.warning("[LLM-GEOMETRY] Procedural texture failed: %s", tex_exc)
+            print(f"[LLM-GEOMETRY] Calling MCP designModel for texture (model={safe_name})")
+            design_result = mcp_design_model_sync(
+                output, safe_name, prompt,
+                display_name=mob_name,
+            )
+            if design_result.available and design_result.texture_b64:
+                texture_b64 = design_result.texture_b64
+                mcp_design_used = True
+                print(f"[LLM-GEOMETRY] MCP texture generated ({len(texture_b64)} chars)")
+                if design_result.geometry:
+                    output = design_result.geometry
+            elif design_result.error:
+                print(f"[LLM-GEOMETRY] MCP texture failed: {design_result.error}")
 
     output["_texture_b64"] = texture_b64
     output["_mcp_design"] = mcp_design_used

@@ -24,6 +24,154 @@ import uuid
 import time
 import zipfile
 
+
+def _anim_short_key(anim_key: str, mob_name: str) -> str:
+    """Extract short animation key (e.g. 'walk') from a full animation ID.
+
+    Handles mismatches between mob_name and the animation prefix.
+    For example, mob_name='my_first_mob' but anim_key='animation.custom_dragon.walk'
+    -> returns 'walk' (the last dot-segment).
+    """
+    prefix = f"animation.{mob_name}."
+    if anim_key.startswith(prefix):
+        return anim_key[len(prefix):]
+    parts = anim_key.split(".")
+    if len(parts) >= 3 and parts[0] == "animation":
+        return parts[-1]
+    return anim_key
+
+
+def _get_wing_bone_names(geo_data: dict) -> list:
+    """Return names of wing bones in the geometry."""
+    names = []
+    if not geo_data or not isinstance(geo_data, dict):
+        return names
+    for geo_entry in geo_data.get("minecraft:geometry", []):
+        for bone in geo_entry.get("bones", []):
+            name = bone.get("name", "")
+            if "wing" in name.lower():
+                names.append(name)
+    return names
+
+
+def _fix_geometry_scale(geo_data: dict) -> None:
+    """Scale up LLM geometry that is too small for Minecraft."""
+    MIN_BODY_DIMENSION = 6
+
+    for geo_entry in geo_data.get("minecraft:geometry", []):
+        bones = geo_entry.get("bones", [])
+        if not bones:
+            continue
+
+        max_dim = 0
+        for bone in bones:
+            for cube in bone.get("cubes", []):
+                sz = cube.get("size", [0, 0, 0])
+                max_dim = max(max_dim, *[abs(s) for s in sz])
+
+        if max_dim < MIN_BODY_DIMENSION and max_dim > 0:
+            scale_factor = round(MIN_BODY_DIMENSION / max_dim + 0.5)
+            scale_factor = max(2, min(scale_factor, 6))
+
+            for bone in bones:
+                for cube in bone.get("cubes", []):
+                    origin = cube.get("origin", [0, 0, 0])
+                    size = cube.get("size", [0, 0, 0])
+                    cube["origin"] = [round(v * scale_factor, 1) for v in origin]
+                    cube["size"] = [round(v * scale_factor, 1) for v in size]
+                pivot = bone.get("pivot", [0, 0, 0])
+                bone["pivot"] = [round(v * scale_factor, 1) for v in pivot]
+
+
+def _fix_geometry_legs(geo_data: dict) -> None:
+    """Fix LLM geometry where legs go underground or overlap with the body."""
+    _LEG_KEYWORDS = ["leg", "foot", "feet", "hoof", "paw"]
+    _BODY_KEYWORDS = ["body", "torso", "chest", "abdomen", "spine", "root"]
+
+    def _is_leg(name: str) -> bool:
+        n = name.lower().replace("_", " ")
+        return any(kw in n for kw in _LEG_KEYWORDS)
+
+    def _is_body(name: str) -> bool:
+        n = name.lower().replace("_", " ")
+        return any(kw in n for kw in _BODY_KEYWORDS)
+
+    for geo_entry in geo_data.get("minecraft:geometry", []):
+        bones = geo_entry.get("bones", [])
+        if not bones:
+            continue
+
+        body_cube = None
+        leg_bones = []
+        for bone in bones:
+            cubes = bone.get("cubes", [])
+            if not cubes:
+                continue
+            if _is_body(bone.get("name", "")) and not body_cube:
+                body_cube = cubes[0]
+            elif _is_leg(bone.get("name", "")):
+                leg_bones.append(bone)
+
+        if not leg_bones:
+            continue
+
+        leg_ys = []
+        leg_hs = []
+        for lb in leg_bones:
+            for c in lb.get("cubes", []):
+                leg_ys.append(c.get("origin", [0, 0, 0])[1])
+                leg_hs.append(c.get("size", [0, 0, 0])[1])
+        if not leg_ys:
+            continue
+
+        min_leg_y = min(leg_ys)
+
+        if min_leg_y < 0:
+            shift = -min_leg_y
+            for bone in bones:
+                for c in bone.get("cubes", []):
+                    o = c.get("origin", [0, 0, 0])
+                    o[1] += shift
+                    c["origin"] = o
+                p = bone.get("pivot", [0, 0, 0])
+                p[1] += shift
+                bone["pivot"] = p
+            return
+
+        if not body_cube:
+            return
+        body_y = body_cube.get("origin", [0, 0, 0])[1]
+        max_leg_h = max(leg_hs)
+        overlap = body_y - min_leg_y
+        if overlap >= 0 and overlap < max_leg_h * 0.5:
+            shift = max_leg_h - overlap
+            if shift <= 0:
+                return
+            for bone in bones:
+                if _is_leg(bone.get("name", "")):
+                    continue
+                for c in bone.get("cubes", []):
+                    o = c.get("origin", [0, 0, 0])
+                    o[1] += shift
+                    c["origin"] = o
+                p = bone.get("pivot", [0, 0, 0])
+                p[1] += shift
+                bone["pivot"] = p
+
+
+def _sanitize_animations(animation_json: dict) -> None:
+    """Fix common LLM animation issues at build time.
+
+    - Removes anim_time_update from walk/run animations (causes jitter
+      on custom entities whose pathfinding movement isn't smooth).
+    """
+    for anim_key, anim_data in animation_json.get("animations", {}).items():
+        if not isinstance(anim_data, dict):
+            continue
+        last_seg = anim_key.rsplit(".", 1)[-1].lower()
+        if last_seg in ("walk", "walking", "run", "running"):
+            anim_data.pop("anim_time_update", None)
+
 from .bedrock_reference import (
     generate_linked_manifests,
     generate_client_entity,
@@ -321,8 +469,10 @@ async def build_mcworld(mobs: list[dict], pack_name: str = "custom_mobs") -> str
             entity_data = mob.get("entity", mob)
             metadata = mob.get("metadata", {})
 
-            mc_entity = entity_data.get("minecraft:entity", {})
-            identifier = mc_entity.get("description", {}).get(
+            entity_data.setdefault("minecraft:entity", {})
+            mc_entity = entity_data["minecraft:entity"]
+            mc_entity.setdefault("description", {})
+            identifier = mc_entity["description"].get(
                 "identifier", "custom:unknown_mob"
             )
             mob_name = identifier.split(":")[-1]
@@ -333,7 +483,8 @@ async def build_mcworld(mobs: list[dict], pack_name: str = "custom_mobs") -> str
             mob_identifiers.append(identifier)
 
             # Sanitize behavior entity before writing
-            bp_comps = mc_entity.get("components", {})
+            mc_entity.setdefault("components", {})
+            bp_comps = mc_entity["components"]
 
             # Normalize unreliable fireball projectiles
             if "minecraft:shooter" in bp_comps:
@@ -346,20 +497,44 @@ async def build_mcworld(mobs: list[dict], pack_name: str = "custom_mobs") -> str
             if "minecraft:shooter" in bp_comps and "minecraft:behavior.ranged_attack" in bp_comps:
                 bp_comps.pop("minecraft:behavior.melee_attack", None)
 
-            # Auto-inject fly components when mob has fly animations
-            _has_fly = mob.get("animation_json") and any(
-                "fly" in k for k in (mob.get("animation_json") or {}).get("animations", {})
+            # Ensure fly components AND behaviors when mob has fly animations,
+            # wing bones, or fly-related components.
+            _fly_keys = ("minecraft:can_fly", "minecraft:movement.fly",
+                         "minecraft:navigation.fly", "minecraft:flying_speed")
+            _mob_anim = mob.get("animation_json") or {}
+            _mob_geo = mob.get("geometry_data") or {}
+            _has_fly = (
+                any("fly" in k for k in _mob_anim.get("animations", {}))
+                or bool(_get_wing_bone_names(_mob_geo))
+                or any(k in bp_comps for k in _fly_keys)
             )
-            if _has_fly and "minecraft:movement.fly" not in bp_comps:
+            if _has_fly:
                 bp_comps.pop("minecraft:movement.basic", None)
-                bp_comps["minecraft:movement.fly"] = {}
+                bp_comps.setdefault("minecraft:movement.fly", {})
                 bp_comps.pop("minecraft:navigation.walk", None)
-                bp_comps["minecraft:navigation.fly"] = {
+                bp_comps.setdefault("minecraft:navigation.fly", {
                     "can_path_over_water": True,
                     "can_path_over_lava": True,
-                }
-                bp_comps["minecraft:can_fly"] = {}
+                })
+                bp_comps.setdefault("minecraft:can_fly", {})
                 bp_comps.setdefault("minecraft:flying_speed", {"value": 0.4})
+                bp_comps.pop("minecraft:behavior.wander", None)
+                bp_comps["minecraft:behavior.float"] = {"priority": 0}
+                if "minecraft:behavior.random_fly" not in bp_comps:
+                    bp_comps["minecraft:behavior.random_fly"] = {
+                        "priority": 5,
+                        "avoid_damage_blocks": True,
+                        "can_land_on_trees": False,
+                        "xz_dist": 15,
+                        "y_dist": 5,
+                        "y_offset": 0,
+                        "speed_multiplier": 1.0,
+                    }
+                if "minecraft:behavior.random_stroll" not in bp_comps:
+                    bp_comps["minecraft:behavior.random_stroll"] = {
+                        "priority": 7,
+                        "speed_multiplier": 0.6,
+                    }
 
             # Ensure targeting filter has required "subject" field
             _nat = bp_comps.get("minecraft:behavior.nearest_attackable_target", {})
@@ -442,6 +617,9 @@ async def build_mcworld(mobs: list[dict], pack_name: str = "custom_mobs") -> str
 
             # Determine geometry ID — prefer custom geometry, fall back to vanilla
             if geometry_data:
+                _fix_geometry_scale(geometry_data)
+                _fix_geometry_legs(geometry_data)
+
                 geos = geometry_data.get("minecraft:geometry", [])
                 if geos:
                     geometry_id = geos[0].get("description", {}).get(
@@ -458,11 +636,34 @@ async def build_mcworld(mobs: list[dict], pack_name: str = "custom_mobs") -> str
             else:
                 geometry_id = None
 
-            # Build short-name map and remap controller references
+            # Auto-generate fly animation if mob has wing bones but none
+            _wing_names = _get_wing_bone_names(geometry_data) if geometry_data else []
+            if _wing_names:
+                if not anim_json or not isinstance(anim_json, dict):
+                    anim_json = {"format_version": "1.8.0", "animations": {}}
+                _anims = anim_json.setdefault("animations", {})
+                if not any("fly" in k.lower() for k in _anims):
+                    _fly_key = f"animation.{mob_name}.fly"
+                    _fly_bones = {}
+                    for _wn in _wing_names:
+                        if "left" in _wn.lower():
+                            _fly_bones[_wn] = {"rotation": {"0.0": [0, 0, -45], "0.5": [0, 0, 15], "1.0": [0, 0, -45]}}
+                        elif "right" in _wn.lower():
+                            _fly_bones[_wn] = {"rotation": {"0.0": [0, 0, 45], "0.5": [0, 0, -15], "1.0": [0, 0, 45]}}
+                        else:
+                            _fly_bones[_wn] = {"rotation": {"0.0": [0, 0, -30], "0.5": [0, 0, 30], "1.0": [0, 0, -30]}}
+                    _fly_bones["body"] = {"rotation": {"0.0": [2, 0, 0], "0.5": [-2, 0, 0], "1.0": [2, 0, 0]}}
+                    _anims[_fly_key] = {"loop": True, "animation_length": 1.0, "bones": _fly_bones}
+
+            # Sanitize + build short-name map and remap controller references
             anim_short_map = {}
             if anim_json and isinstance(anim_json, dict) and anim_json.get("animations"):
+                import copy as _cp
+                anim_json = _cp.deepcopy(anim_json)
+                _sanitize_animations(anim_json)
+
                 for anim_key in anim_json["animations"]:
-                    short_key = anim_key.replace(f"animation.{mob_name}.", "")
+                    short_key = _anim_short_key(anim_key, mob_name)
                     anim_short_map[short_key] = anim_key
 
                 zf.writestr(
@@ -506,23 +707,35 @@ async def build_mcworld(mobs: list[dict], pack_name: str = "custom_mobs") -> str
             )
 
             # Texture
+            texture_bytes = None
             if texture_b64:
                 try:
                     texture_bytes = base64.b64decode(texture_b64)
-                    zf.writestr(
-                        f"{rp_prefix}/textures/entity/{mob_name}.png",
-                        texture_bytes,
-                    )
                 except Exception:
-                    zf.writestr(
-                        f"{rp_prefix}/textures/entity/{mob_name}.png",
-                        _create_placeholder_texture(style),
+                    texture_bytes = None
+
+            if not texture_bytes and geometry_data:
+                try:
+                    from backend.llm.texture_gen import generate_mob_texture as _gen_tex
+                    import base64 as _b64m
+                    _display = metadata.get("display_name", mob_name.replace("_", " ").title())
+                    _tex_url = _gen_tex(
+                        geometry_json=geometry_data,
+                        display_name=_display,
+                        short_name=mob_name,
                     )
-            else:
-                zf.writestr(
-                    f"{rp_prefix}/textures/entity/{mob_name}.png",
-                    _create_placeholder_texture(style),
-                )
+                    if _tex_url and "," in _tex_url:
+                        texture_bytes = _b64m.b64decode(_tex_url.split(",", 1)[1])
+                except Exception:
+                    pass
+
+            if not texture_bytes:
+                texture_bytes = _create_placeholder_texture(style)
+
+            zf.writestr(
+                f"{rp_prefix}/textures/entity/{mob_name}.png",
+                texture_bytes,
+            )
 
     mcworld_bytes = mcworld_buffer.getvalue()
     encoded = base64.b64encode(mcworld_bytes).decode("utf-8")
@@ -642,7 +855,7 @@ def _build_client_entity(
     anim_refs = {}
     if animation_json and isinstance(animation_json, dict) and animation_json.get("animations"):
         for anim_key in animation_json["animations"]:
-            short_key = anim_key.replace(f"animation.{mob_name}.", "")
+            short_key = _anim_short_key(anim_key, mob_name)
             anim_refs[short_key] = anim_key
 
     # Also register animation controller shortname (keeps it loadable)
@@ -661,11 +874,13 @@ def _build_client_entity(
     if anim_refs:
         desc["animations"] = anim_refs
 
-        # Drive animations directly via Molang in scripts.animate.
-        # This is more reliable than routing everything through an
-        # animation controller, which can silently fail on custom entities.
         has_walk = any(
             k in ("walk", "walking", "run", "running")
+            for k, v in anim_refs.items()
+            if not v.startswith("controller.animation.")
+        )
+        has_fly = any(
+            k in ("fly", "flying")
             for k, v in anim_refs.items()
             if not v.startswith("controller.animation.")
         )
@@ -674,14 +889,26 @@ def _build_client_entity(
             if full_id.startswith("controller.animation."):
                 continue
             if short_key == "idle":
-                # Only play idle when not moving (prevents jitter from
-                # two animations fighting over shared bones like body/tail)
-                cond = "!query.is_moving" if has_walk else "1.0"
+                if has_fly and has_walk:
+                    cond = "query.is_on_ground && !query.is_moving"
+                elif has_fly:
+                    cond = "query.is_on_ground"
+                elif has_walk:
+                    cond = "!query.is_moving"
+                else:
+                    cond = "1.0"
                 animate_list.append({short_key: cond})
             elif short_key in ("walk", "walking", "run", "running"):
-                animate_list.append({short_key: "query.is_moving"})
+                if has_fly:
+                    animate_list.append({short_key: "query.is_on_ground && query.is_moving"})
+                else:
+                    animate_list.append({short_key: "query.is_moving"})
             elif short_key in ("fly", "flying"):
                 animate_list.append({short_key: "!query.is_on_ground"})
+            elif short_key in ("attack", "attacking", "breath", "fire",
+                               "fire_breath", "fire_attack", "shoot",
+                               "bite", "charge"):
+                animate_list.append({short_key: "variable.attacking"})
             else:
                 pass
         if animate_list:
@@ -712,17 +939,32 @@ def _create_pack_icon() -> bytes:
 
 
 def _create_placeholder_texture(style: str = "biped") -> bytes:
+    """Create a placeholder texture with some color variation instead of flat gray."""
     from .bedrock_reference import STYLE_TEXTURE_SIZE
     w, h = STYLE_TEXTURE_SIZE.get(style, (64, 64))
     try:
         from PIL import Image
+        import random as _rng
+        _rng.seed(42)
 
-        img = Image.new("RGBA", (w, h), (100, 100, 100, 255))
+        img = Image.new("RGBA", (w, h), (120, 110, 100, 255))
+        for py in range(h):
+            for px in range(w):
+                noise = _rng.randint(-10, 10)
+                base_r = 120 + noise
+                base_g = 110 + noise
+                base_b = 100 + noise
+                img.putpixel((px, py), (
+                    max(0, min(255, base_r)),
+                    max(0, min(255, base_g)),
+                    max(0, min(255, base_b)),
+                    255,
+                ))
         buf = io.BytesIO()
         img.save(buf, format="PNG")
         return buf.getvalue()
     except ImportError:
-        return _minimal_png(w, h, (100, 100, 100))
+        return _minimal_png(w, h, (120, 110, 100))
 
 
 def _minimal_png(width: int, height: int, color: tuple) -> bytes:

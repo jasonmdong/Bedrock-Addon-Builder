@@ -117,14 +117,22 @@ GEOMETRY RULES:
   Example: user says "turn it into a ghast" → geometry="geometry.ghast", geometry_json={}.
 - For NON-VANILLA creatures (elephant, dragon, dinosaur, unicorn, robot, etc.), you MUST generate custom geometry_json with an appropriate body shape. Do NOT use a cow/pig/zombie model as a substitute — build the right shape.
   Example: user says "make an elephant" → geometry="geometry.custom_elephant", geometry_json={full custom geometry with large body, trunk, big ears, thick legs}.
-- When you generate custom geometry_json, use this format:
+- When you generate custom geometry_json, use MINECRAFT PIXEL SCALE (16px = 1 block).
+  A cow body is size [14, 10, 8]. A chicken body is [6, 6, 6]. DO NOT use tiny fractional
+  sizes like [4.2, 3.5, 2.4] — those make invisible mobs. Legs MUST start at Y=0 or above.
+  Example format:
 {
   "format_version": "1.12.0",
   "minecraft:geometry": [
     {
       "description": { "identifier": "geometry.custom", "texture_width": 64, "texture_height": 64 },
       "bones": [
-        { "name": "root", "pivot": [0, 0, 0], "cubes": [ { "origin": [-4,0,-4], "size": [8,8,8], "uv": [0,0] } ] }
+        { "name": "body", "pivot": [0, 12, 0], "cubes": [ { "origin": [-5,8,-4], "size": [10,8,8], "uv": [0,0] } ] },
+        { "name": "head", "pivot": [0, 16, -4], "cubes": [ { "origin": [-3,16,-8], "size": [6,6,6], "uv": [0,16] } ] },
+        { "name": "leg0", "pivot": [-3, 8, 2], "cubes": [ { "origin": [-4,0,1], "size": [3,8,3], "uv": [0,32] } ] },
+        { "name": "leg1", "pivot": [3, 8, 2], "cubes": [ { "origin": [1,0,1], "size": [3,8,3], "uv": [12,32] } ] },
+        { "name": "leg2", "pivot": [-3, 8, -2], "cubes": [ { "origin": [-4,0,-3], "size": [3,8,3], "uv": [24,32] } ] },
+        { "name": "leg3", "pivot": [3, 8, -2], "cubes": [ { "origin": [1,0,-3], "size": [3,8,3], "uv": [36,32] } ] }
       ]
     }
   ]

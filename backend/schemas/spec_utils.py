@@ -201,8 +201,8 @@ def validate_spec(raw: dict) -> dict:
     if not isinstance(box, dict):
         raise SpecValidationError("collision_box must be an object with width/height.")
     merged["collision_box"] = {
-        "width": _coerce_number(box.get("width"), "collision_box.width", minimum=0.1, maximum=5),
-        "height": _coerce_number(box.get("height"), "collision_box.height", minimum=0.5, maximum=5),
+        "width": _coerce_number(box.get("width"), "collision_box.width", minimum=0.1, maximum=10),
+        "height": _coerce_number(box.get("height"), "collision_box.height", minimum=0.5, maximum=10),
     }
 
     for key in ("geometry", "render_controller", "texture_hint"):
