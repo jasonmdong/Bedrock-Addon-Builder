@@ -223,7 +223,7 @@ def _call_planner(provider_key: str, api_key: Optional[str], user_content: str) 
         return _plan_deepseek(api_key, user_content)
     elif provider_key == "gemini":
         return _plan_gemini(api_key, user_content)
-    elif provider_key == "claude":
+    elif provider_key == "claude" or provider_key == "claude-sonnet" or provider_key == "claude-opus":
         return _plan_claude(api_key, user_content)
     elif provider_key == "ollama":
         return _plan_ollama(api_key, user_content)

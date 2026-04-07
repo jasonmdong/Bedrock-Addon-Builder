@@ -76,7 +76,15 @@ function initializeViewer3D() {
     panSpeed: 0.3,
     zoomSpeed: 8,
     minDistance: 10,
-    maxDistance: 500
+    maxDistance: 500,
+    // Keyboard movement state
+    keys: {
+      w: false, // forward
+      a: false, // left
+      s: false, // backward
+      d: false  // right
+    },
+    moveSpeed: 1.0
   };
   
   function updateCameraFromOrbit() {
@@ -144,14 +152,43 @@ function initializeViewer3D() {
   renderer.domElement.addEventListener("wheel", (e) => {
     e.preventDefault();
     const delta = e.deltaY > 0 ? 1 : -1;
-    controls.distance = Math.max(
-      controls.minDistance,
-      Math.min(controls.maxDistance, controls.distance + delta * controls.zoomSpeed)
-    );
-    updateCameraFromOrbit();
+    
+    // If scale tool is active and an object is selected, scale uniformly
+    if (editor3DState.tool === 'scale' && editor3DState.selectedObject) {
+      const obj = editor3DState.selectedObject;
+      const factor = 1 + delta * 0.02;  // Mouse wheel scaling sensitivity
+      const clamped = Math.max(0.1, Math.min(5, factor));
+      obj.scale.multiplyScalar(clamped);
+      refreshSelectionBox();
+      console.log('[3D Editor] Scale via wheel:', [obj.scale.x, obj.scale.y, obj.scale.z]);
+    } else {
+      // Normal camera zoom
+      controls.distance = Math.max(
+        controls.minDistance,
+        Math.min(controls.maxDistance, controls.distance + delta * controls.zoomSpeed)
+      );
+      updateCameraFromOrbit();
+    }
   }, { passive: false });
   
   renderer.domElement.addEventListener("contextmenu", (e) => e.preventDefault());
+  
+  // WASD keyboard controls for camera movement
+  document.addEventListener("keydown", (e) => {
+    const key = e.key.toLowerCase();
+    if (key === 'w') { controls.keys.w = true; }
+    if (key === 'a') { controls.keys.a = true; }
+    if (key === 's') { controls.keys.s = true; }
+    if (key === 'd') { controls.keys.d = true; }
+  });
+  
+  document.addEventListener("keyup", (e) => {
+    const key = e.key.toLowerCase();
+    if (key === 'w') { controls.keys.w = false; }
+    if (key === 'a') { controls.keys.a = false; }
+    if (key === 's') { controls.keys.s = false; }
+    if (key === 'd') { controls.keys.d = false; }
+  });
   
   // Handle window resize
   const handleResize = () => {
@@ -168,6 +205,34 @@ function initializeViewer3D() {
   let animationFrameId;
   const animate = () => {
     animationFrameId = requestAnimationFrame(animate);
+    
+    // Handle WASD camera movement
+    const moveVec = new THREE.Vector3();
+    if (controls.keys.w) moveVec.z += controls.moveSpeed;  // Backward
+    if (controls.keys.s) moveVec.z -= controls.moveSpeed;  // Forward
+    if (controls.keys.a) moveVec.x += controls.moveSpeed;  // Left (X inverted)
+    if (controls.keys.d) moveVec.x -= controls.moveSpeed;  // Right (X inverted)
+    
+    if (moveVec.length() > 0) {
+      // Transform movement from camera-local to world space
+      const camDir = new THREE.Vector3();
+      camera.getWorldDirection(camDir);
+      const camRight = new THREE.Vector3();
+      camRight.crossVectors(camera.up, camDir).normalize();
+      const camUp = new THREE.Vector3();
+      camUp.crossVectors(camDir, camRight).normalize();
+      
+      // Apply movement relative to camera orientation
+      moveVec.x *= controls.moveSpeed;
+      moveVec.z *= controls.moveSpeed;
+      
+      const deltaMove = new THREE.Vector3();
+      deltaMove.addScaledVector(camRight, moveVec.x);
+      deltaMove.addScaledVector(camUp, moveVec.z);
+      
+      controls.target.add(deltaMove);
+      updateCameraFromOrbit();
+    }
     
     // Update animation if playing
     if (animationState && animationState.playing && viewer3D.mesh) {
@@ -1178,75 +1243,9 @@ const editor3DState = {
   paintColor: '#ff0000',
   brushSize: 1,
   showWireframe: false,
-  // Transform drag state
-  _dragging: false,
-  _dragStart: null,       // {x, y} screen coords at drag start
-  _dragStartWorld: null,   // THREE.Vector3 world position at drag start
-  _origPosition: null,
-  _origRotation: null,
-  _origScale: null,
-  // Undo stack
-  _undoStack: [],
+  snapToGrid: false,
+  gridSize: 16
 };
-
-// Selection outline helper
-let selectionBox = null;
-
-function clearSelection() {
-  if (selectionBox && selectionBox.parent) {
-    selectionBox.parent.remove(selectionBox);
-  }
-  selectionBox = null;
-  editor3DState.selectedObject = null;
-}
-
-function selectObject(obj) {
-  if (!obj || !viewer3D) return;
-
-  // Walk up to find the bone group (THREE.Group with a boneName)
-  let target = obj;
-  while (target && !target.userData?.boneName && target.parent && target.parent !== viewer3D.scene && target.parent !== viewer3D.mesh) {
-    target = target.parent;
-  }
-
-  // Remove old outline
-  if (selectionBox && selectionBox.parent) {
-    selectionBox.parent.remove(selectionBox);
-  }
-
-  editor3DState.selectedObject = target;
-
-  // Create wireframe bounding box outline
-  const box = new THREE.Box3().setFromObject(target);
-  if (box.isEmpty()) return;
-
-  const size = box.getSize(new THREE.Vector3());
-  const center = box.getCenter(new THREE.Vector3());
-
-  const geo = new THREE.BoxGeometry(size.x, size.y, size.z);
-  const edges = new THREE.EdgesGeometry(geo);
-  selectionBox = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({
-    color: 0x1e90ff,
-    linewidth: 2,
-    depthTest: false,
-    transparent: true,
-  }));
-  selectionBox.renderOrder = 999;
-  selectionBox.position.copy(center);
-  // Convert to target's parent space if target has a parent
-  if (target.parent) {
-    target.parent.worldToLocal(selectionBox.position);
-  }
-  selectionBox.userData._isSelectionBox = true;
-
-  (target.parent || viewer3D.scene).add(selectionBox);
-  console.log('[3D Editor] Selected:', target.userData?.boneName || target.name || 'object');
-}
-
-function refreshSelectionBox() {
-  if (!editor3DState.selectedObject) return;
-  selectObject(editor3DState.selectedObject);
-}
 
 // Toggle grid visibility
 function toggleGrid() {
@@ -1284,62 +1283,10 @@ function setEditorTool(tool) {
   });
 
   // Update cursor
-  const el = document.getElementById('viewport-3d');
-  if (el) {
-    if (['paint', 'erase', 'pick'].includes(tool)) el.style.cursor = 'crosshair';
-    else if (['move', 'rotate', 'scale'].includes(tool)) el.style.cursor = 'grab';
-    else el.style.cursor = 'default';
+  const canvas = document.getElementById('viewport-3d');
+  if (canvas) {
+    canvas.style.cursor = ['paint', 'erase', 'pick'].includes(tool) ? 'crosshair' : 'default';
   }
-}
-
-// =====================
-// UNDO SYSTEM
-// =====================
-
-function pushUndo(label) {
-  const obj = editor3DState.selectedObject;
-  if (!obj) return;
-  editor3DState._undoStack.push({
-    label,
-    object: obj,
-    position: obj.position.clone(),
-    rotation: obj.rotation.clone(),
-    scale: obj.scale.clone(),
-  });
-  // Keep stack bounded
-  if (editor3DState._undoStack.length > 50) editor3DState._undoStack.shift();
-}
-
-function undo() {
-  const entry = editor3DState._undoStack.pop();
-  if (!entry) return;
-  entry.object.position.copy(entry.position);
-  entry.object.rotation.copy(entry.rotation);
-  entry.object.scale.copy(entry.scale);
-  refreshSelectionBox();
-  console.log('[3D Editor] Undo:', entry.label);
-}
-
-// =====================
-// TRANSFORM HELPERS
-// =====================
-
-// Project a screen-space mouse delta into world-space movement
-function screenToWorldDelta(dx, dy, camera, distance) {
-  const vFov = camera.fov * Math.PI / 180;
-  const el = document.getElementById('viewport-3d');
-  const h = el ? el.clientHeight : 500;
-  const worldPerPx = (2 * distance * Math.tan(vFov / 2)) / h;
-
-  // Extract camera's local right (+X) and up (+Y) axes from its world matrix
-  const m = camera.matrixWorld.elements;
-  const right = new THREE.Vector3(m[0], m[1], m[2]).normalize();
-  const up = new THREE.Vector3(m[4], m[5], m[6]).normalize();
-
-  const delta = new THREE.Vector3();
-  delta.addScaledVector(right, dx * worldPerPx);
-  delta.addScaledVector(up, -dy * worldPerPx);
-  return delta;
 }
 
 // Paint on the texture at a UV coordinate
@@ -1420,7 +1367,6 @@ function setupRaycasting() {
   }
 
   let isPainting = false;
-  let isTransforming = false;
 
   function getIntersect(e) {
     const rect = container.getBoundingClientRect();
@@ -1432,6 +1378,22 @@ function setupRaycasting() {
       if (child.isMesh && child.visible && !child.userData?._isSelectionBox) meshes.push(child);
     });
     const intersects = raycaster.intersectObjects(meshes, false);
+    return intersects.length > 0 ? intersects[0] : null;
+  }
+
+  function getGizmoIntersect(e) {
+    if (!transformGizmo) return null;
+    const rect = container.getBoundingClientRect();
+    mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera(mouse, viewer3D.camera);
+    const gizmoMeshes = [];
+    transformGizmo.traverse(child => {
+      if (child.isMesh && child.visible) {
+        gizmoMeshes.push(child);
+      }
+    });
+    const intersects = raycaster.intersectObjects(gizmoMeshes, false);
     return intersects.length > 0 ? intersects[0] : null;
   }
 
@@ -1453,73 +1415,7 @@ function setupRaycasting() {
     }
   }
 
-  // --- Transform drag handling ---
-  function startTransform(e) {
-    const obj = editor3DState.selectedObject;
-    if (!obj) return false;
-
-    pushUndo(editor3DState.tool);
-    isTransforming = true;
-    editor3DState._dragging = true;
-    editor3DState._dragStart = { x: e.clientX, y: e.clientY };
-    editor3DState._origPosition = obj.position.clone();
-    editor3DState._origRotation = obj.rotation.clone();
-    editor3DState._origScale = obj.scale.clone();
-    container.style.cursor = 'grabbing';
-    return true;
-  }
-
-  function updateTransform(e) {
-    const obj = editor3DState.selectedObject;
-    if (!obj || !editor3DState._dragging) return;
-
-    const dx = e.clientX - editor3DState._dragStart.x;
-    const dy = e.clientY - editor3DState._dragStart.y;
-    const dist = viewer3D.controls ? viewer3D.controls.distance : 100;
-
-    if (editor3DState.tool === 'move') {
-      const delta = screenToWorldDelta(dx, dy, viewer3D.camera, dist);
-      obj.position.copy(editor3DState._origPosition).add(delta);
-      refreshSelectionBox();
-    } else if (editor3DState.tool === 'rotate') {
-      // Horizontal drag = Y rotation, Vertical drag = X rotation
-      const sensitivity = 0.5;
-      obj.rotation.copy(editor3DState._origRotation);
-      obj.rotation.y += dx * sensitivity * Math.PI / 180;
-      obj.rotation.x -= dy * sensitivity * Math.PI / 180;
-      refreshSelectionBox();
-    } else if (editor3DState.tool === 'scale') {
-      // Drag right/up = scale up, left/down = scale down
-      const factor = 1 + (dx - dy) * 0.005;
-      const clamped = Math.max(0.1, Math.min(5, factor));
-      obj.scale.copy(editor3DState._origScale).multiplyScalar(clamped);
-      refreshSelectionBox();
-    }
-  }
-
-  function stopTransform() {
-    if (isTransforming) {
-      isTransforming = false;
-      editor3DState._dragging = false;
-      container.style.cursor = ['move', 'rotate', 'scale'].includes(editor3DState.tool) ? 'grab' : 'default';
-    }
-  }
-
-  // --- Mouse events ---
   container.addEventListener('mousemove', (e) => {
-    // Transform dragging takes priority
-    if (isTransforming) {
-      updateTransform(e);
-      return;
-    }
-
-    // Continuous painting while dragging
-    if (isPainting && ['paint', 'erase'].includes(editor3DState.tool)) {
-      handlePaintAction(e);
-      return;
-    }
-
-    // Hover detection
     const hit = getIntersect(e);
     if (hit) {
       editor3DState.hoverObject = hit.object;
@@ -1533,11 +1429,7 @@ function setupRaycasting() {
   container.addEventListener('mousedown', (e) => {
     if (e.button !== 0) return;
 
-    const tool = editor3DState.tool;
-    const isPaintTool = ['paint', 'erase', 'pick'].includes(tool);
-    const isTransformTool = ['move', 'rotate', 'scale'].includes(tool);
-
-    // Paint tools
+    const isPaintTool = ['paint', 'erase', 'pick'].includes(editor3DState.tool);
     if (isPaintTool && editor3DState.hoverObject) {
       e.stopPropagation();
       isPainting = true;
@@ -1545,25 +1437,11 @@ function setupRaycasting() {
       return;
     }
 
-    // Transform tools — if clicking on a mesh, select it then start drag
-    if (isTransformTool) {
-      if (editor3DState.hoverObject) {
-        selectObject(editor3DState.hoverObject);
-      }
-      if (editor3DState.selectedObject) {
-        e.stopPropagation();
-        startTransform(e);
-      }
-      return;
-    }
+    if (!editor3DState.hoverObject) return;
 
-    // Select tool
-    if (tool === 'select') {
-      if (editor3DState.hoverObject) {
-        selectObject(editor3DState.hoverObject);
-      } else {
-        clearSelection();
-      }
+    if (editor3DState.tool === 'select') {
+      editor3DState.selectedObject = editor3DState.hoverObject;
+      console.log('[3D Editor] Selected:', editor3DState.hoverObject.name || 'unnamed');
     }
   });
 
@@ -1654,6 +1532,10 @@ window.init3DEditor = init3DEditor;
 window.setupRaycasting = setupRaycasting;
 window.paintAtUV = paintAtUV;
 window.savePaintedTexture = savePaintedTexture;
+window.createTransformGizmo = createTransformGizmo;
+window.showTransformGizmo = showTransformGizmo;
+window.hideTransformGizmo = hideTransformGizmo;
+window.updateGizmoPosition = updateGizmoPosition;
 
 // Geometry generation via LLM
 let currentGeometryData = null;
