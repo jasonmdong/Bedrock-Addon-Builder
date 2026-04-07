@@ -446,29 +446,35 @@ def patch_resource_pack(res_root: Path, specs: list[dict], textures_dir: Path = 
         # ALWAYS add scripts block with the current mob's animation controller
         # This tells the game to use the animation controller for bone animations
         shortname_controller = f"{mob_short}_controller"
+        animation_controller = spec.get("animation_controller") or f"controller.animation.{mob_short}"
         client["minecraft:client_entity"]["description"]["scripts"] = {
             "animate": [shortname_controller]
         }
         
-        # Build animations block programmatically using deterministic short-name wiring
-        from backend.llm.animation_generation import _build_entity_animations_block
-        
+        # Build animations block mapping short names to full animation IDs
+        # CRITICAL: Must include the controller mapping so scripts.animate reference resolves!
         animation_json = spec.get("animation_json")
-        animation_short_names = []
+        animations_block = {}
+        
+        # First, add the controller mapping (what scripts.animate["elephant_controller"] refers to)
+        animations_block[shortname_controller] = animation_controller
+        
+        # Then add animation mappings from animation_json
         if animation_json and isinstance(animation_json, dict) and "animations" in animation_json:
-            # Extract short names from full animation IDs (e.g., "animation.mob.idle" → "idle")
+            # Extract short names from full animation IDs and build mapping
+            # e.g., "animation.mob.idle" has key "idle", maps to {"idle": "animation.mob.idle"}
             for full_id in animation_json["animations"].keys():
-                # Format: "animation.{mob_name}.{shortname}"
                 if full_id.startswith("animation."):
                     parts = full_id.split(".")
                     if len(parts) >= 3:
                         short_name = ".".join(parts[2:])  # Handle cases like "animation.mob.type.idle"
-                        animation_short_names.append(short_name)
+                        animations_block[short_name] = full_id
         
-        # Use deterministic, code-based wiring instead of LLM-generated values
-        animations_block = _build_entity_animations_block(mob_short, animation_short_names)
-        client["minecraft:client_entity"]["description"]["animations"] = animations_block
-        print(f"[BUILD] ✓ Added scripts/animations block for {mob_short} with {len(animation_short_names)} animations")
+        if animations_block:
+            client["minecraft:client_entity"]["description"]["animations"] = animations_block
+            print(f"[BUILD] ✓ Added scripts/animations block for {mob_short} with {len(animations_block)} entries (1 controller + {len(animations_block)-1} animations)")
+        else:
+            print(f"[BUILD] ⚠ Empty animations block for {mob_short}")
         
         # Write entity file
         _write_text(client_file, json.dumps(client, indent=2))

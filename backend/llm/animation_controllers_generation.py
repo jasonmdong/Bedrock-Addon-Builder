@@ -196,22 +196,22 @@ REQUIRED FORMAT:
         "idle": {{
           "animations": ["animation.{mob_name}.idle"],
           "transitions": [
-            {{"walking": "query.is_moving && !query.is_sprinting"}},
-            {{"running": "query.is_sprinting"}}
+            {{"walking": "query.is_moving && query.modified_move_speed < 0.2"}},
+            {{"running": "query.is_moving && query.modified_move_speed >= 0.2"}}
           ]
         }},
         "walking": {{
           "animations": ["animation.{mob_name}.walk"],
           "transitions": [
             {{"idle": "!query.is_moving"}},
-            {{"running": "query.is_sprinting"}}
+            {{"running": "query.modified_move_speed >= 0.2"}}
           ]
         }},
         "running": {{
           "animations": ["animation.{mob_name}.walk"],
           "transitions": [
             {{"idle": "!query.is_moving"}},
-            {{"walking": "!query.is_sprinting"}}
+            {{"walking": "query.modified_move_speed < 0.2"}}
           ]
         }}
       }}
@@ -223,14 +223,14 @@ CRITICAL RULES:
 1. format_version MUST be "1.8.0"
 2. Controller ID MUST be "controller.animation.{mob_name}"
 3. State names MUST match actual animation names
-4. Use query.* conditions like: query.is_moving, query.is_sprinting, query.is_airborne, query.is_swimming
+4. Use query.* conditions like: query.is_moving, query.modified_move_speed, query.is_airborne, query.is_swimming
 5. Return ONLY the JSON, no extra text
 6. Minimum 2 states (idle, moving)
 7. All referenced animations MUST exist in the animations list above
 
 AVAILABLE QUERY CONDITIONS:
 - query.is_moving - Mob is moving
-- query.is_sprinting - Mob is sprinting/running
+- query.modified_move_speed - Movement speed (0.0-1.0+), use thresholds like >= 0.2 for running
 - query.is_airborne - Mob is in the air
 - query.is_swimming - Mob is in water
 - query.is_on_ground - Mob is on solid ground
@@ -467,10 +467,7 @@ def _validate_animation_controller_with_retry(
         
         # Validate current animation controller
         try:
-            validation = mcp_validate_sync(
-                content=ac_dict,
-                schema_type="animation_controller",
-            )
+            validation = mcp_validate_sync(ac_dict)
             is_valid = validation.valid if validation else False
             errors = validation.errors if validation else []
         except Exception as e:
@@ -651,7 +648,7 @@ def llm_generate_animation_controller(
             template_context += json.dumps(mojang_ctrl_sample, indent=2)[:1500] + "...\n\n"
         
         template_context += "⚠️  Use this Mojang example as reference for:\n"
-        template_context += "   - State transition conditions (query.is_moving, query.is_sprinting, etc.)\n"
+        template_context += "   - State transition conditions (query.is_moving, query.modified_move_speed, etc.)\n"
         template_context += "   - Animation controller naming patterns\n"
         template_context += "   - Transition logic structure\n"
     
@@ -664,8 +661,8 @@ Available animations: {', '.join(animation_names)}
 
 Create realistic state transitions:
 - idle state when not moving
-- walking state when moving (use query.is_moving)
-- running state if sprinting (use query.is_sprinting)
+- walking state when moving (use query.is_moving && query.modified_move_speed < 0.2)
+- running state if sprinting (use query.modified_move_speed >= 0.2)
 - smooth transitions between all states
 
 ⚠️  IMPORTANT: The "animations" arrays in your states will be automatically fixed by the system
@@ -710,8 +707,6 @@ Make it a complete, valid animation_controllers.json."""
     # This replaces whatever animations arrays the LLM generated with deterministic
     # short-name to full-ID mappings, eliminating confusion between names and IDs
     if ac_dict and "animation_controllers" in ac_dict:
-        from backend.llm.animation_generation import _build_controller_states
-        
         # Extract animation short names from the animation_json that was passed in
         animation_short_names = []
         if animation_json and isinstance(animation_json, dict):
@@ -723,14 +718,33 @@ Make it a complete, valid animation_controllers.json."""
                         short_name = ".".join(parts[2:])
                         animation_short_names.append(short_name)
         
-        # Fix each controller's states
+        # Fix each controller's states: ensure they reference short names, not full IDs
         for ctrl_name, ctrl_data in ac_dict["animation_controllers"].items():
             if isinstance(ctrl_data, dict) and "states" in ctrl_data:
-                ctrl_data["states"] = _build_controller_states(
-                    ctrl_data["states"],
-                    mob_name,
-                    animation_short_names
-                )
+                # For each state, set animations array to ONLY the matching animation
+                for state_name, state_def in ctrl_data["states"].items():
+                    if isinstance(state_def, dict):
+                        # Match state name to corresponding animation
+                        # Priority: exact match, then partial match with state name in animation
+                        matching_animations = []
+                        
+                        # Strategy 1: Exact match (state "idle" → animation "idle")
+                        if state_name in animation_short_names:
+                            matching_animations = [state_name]
+                        else:
+                            # Strategy 2: Find animations containing the state name
+                            # e.g., state "idle" matches animation "idle.breathing"
+                            for anim_name in animation_short_names:
+                                if state_name in anim_name or anim_name in state_name:
+                                    matching_animations.append(anim_name)
+                        
+                        # Fallback: if no matches found, use first animation (shouldn't happen)
+                        if not matching_animations and animation_short_names:
+                            matching_animations = [animation_short_names[0]]
+                        
+                        # Set animations to ONLY the matching animation(s)
+                        state_def["animations"] = matching_animations
+                        print(f"[AC-WIRING] State '{state_name}' → animations {matching_animations}")
                 print(f"[AC-WIRING] Fixed animation references in controller '{ctrl_name}'")
     
     # Ensure format_version
