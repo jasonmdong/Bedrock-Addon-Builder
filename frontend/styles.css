@@ -927,6 +927,36 @@ code { font-family: ui-monospace, SFMono-Regular, Consolas, Menlo, monospace; }
   background: #4e4e52;
 }
 
+/* Animation selector buttons */
+.anim-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.6rem;
+}
+
+.anim-buttons button {
+  padding: 0.35rem 0.7rem;
+  font-size: 0.8rem;
+  background: #2d2d30;
+  border: 1px solid #5a5a5e;
+  color: #b0b0b0;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.anim-buttons button:hover {
+  background: #3e3e42;
+  color: #e0e0e0;
+}
+
+.anim-buttons button.active {
+  background: #2e7d32;
+  border-color: #4CAF50;
+  color: #fff;
+}
+
 .timeline-slider {
   flex: 1;
   height: 6px;
