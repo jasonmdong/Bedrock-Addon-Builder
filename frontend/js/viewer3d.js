@@ -765,6 +765,15 @@ function render3DGeometry(geometryData, mobName, mobScale) {
   viewer3D.scene.add(rootGroup);
   viewer3D.mesh = rootGroup;
   
+  // Save each bone's initial transform as the "bind pose" so we can restore it
+  for (const boneName in viewer3D.bones) {
+    const bone = viewer3D.bones[boneName];
+    if (!bone) continue;
+    bone.userData.bindPosition = bone.position.clone();
+    bone.userData.bindRotation = new THREE.Euler(bone.rotation.x, bone.rotation.y, bone.rotation.z, bone.rotation.order);
+    bone.userData.bindScale = bone.scale.clone();
+  }
+  
   console.log("[3D] Model rendered successfully");
 }
 
@@ -785,33 +794,59 @@ function initAnimationState() {
 function loadAnimation(animationData) {
   if (!animationState) initAnimationState();
   
+  // Reset bones to bind pose before loading new animation
+  resetBonePoses();
+
   animationState.animationData = animationData;
-  animationState.duration = animationData.animation_length || 1;
-  animationState.loop = animationData.loop === true || animationData.loop === "loop";
+  animationState.time = 0;
+  animationState.playing = false;
+  // Default loop true for Molang-driven animations that lack animation_length
+  animationState.loop = animationData.loop === true || animationData.loop === "loop"
+    || animationData.loop === undefined;
   animationState.keyframes = {};
   
-  // Parse bone animations
+  // Parse bone animations and detect Molang usage
+  let hasMolang = false;
   if (animationData.bones) {
     for (const boneName in animationData.bones) {
       const boneAnim = animationData.bones[boneName];
-      animationState.keyframes[boneName] = {
+      const kfs = {
         rotation: parseKeyframes(boneAnim.rotation),
         position: parseKeyframes(boneAnim.position),
         scale: parseKeyframes(boneAnim.scale)
       };
+      animationState.keyframes[boneName] = kfs;
+      // Check if any channel uses Molang
+      for (const ch of [kfs.rotation, kfs.position, kfs.scale]) {
+        if (ch && ch.some(k => k.molang)) hasMolang = true;
+      }
     }
   }
+
+  // For Molang-driven animations without explicit length, use a generous loop window
+  animationState.duration = animationData.animation_length || (hasMolang ? 4 : 1);
+  animationState.hasMolang = hasMolang;
   
-  console.log(`[Animation] Loaded animation: duration=${animationState.duration}s, loop=${animationState.loop}`);
+  console.log(`[Animation] Loaded animation: duration=${animationState.duration}s, loop=${animationState.loop}, molang=${hasMolang}`);
   updateTimelineUI();
 }
 
 function parseKeyframes(data) {
   if (!data) return null;
   
-  // Handle simple array value (constant)
+  // Handle simple array value (constant) — may contain Molang strings
   if (Array.isArray(data)) {
+    const hasMolang = data.some(v => typeof v === "string");
+    if (hasMolang) {
+      // Return as a Molang expression array to be evaluated per-frame
+      return [{ time: 0, value: data, molang: true }];
+    }
     return [{ time: 0, value: data }];
+  }
+
+  // Handle single Molang string (rare but valid)
+  if (typeof data === "string") {
+    return [{ time: 0, value: [data, data, data], molang: true }];
   }
   
   // Handle keyframe object
@@ -819,12 +854,16 @@ function parseKeyframes(data) {
   for (const time in data) {
     const value = data[time];
     if (Array.isArray(value)) {
-      keyframes.push({ time: parseFloat(time), value: value });
+      const hasMolang = value.some(v => typeof v === "string");
+      keyframes.push({ time: parseFloat(time), value: value, molang: hasMolang });
     } else if (typeof value === "object") {
       // Handle pre/post values for interpolation
+      const resolved = value.post || value.pre || [0, 0, 0];
+      const hasMolang = Array.isArray(resolved) && resolved.some(v => typeof v === "string");
       keyframes.push({ 
         time: parseFloat(time), 
-        value: value.post || value.pre || [0, 0, 0],
+        value: resolved,
+        molang: hasMolang,
         lerp_mode: value.lerp_mode || "linear"
       });
     }
@@ -832,6 +871,50 @@ function parseKeyframes(data) {
   
   keyframes.sort((a, b) => a.time - b.time);
   return keyframes;
+}
+
+/**
+ * Evaluate a simple Molang expression with the given context variables.
+ * Supports: math.cos, math.sin, math.abs, math.pi, query.anim_time,
+ * basic arithmetic (+, -, *, /), parentheses, and numeric literals.
+ */
+function evalMolang(expr, ctx) {
+  if (typeof expr === "number") return expr;
+  if (typeof expr !== "string") return 0;
+
+  let s = expr.trim().toLowerCase();
+  // Replace Molang variables with values
+  s = s.replace(/query\.anim_time/g, String(ctx.anim_time || 0));
+  s = s.replace(/query\.modified_distance_moved/g, String(ctx.anim_time || 0));
+  s = s.replace(/query\.ground_speed/g, String(ctx.ground_speed || 0));
+  s = s.replace(/variable\.\w+/g, "0");
+  s = s.replace(/query\.\w+/g, "0");
+
+  // Replace Molang math functions (Molang uses degrees)
+  s = s.replace(/math\.pi/g, String(Math.PI));
+  s = s.replace(/math\.cos\(/g, "__molang_cos(");
+  s = s.replace(/math\.sin\(/g, "__molang_sin(");
+  s = s.replace(/math\.abs\(/g, "Math.abs(");
+  s = s.replace(/math\.sqrt\(/g, "Math.sqrt(");
+  s = s.replace(/math\.pow\(/g, "Math.pow(");
+  s = s.replace(/math\.clamp\(/g, "__molang_clamp(");
+  s = s.replace(/math\.min\(/g, "Math.min(");
+  s = s.replace(/math\.max\(/g, "Math.max(");
+
+  // Sanitize: only allow safe characters
+  if (/[^0-9+\-*/().,%_ a-z\s]/.test(s)) return 0;
+
+  try {
+    const __molang_cos = (deg) => Math.cos(deg * Math.PI / 180);
+    const __molang_sin = (deg) => Math.sin(deg * Math.PI / 180);
+    const __molang_clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
+    const result = new Function("__molang_cos", "__molang_sin", "__molang_clamp", "Math", "return " + s)(
+      __molang_cos, __molang_sin, __molang_clamp, Math
+    );
+    return typeof result === "number" && isFinite(result) ? result : 0;
+  } catch (e) {
+    return 0;
+  }
 }
 
 function updateAnimation() {
@@ -861,38 +944,43 @@ function updateAnimation() {
 function applyAnimationFrame(time) {
   if (!viewer3D || !viewer3D.bones) return;
   
+  const ctx = { anim_time: time, ground_speed: 0 };
+
   for (const boneName in animationState.keyframes) {
     const bone = viewer3D.bones[boneName];
     if (!bone) continue;
     
     const boneKeyframes = animationState.keyframes[boneName];
     
-    // Apply rotation
+    // Apply rotation (additive on top of bind pose)
     if (boneKeyframes.rotation) {
-      const rot = interpolateKeyframes(boneKeyframes.rotation, time);
+      const rot = interpolateKeyframes(boneKeyframes.rotation, time, ctx);
       if (rot) {
-        bone.rotation.x = -rot[0] * Math.PI / 180;
-        bone.rotation.y = -rot[1] * Math.PI / 180;
-        bone.rotation.z = rot[2] * Math.PI / 180;
+        const bind = bone.userData.bindRotation;
+        bone.rotation.set(
+          (bind ? bind.x : 0) + (-rot[0] * Math.PI / 180),
+          (bind ? bind.y : 0) + (-rot[1] * Math.PI / 180),
+          (bind ? bind.z : 0) + (rot[2] * Math.PI / 180)
+        );
       }
     }
     
-    // Apply position offset
+    // Apply position offset (additive on top of bind position)
     if (boneKeyframes.position) {
-      const pos = interpolateKeyframes(boneKeyframes.position, time);
+      const pos = interpolateKeyframes(boneKeyframes.position, time, ctx);
       if (pos) {
-        const originalPivot = bone.userData.originalPivot || [0, 0, 0];
+        const bind = bone.userData.bindPosition || new THREE.Vector3();
         bone.position.set(
-          -originalPivot[0] - pos[0],
-          originalPivot[1] + pos[1],
-          originalPivot[2] + pos[2]
+          bind.x - pos[0],
+          bind.y + pos[1],
+          bind.z + pos[2]
         );
       }
     }
     
     // Apply scale
     if (boneKeyframes.scale) {
-      const scl = interpolateKeyframes(boneKeyframes.scale, time);
+      const scl = interpolateKeyframes(boneKeyframes.scale, time, ctx);
       if (scl) {
         bone.scale.set(scl[0], scl[1], scl[2]);
       }
@@ -900,17 +988,23 @@ function applyAnimationFrame(time) {
   }
 }
 
-function interpolateKeyframes(keyframes, time) {
+function interpolateKeyframes(keyframes, time, ctx) {
   if (!keyframes || keyframes.length === 0) return null;
+
+  // Resolve a keyframe value, evaluating Molang if needed
+  function resolveValue(kf) {
+    if (!kf.molang) return kf.value;
+    return kf.value.map(v => typeof v === "string" ? evalMolang(v, ctx) : v);
+  }
   
   // Before first keyframe
   if (time <= keyframes[0].time) {
-    return keyframes[0].value;
+    return resolveValue(keyframes[0]);
   }
   
   // After last keyframe
   if (time >= keyframes[keyframes.length - 1].time) {
-    return keyframes[keyframes.length - 1].value;
+    return resolveValue(keyframes[keyframes.length - 1]);
   }
   
   // Find surrounding keyframes
@@ -923,9 +1017,15 @@ function interpolateKeyframes(keyframes, time) {
     }
   }
   
-  if (!kf1 || !kf2) return keyframes[0].value;
+  if (!kf1 || !kf2) return resolveValue(keyframes[0]);
+
+  // If either keyframe has Molang, just evaluate the nearest one (no lerp for expressions)
+  if (kf1.molang || kf2.molang) {
+    const t = (time - kf1.time) / (kf2.time - kf1.time);
+    return t < 0.5 ? resolveValue(kf1) : resolveValue(kf2);
+  }
   
-  // Linear interpolation
+  // Linear interpolation between numeric keyframes
   const t = (time - kf1.time) / (kf2.time - kf1.time);
   return [
     kf1.value[0] + (kf2.value[0] - kf1.value[0]) * t,
@@ -973,6 +1073,83 @@ function resetAnimation() {
   animationState.playing = false;
   applyAnimationFrame(0);
   updateTimelineUI();
+}
+
+/**
+ * Load all animations from a mob spec's animation_json and show
+ * per-animation buttons in the timeline panel.
+ * @param {object} animationJson - The full animation.json object from the spec
+ */
+function loadAnimationsFromSpec(animationJson) {
+  const timeline = document.getElementById("animation-timeline");
+  const container = document.getElementById("anim-buttons");
+
+  // If no valid animation data, hide the panel
+  if (!animationJson || !animationJson.animations || Object.keys(animationJson.animations).length === 0) {
+    if (timeline) timeline.style.display = "none";
+    if (container) container.innerHTML = "";
+    // Stop any playing animation and reset bones
+    if (animationState && animationState.playing) {
+      animationState.playing = false;
+    }
+    resetBonePoses();
+    return;
+  }
+
+  // Show the timeline panel
+  if (timeline) timeline.style.display = "";
+  if (!container) return;
+
+  container.innerHTML = "";
+
+  const animations = animationJson.animations;
+  const animNames = Object.keys(animations);
+
+  animNames.forEach(fullName => {
+    const btn = document.createElement("button");
+    // Show a short label: "animation.mob.idle" → "idle"
+    const parts = fullName.split(".");
+    btn.textContent = parts[parts.length - 1] || fullName;
+    btn.title = fullName;
+    btn.addEventListener("click", () => {
+      // Highlight active button
+      container.querySelectorAll("button").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      // Load and auto-play this animation
+      loadAnimation(animations[fullName]);
+      animationState.playing = true;
+      animationState.lastFrameTime = performance.now();
+      updateTimelineUI();
+    });
+    container.appendChild(btn);
+  });
+
+  // Auto-select the first animation (load but don't auto-play)
+  if (animNames.length > 0) {
+    loadAnimation(animations[animNames[0]]);
+    container.children[0].classList.add("active");
+  }
+}
+
+/**
+ * Reset all bone rotations/positions/scales to their bind pose.
+ */
+function resetBonePoses() {
+  if (!viewer3D || !viewer3D.bones) return;
+  for (const boneName in viewer3D.bones) {
+    const bone = viewer3D.bones[boneName];
+    if (!bone) continue;
+    // Restore to the saved bind pose (position/rotation/scale from initial geometry build)
+    if (bone.userData.bindPosition) {
+      bone.position.copy(bone.userData.bindPosition);
+    }
+    if (bone.userData.bindRotation) {
+      bone.rotation.copy(bone.userData.bindRotation);
+    }
+    if (bone.userData.bindScale) {
+      bone.scale.copy(bone.userData.bindScale);
+    }
+  }
 }
 
 // Viewport controls
@@ -2001,6 +2178,7 @@ function init3DEditor() {
 // Export for external use
 window.render3DGeometry = render3DGeometry;
 window.loadAnimation = loadAnimation;
+window.loadAnimationsFromSpec = loadAnimationsFromSpec;
 window.viewer3D = viewer3D;
 window.refresh3DTexture = refresh3DTexture;
 window.editor3DState = editor3DState;
