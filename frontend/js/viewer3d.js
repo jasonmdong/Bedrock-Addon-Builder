@@ -620,6 +620,7 @@ function render3DGeometry(geometryData, mobName, mobScale) {
   texCanvas.width = textureWidth;
   texCanvas.height = textureHeight;
   const texCtx = texCanvas.getContext('2d', { willReadFrequently: true });
+  texCtx.imageSmoothingEnabled = false;  // Disable pixel interpolation
   texCtx.fillStyle = '#ffffff';
   texCtx.fillRect(0, 0, texCanvas.width, texCanvas.height);
 
@@ -631,6 +632,7 @@ function render3DGeometry(geometryData, mobName, mobScale) {
       textureHeight = img.height;
       texCanvas.width = img.width;
       texCanvas.height = img.height;
+      texCtx.imageSmoothingEnabled = false;  // Restore after canvas resize clears context
       texCtx.drawImage(img, 0, 0);
       texture.needsUpdate = true;
       // Store dimensions for painting
@@ -1388,6 +1390,7 @@ function refresh3DTexture(mobName) {
     if (viewer3D.texCanvas && viewer3D.texCtx) {
       viewer3D.texCanvas.width = img.width;
       viewer3D.texCanvas.height = img.height;
+      viewer3D.texCtx.imageSmoothingEnabled = false;  // Restore after canvas resize clears context
       viewer3D.texCtx.drawImage(img, 0, 0);
       viewer3D.texWidth = img.width;
       viewer3D.texHeight = img.height;
@@ -1821,8 +1824,13 @@ function pickColorAtUV(uv) {
   if (!viewer3D || !viewer3D.texCtx || !uv) return null;
   const tw = viewer3D.texWidth;
   const th = viewer3D.texHeight;
-  const px = Math.floor(uv.x * tw);
-  const py = Math.floor((1 - uv.y) * th);
+  
+  // Clamp coordinates to valid bounds
+  let px = Math.floor(uv.x * tw);
+  let py = Math.floor((1 - uv.y) * th);
+  px = Math.max(0, Math.min(px, tw - 1));
+  py = Math.max(0, Math.min(py, th - 1));
+  
   const pixel = viewer3D.texCtx.getImageData(px, py, 1, 1).data;
   const hex = '#' + ((1 << 24) + (pixel[0] << 16) + (pixel[1] << 8) + pixel[2]).toString(16).slice(1);
   return hex;
