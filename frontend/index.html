@@ -421,20 +421,22 @@
     <div class="row" style="margin-top: 0;">
       <div class="field">
         <label>Resource Pack (.zip/.mcpack)</label>
-        <div style="position: relative;">
+        <div style="position: relative; display: flex; gap: 0.25rem;">
           <input type="file" id="resource" style="display: none;" accept=".zip,.mcpack">
-          <button type="button" class="secondary" onclick="document.getElementById('resource').click()" style="width: 100%; text-align: left; display: flex; align-items: center; gap: 0.5rem;">
+          <button type="button" class="secondary" onclick="document.getElementById('resource').click()" style="flex: 1; text-align: left; display: flex; align-items: center; gap: 0.5rem;">
             <span id="resource-file-name" style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Choose file...</span>
           </button>
+          <button type="button" class="secondary" id="resource-clear" onclick="clearPackUpload('resource')" title="Remove resource pack" style="display: none; padding: 0.25rem 0.5rem; color: var(--danger, #e74c3c);">&times;</button>
         </div>
       </div>
       <div class="field">
         <label>Behavior Pack (.zip/.mcpack)</label>
-        <div style="position: relative;">
+        <div style="position: relative; display: flex; gap: 0.25rem;">
           <input type="file" id="behavior" style="display: none;" accept=".zip,.mcpack">
-          <button type="button" class="secondary" onclick="document.getElementById('behavior').click()" style="width: 100%; text-align: left; display: flex; align-items: center; gap: 0.5rem;">
+          <button type="button" class="secondary" onclick="document.getElementById('behavior').click()" style="flex: 1; text-align: left; display: flex; align-items: center; gap: 0.5rem;">
             <span id="behavior-file-name" style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Choose file...</span>
           </button>
+          <button type="button" class="secondary" id="behavior-clear" onclick="clearPackUpload('behavior')" title="Remove behavior pack" style="display: none; padding: 0.25rem 0.5rem; color: var(--danger, #e74c3c);">&times;</button>
         </div>
       </div>
     </div>
