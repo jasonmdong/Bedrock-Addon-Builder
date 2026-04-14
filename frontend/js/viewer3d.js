@@ -620,6 +620,7 @@ function render3DGeometry(geometryData, mobName, mobScale) {
   texCanvas.width = textureWidth;
   texCanvas.height = textureHeight;
   const texCtx = texCanvas.getContext('2d', { willReadFrequently: true });
+  texCtx.imageSmoothingEnabled = false;  // Disable pixel interpolation
   texCtx.fillStyle = '#ffffff';
   texCtx.fillRect(0, 0, texCanvas.width, texCanvas.height);
 
@@ -631,6 +632,7 @@ function render3DGeometry(geometryData, mobName, mobScale) {
       textureHeight = img.height;
       texCanvas.width = img.width;
       texCanvas.height = img.height;
+      texCtx.imageSmoothingEnabled = false;  // Restore after canvas resize clears context
       texCtx.drawImage(img, 0, 0);
       texture.needsUpdate = true;
       // Store dimensions for painting
@@ -1388,6 +1390,7 @@ function refresh3DTexture(mobName) {
     if (viewer3D.texCanvas && viewer3D.texCtx) {
       viewer3D.texCanvas.width = img.width;
       viewer3D.texCanvas.height = img.height;
+      viewer3D.texCtx.imageSmoothingEnabled = false;  // Restore after canvas resize clears context
       viewer3D.texCtx.drawImage(img, 0, 0);
       viewer3D.texWidth = img.width;
       viewer3D.texHeight = img.height;
@@ -1694,6 +1697,7 @@ function toggleWireframe() {
 }
 
 function setEditorTool(tool) {
+  const prevTool = editor3DState.tool;
   editor3DState.tool = tool;
 
   // Update UI buttons
@@ -1715,6 +1719,42 @@ function setEditorTool(tool) {
   } else {
     hideTransformGizmo();
   }
+
+  // Toggle unlit materials for paint tools so the rendered colors match the
+  // raw texture.  This keeps the "Pick" tool and the browser's native
+  // eyedropper (from the color-input swatch) in sync.
+  const isPaintTool = ['paint', 'erase', 'pick'].includes(tool);
+  const wasPaintTool = ['paint', 'erase', 'pick'].includes(prevTool);
+  if (isPaintTool !== wasPaintTool) {
+    setMobMaterialUnlit(isPaintTool);
+  }
+}
+
+// Switch mob mesh materials between unlit (MeshBasicMaterial) and lit
+// (MeshLambertMaterial) so that rendered pixel colors exactly match the
+// source texture when painting / picking colors.
+function setMobMaterialUnlit(unlit) {
+  if (!viewer3D || !viewer3D.mesh) return;
+  viewer3D.mesh.traverse(child => {
+    if (!child.isMesh) return;
+    const old = child.material;
+    if (unlit && old.type !== 'MeshBasicMaterial') {
+      const basic = new THREE.MeshBasicMaterial({
+        map: old.map,
+        side: old.side,
+        transparent: old.transparent,
+        alphaTest: old.alphaTest,
+        wireframe: old.wireframe,
+      });
+      basic.userData._origMaterial = old;  // stash for restore
+      child.material = basic;
+    } else if (!unlit && old.userData._origMaterial) {
+      const orig = old.userData._origMaterial;
+      orig.wireframe = old.wireframe;  // preserve wireframe toggle
+      child.material = orig;
+      old.dispose();
+    }
+  });
 }
 
 // =====================
@@ -1821,8 +1861,13 @@ function pickColorAtUV(uv) {
   if (!viewer3D || !viewer3D.texCtx || !uv) return null;
   const tw = viewer3D.texWidth;
   const th = viewer3D.texHeight;
-  const px = Math.floor(uv.x * tw);
-  const py = Math.floor((1 - uv.y) * th);
+  
+  // Clamp coordinates to valid bounds
+  let px = Math.floor(uv.x * tw);
+  let py = Math.floor((1 - uv.y) * th);
+  px = Math.max(0, Math.min(px, tw - 1));
+  py = Math.max(0, Math.min(py, th - 1));
+  
   const pixel = viewer3D.texCtx.getImageData(px, py, 1, 1).data;
   const hex = '#' + ((1 << 24) + (pixel[0] << 16) + (pixel[1] << 8) + pixel[2]).toString(16).slice(1);
   return hex;

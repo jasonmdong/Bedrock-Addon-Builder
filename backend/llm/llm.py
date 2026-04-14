@@ -475,6 +475,7 @@ def _call_gemini(prompt: str, current: dict, api_key: Optional[str],
         candidate = json.loads(content)
         _sanitize_geometry_json(candidate)
         if category == "entity_logic_ai":
+            candidate = sanitize_spec(candidate)
             return validate_spec(candidate)
         return candidate
     except Exception as exc:
@@ -1038,9 +1039,9 @@ Output format is a valid minecraft:geometry JSON object. The structure must be:
         "identifier": "geometry.custom_mob",
         "texture_width": 64,
         "texture_height": 64,
-        "visible_bounds_width": 2,
-        "visible_bounds_height": 2,
-        "visible_bounds_offset": [0, 1, 0]
+        "visible_bounds_width": 6,
+        "visible_bounds_height": 6,
+        "visible_bounds_offset": [0, 2, 0]
       },
       "bones": [
         {

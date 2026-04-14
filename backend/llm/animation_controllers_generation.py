@@ -310,34 +310,29 @@ def _call_ac_gemini(
     system_prompt: str,
     api_key: str,
 ) -> Optional[dict]:
-    """Call Gemini to generate animation controller."""
+    """Call Gemini to generate animation controller using google-genai SDK."""
     try:
-        import httpx
+        from google import genai
         
-        client = httpx.Client(timeout=30)
-        response = client.post(
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent",
-            params={"key": api_key},
-            json={
-                "contents": [
-                    {
-                        "role": "user",
-                        "parts": [
-                            {"text": f"{system_prompt}\n\n{prompt}"}
-                        ],
-                    }
-                ],
-                "generationConfig": {"temperature": 0.7, "maxOutputTokens": 2000},
+        client = genai.Client(api_key=api_key)
+        print(f"[GEMINI-AC] Calling model: {GEMINI_MODEL_NAME}")
+        response = client.models.generate_content(
+            model=GEMINI_MODEL_NAME,
+            contents=f"{system_prompt}\n\n{prompt}",
+            config={
+                "response_mime_type": "application/json",
+                "temperature": 0.7,
+                "max_output_tokens": 4000,
             },
         )
-        response.raise_for_status()
-        result = response.json()
-        content = result["candidates"][0]["content"]["parts"][0]["text"]
+        content = response.text
+        print(f"[GEMINI-AC] Response length: {len(content)} chars")
         
         # Extract JSON from response using robust extraction
         return _extract_json_from_response(content)
     except Exception as e:
         log.error(f"Gemini AC generation failed: {e}")
+        print(f"[GEMINI-AC] Exception: {type(e).__name__}: {e}")
         return None
 
 

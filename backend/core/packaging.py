@@ -245,21 +245,25 @@ def create_mcworld(out_dir: Path,
                 break
         
         if res_pack_prefix:
-            # Remove ALL existing entity files from the ZIP (MCP-generated ones)
-            entity_entries_to_remove = [
+            # Remove ALL existing entity AND geometry files from the ZIP (MCP-generated ones).
+            # MCP assigns its own geometry identifiers, but our entity.json files reference
+            # geometry.{short_name} (set by patch_resource_pack). We must replace both to
+            # keep them in sync — otherwise the mob is invisible in-game.
+            entries_to_remove = [
                 entry for entry in zf.namelist()
                 if f"{res_pack_prefix}/entity/" in entry
+                or f"{res_pack_prefix}/models/entity/" in entry
             ]
-            if entity_entries_to_remove:
-                print(f"[WORLD] Removing {len(entity_entries_to_remove)} MCP-generated entity files from ZIP")
-                # Rebuild ZIP without the MCP entity files
+            if entries_to_remove:
+                print(f"[WORLD] Removing {len(entries_to_remove)} MCP-generated entity/geometry files from ZIP")
+                # Rebuild ZIP without the MCP entity and geometry files
                 temp_buffer = io.BytesIO()
                 with zipfile.ZipFile(temp_buffer, "w", zipfile.ZIP_DEFLATED) as temp_zf:
                     for entry in zf.namelist():
-                        if entry not in entity_entries_to_remove:
+                        if entry not in entries_to_remove:
                             temp_zf.writestr(entry, zf.read(entry))
                     
-                    # Now write our entity files
+                    # Write our entity files (correct geometry references + scripts block)
                     ent_dir = res_root / "entity"
                     if ent_dir.exists():
                         for ent_file in sorted(ent_dir.glob("*.entity.json")):
@@ -272,6 +276,14 @@ def create_mcworld(out_dir: Path,
                                 print(f"[WORLD] ✓ Using {ent_file.name} with scripts block")
                             else:
                                 print(f"[WORLD] ✗ WARNING: {ent_file.name} missing scripts block")
+                    
+                    # Write our geometry files (correctly renamed identifiers matching entity.json)
+                    geo_dir = res_root / "models" / "entity"
+                    if geo_dir.exists():
+                        for geo_file in sorted(geo_dir.glob("*.geo.json")):
+                            archive_path = f"{res_pack_prefix}/models/entity/{geo_file.name}"
+                            temp_zf.writestr(archive_path, geo_file.read_text())
+                            print(f"[WORLD] ✓ Injected geometry {geo_file.name}")
                 
                 mcworld_bytes = temp_buffer.getvalue()
         

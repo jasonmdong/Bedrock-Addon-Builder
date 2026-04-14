@@ -302,12 +302,12 @@ def patch_resource_pack(res_root: Path, specs: list[dict], textures_dir: Path = 
                 cbox_w = float(cbox.get("width", 1))
                 cbox_h = float(cbox.get("height", 1))
                 scale = float(spec.get("scale", 1.0))
-                if "visible_bounds_width" not in geo_desc:
-                    geo_desc["visible_bounds_width"] = max(cbox_w * scale + 1, 4)
-                if "visible_bounds_height" not in geo_desc:
-                    geo_desc["visible_bounds_height"] = max(cbox_h * scale + 1, 4)
-                if "visible_bounds_offset" not in geo_desc:
-                    geo_desc["visible_bounds_offset"] = [0, cbox_h * scale / 2, 0]
+                # Always override visible_bounds — LLMs often copy the template default
+                # (width=2, height=2) which is too small for large custom mobs and causes
+                # Minecraft to cull the entity as invisible at normal viewing distances.
+                geo_desc["visible_bounds_width"] = max(cbox_w * scale + 2, 6)
+                geo_desc["visible_bounds_height"] = max(cbox_h * scale + 2, 6)
+                geo_desc["visible_bounds_offset"] = [0, cbox_h * scale / 2, 0]
                 actual_geometry = unique_geo_id
                 actual_rc = "controller.render.default"
             except (KeyError, IndexError):
