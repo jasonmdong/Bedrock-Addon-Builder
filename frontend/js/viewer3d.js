@@ -1697,6 +1697,7 @@ function toggleWireframe() {
 }
 
 function setEditorTool(tool) {
+  const prevTool = editor3DState.tool;
   editor3DState.tool = tool;
 
   // Update UI buttons
@@ -1718,6 +1719,42 @@ function setEditorTool(tool) {
   } else {
     hideTransformGizmo();
   }
+
+  // Toggle unlit materials for paint tools so the rendered colors match the
+  // raw texture.  This keeps the "Pick" tool and the browser's native
+  // eyedropper (from the color-input swatch) in sync.
+  const isPaintTool = ['paint', 'erase', 'pick'].includes(tool);
+  const wasPaintTool = ['paint', 'erase', 'pick'].includes(prevTool);
+  if (isPaintTool !== wasPaintTool) {
+    setMobMaterialUnlit(isPaintTool);
+  }
+}
+
+// Switch mob mesh materials between unlit (MeshBasicMaterial) and lit
+// (MeshLambertMaterial) so that rendered pixel colors exactly match the
+// source texture when painting / picking colors.
+function setMobMaterialUnlit(unlit) {
+  if (!viewer3D || !viewer3D.mesh) return;
+  viewer3D.mesh.traverse(child => {
+    if (!child.isMesh) return;
+    const old = child.material;
+    if (unlit && old.type !== 'MeshBasicMaterial') {
+      const basic = new THREE.MeshBasicMaterial({
+        map: old.map,
+        side: old.side,
+        transparent: old.transparent,
+        alphaTest: old.alphaTest,
+        wireframe: old.wireframe,
+      });
+      basic.userData._origMaterial = old;  // stash for restore
+      child.material = basic;
+    } else if (!unlit && old.userData._origMaterial) {
+      const orig = old.userData._origMaterial;
+      orig.wireframe = old.wireframe;  // preserve wireframe toggle
+      child.material = orig;
+      old.dispose();
+    }
+  });
 }
 
 // =====================
