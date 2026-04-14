@@ -2186,11 +2186,28 @@ function addCube(position = [0, 0, 0], size = [8, 8, 8]) {
   const cube = new THREE.Mesh(geometry, material);
   cube.position.set(position[0], position[1], position[2]);
   cube.name = `cube_${Date.now()}`;
+  cube.userData._userAdded = true;
   
   viewer3D.scene.add(cube);
   
   console.log('[3D Editor] Added cube at:', position);
   return cube;
+}
+
+// Remove all user-added cubes from the scene
+function clearUserCubes() {
+  if (!viewer3D) return;
+  const toRemove = [];
+  viewer3D.scene.traverse(child => {
+    if (child.isMesh && child.userData._userAdded) toRemove.push(child);
+  });
+  toRemove.forEach(obj => {
+    if (obj === editor3DState.selectedObject) clearSelection();
+    obj.parent.remove(obj);
+    obj.geometry?.dispose();
+    obj.material?.dispose();
+  });
+  console.log(`[3D Editor] Cleared ${toRemove.length} user-added cube(s)`);
 }
 
 // Delete selected object
@@ -2242,6 +2259,7 @@ window.clearSelection = clearSelection;
 window.undo = undo;
 window.addCube = addCube;
 window.deleteSelected = deleteSelected;
+window.clearUserCubes = clearUserCubes;
 window.duplicateSelected = duplicateSelected;
 window.init3DEditor = init3DEditor;
 window.setupRaycasting = setupRaycasting;
