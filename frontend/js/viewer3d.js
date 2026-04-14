@@ -1202,7 +1202,13 @@ function initViewportControls() {
 }
 
 // Initialize 3D Editor control buttons
+let _editorControlsInitialized = false;
 function init3DEditorControls() {
+  if (_editorControlsInitialized) {
+    console.log('[3D Editor] Controls already initialized, skipping');
+    return;
+  }
+  _editorControlsInitialized = true;
   console.log('[3D Editor] Initializing controls...');
   
   // Check if buttons exist
