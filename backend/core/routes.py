@@ -1763,34 +1763,18 @@ async def launch_test_stop():
 
 async def publish_mob_to_database(payload: dict = Body(...)):
     """
-    POST /api/publish — Publish a user-created mob to the database.
-    
-    Request body:
-    {
-        "mob_name": "fire_dragon",
-        "username": "player123",
-        "prompts": ["make it breathe fire", "give it wings"],
-        "geometry": { ... geometry JSON ... },
-        "api_key": "sk-..." (optional, falls back to env var)
-    }
-    
-    Returns:
-    {
-        "success": true,
-        "mob_name": "fire_dragon_player123",
-        "description": "A flying creature that breathes fire.",
-        "keywords": ["hostile", "flying", "fire"]
-    }
+    POST /api/publish — Publish a user-created mob to the published_mobs table.
     """
-    # Extract fields from frontend payload
+    import os, json, base64
+    import psycopg2
+    from psycopg2.extras import Json
+
     mob_name = payload.get("mob_name")
     username = payload.get("username")
     prompts = payload.get("prompts", [])
-    geometry = payload.get("geometry", {})
     mob_spec = payload.get("spec")
     texture_data = payload.get("texture_data")
 
-    # Validate required fields
     if not mob_name:
         raise HTTPException(status_code=400, detail="mob_name is required")
     if not username:
@@ -1798,150 +1782,150 @@ async def publish_mob_to_database(payload: dict = Body(...)):
     if not mob_spec:
         raise HTTPException(status_code=400, detail="spec is required")
 
-    # Fall back to spec's geometry_json if geometry not provided separately
-    if not geometry and mob_spec:
-        geometry = mob_spec.get("geometry_json", {})
+    short_name = mob_spec.get("short_name", mob_name)
+    display_name = mob_spec.get("display_name", mob_name)
+    identifier = mob_spec.get("identifier", f"custom:{short_name}")
 
-    import sys, os, json
-    from pathlib import Path
-    from datetime import datetime
-
-    db_insertion_path = Path(__file__).parent.parent.parent / "data" / "database_insertion"
-    if str(db_insertion_path) not in sys.path:
-        sys.path.insert(0, str(db_insertion_path))
-
-    import neon_db  # type: ignore
-
-    full_mob_name = f"{mob_name}_{username}"
-    description = mob_spec.get("display_name", mob_name)
+    description = display_name
     if prompts:
-        description = f"{description} — {'; '.join(prompts[:5])}"
+        description = f"{display_name} — {'; '.join(prompts[:5])}"
 
-    # Derive simple keywords from the spec
-    keywords = []
+    # Derive tags from spec
+    tags = []
     components = mob_spec.get("components", {})
     if any("fly" in k for k in components):
-        keywords.append("flying")
+        tags.append("flying")
     if any("shoot" in k or "ranged" in k for k in components):
-        keywords.append("ranged")
+        tags.append("ranged")
     if any("explode" in k or "swell" in k for k in components):
-        keywords.append("explosive")
+        tags.append("explosive")
     if mob_spec.get("damage", 0) > 0:
-        keywords.append("hostile")
+        tags.append("hostile")
     if mob_spec.get("hp", 0) >= 100:
-        keywords.append("tanky")
+        tags.append("tanky")
 
-    prompts_json = json.dumps(prompts) if prompts else "[]"
+    # Convert base64 data URL to raw bytes for BYTEA
+    texture_bytes = None
+    if texture_data:
+        try:
+            if "," in texture_data:
+                texture_bytes = base64.b64decode(texture_data.split(",", 1)[1])
+            else:
+                texture_bytes = base64.b64decode(texture_data)
+        except Exception:
+            texture_bytes = None
 
     connection_string = os.environ.get(
         "DATABASE_URL",
         "postgresql://neondb_owner:npg_gyK7U5GZOhDS@ep-restless-scene-a876hfcf-pooler.eastus2.azure.neon.tech/neondb?sslmode=require&channel_binding=require",
     )
-    db = neon_db.NeonDatabaseConnection(connection_string)
-    if not db.connect():
-        raise HTTPException(status_code=500, detail="Failed to connect to database")
-
+    conn = psycopg2.connect(connection_string)
     try:
-        # Check if already exists → update, otherwise insert
-        existing = db.get_mob(full_mob_name)
-        if existing:
-            success = db.update_mob(
-                mob_name=full_mob_name,
-                mob_description=description,
-                prompt=prompts_json,
-                mob_keywords=keywords,
-                mob_geometry=geometry,
-                mob_embedding=None,
-                bone_metadata=None,
-                complexity_score=None,
-                creation_date=datetime.now().isoformat(),
-                mob_spec=mob_spec,
-                texture_data=texture_data,
-            )
-        else:
-            success = db.insert_mob(
-                mob_name=full_mob_name,
-                mob_description=description,
-                prompt=prompts_json,
-                mob_keywords=keywords,
-                mob_geometry=geometry,
-                mob_embedding=None,
-                bone_metadata=None,
-                complexity_score=None,
-                is_official=False,
-                creation_date=datetime.now().isoformat(),
-                mob_spec=mob_spec,
-                texture_data=texture_data,
-            )
-
-        if not success:
-            raise HTTPException(status_code=500, detail="Database insert/update failed")
+        cur = conn.cursor()
+        # Upsert: insert or update on conflict (author, short_name)
+        cur.execute("""
+            INSERT INTO published_mobs
+                (short_name, display_name, identifier, spec, texture_png, author, description, tags)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (author, short_name) DO UPDATE SET
+                display_name = EXCLUDED.display_name,
+                identifier   = EXCLUDED.identifier,
+                spec         = EXCLUDED.spec,
+                texture_png  = EXCLUDED.texture_png,
+                description  = EXCLUDED.description,
+                tags         = EXCLUDED.tags,
+                updated_at   = now()
+            RETURNING id, (xmax = 0) AS is_insert
+        """, (
+            short_name,
+            display_name,
+            identifier,
+            Json(mob_spec),
+            psycopg2.Binary(texture_bytes) if texture_bytes else None,
+            username,
+            description,
+            tags,
+        ))
+        row = cur.fetchone()
+        conn.commit()
 
         return {
             "success": True,
-            "mob_name": full_mob_name,
+            "mob_name": short_name,
             "description": description,
-            "keywords": keywords,
-            "updated": existing is not None,
+            "tags": tags,
+            "updated": not row[1] if row else False,
         }
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
-        db.disconnect()
+        conn.close()
 
 
 async def check_published_mob(mob_name: str, username: str):
     """
     GET /api/publish/check/{mob_name}/{username} — Check if a mob is already published.
-    
-    Returns:
-    {
-        "exists": true/false,
-        "full_name": "fire_dragon_player123"
-    }
     """
-    # Import from data/database_insertion module
-    import sys
-    from pathlib import Path
-    
-    db_insertion_path = Path(__file__).parent.parent.parent / "data" / "database_insertion"
-    if str(db_insertion_path) not in sys.path:
-        sys.path.insert(0, str(db_insertion_path))
-    
-    from publish_mob import check_mob_exists  # type: ignore
-    
-    exists = check_mob_exists(mob_name, username)
-    return {
-        "exists": exists,
-        "full_name": f"{mob_name}_{username}"
-    }
+    import os
+    import psycopg2
+
+    connection_string = os.environ.get(
+        "DATABASE_URL",
+        "postgresql://neondb_owner:npg_gyK7U5GZOhDS@ep-restless-scene-a876hfcf-pooler.eastus2.azure.neon.tech/neondb?sslmode=require&channel_binding=require",
+    )
+    conn = psycopg2.connect(connection_string)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT 1 FROM published_mobs WHERE author = %s AND short_name = %s",
+            (username, mob_name),
+        )
+        exists = cur.fetchone() is not None
+        return {"exists": exists, "short_name": mob_name, "author": username}
+    finally:
+        conn.close()
 
 
 async def list_published_mobs():
     """
     GET /api/market — Return all published mobs (lightweight listing).
     """
-    import sys, os
-    from pathlib import Path
-
-    db_insertion_path = Path(__file__).parent.parent.parent / "data" / "database_insertion"
-    if str(db_insertion_path) not in sys.path:
-        sys.path.insert(0, str(db_insertion_path))
-
-    import neon_db  # type: ignore
+    import os
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
 
     connection_string = os.environ.get(
-        'DATABASE_URL',
-        'postgresql://neondb_owner:npg_gyK7U5GZOhDS@ep-restless-scene-a876hfcf-pooler.eastus2.azure.neon.tech/neondb?sslmode=require&channel_binding=require'
+        "DATABASE_URL",
+        "postgresql://neondb_owner:npg_gyK7U5GZOhDS@ep-restless-scene-a876hfcf-pooler.eastus2.azure.neon.tech/neondb?sslmode=require&channel_binding=require",
     )
-    db = neon_db.NeonDatabaseConnection(connection_string)
-    if not db.connect():
-        raise HTTPException(status_code=500, detail="Failed to connect to database")
+    conn = psycopg2.connect(connection_string)
     try:
-        mobs = db.get_all_mobs()
-        if mobs is None:
-            raise HTTPException(status_code=500, detail="Failed to fetch mobs")
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT id, short_name, display_name, identifier, author,
+                   description, tags, published_at, download_count
+            FROM published_mobs
+            ORDER BY published_at DESC
+        """)
+        rows = cur.fetchall()
+        # Convert datetimes to ISO strings
+        mobs = []
+        for r in rows:
+            mobs.append({
+                "id": str(r["id"]),
+                "short_name": r["short_name"],
+                "display_name": r["display_name"],
+                "identifier": r["identifier"],
+                "author": r["author"],
+                "description": r["description"],
+                "tags": r["tags"] or [],
+                "published_at": r["published_at"].isoformat() if r["published_at"] else None,
+                "download_count": r["download_count"] or 0,
+            })
         return {"mobs": mobs}
     finally:
-        db.disconnect()
+        conn.close()
 
 
 def market_page():
@@ -1956,34 +1940,51 @@ def market_page():
 async def get_published_mob(mob_name: str):
     """
     GET /api/market/{mob_name} — Return a single published mob's spec + texture.
+    mob_name here is the short_name.
     """
-    import sys, os
-    from pathlib import Path
-
-    db_insertion_path = Path(__file__).parent.parent.parent / "data" / "database_insertion"
-    if str(db_insertion_path) not in sys.path:
-        sys.path.insert(0, str(db_insertion_path))
-
-    import neon_db  # type: ignore
+    import os, base64
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
 
     connection_string = os.environ.get(
-        'DATABASE_URL',
-        'postgresql://neondb_owner:npg_gyK7U5GZOhDS@ep-restless-scene-a876hfcf-pooler.eastus2.azure.neon.tech/neondb?sslmode=require&channel_binding=require'
+        "DATABASE_URL",
+        "postgresql://neondb_owner:npg_gyK7U5GZOhDS@ep-restless-scene-a876hfcf-pooler.eastus2.azure.neon.tech/neondb?sslmode=require&channel_binding=require",
     )
-    db = neon_db.NeonDatabaseConnection(connection_string)
-    if not db.connect():
-        raise HTTPException(status_code=500, detail="Failed to connect to database")
+    conn = psycopg2.connect(connection_string)
     try:
-        mob = db.get_mob(mob_name)
-        if mob is None:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT short_name, display_name, author, description, tags, spec, texture_png
+            FROM published_mobs
+            WHERE short_name = %s
+            ORDER BY published_at DESC
+            LIMIT 1
+        """, (mob_name,))
+        row = cur.fetchone()
+        if not row:
             raise HTTPException(status_code=404, detail=f"Mob '{mob_name}' not found")
-        # Return only what the frontend needs to reconstruct
+
+        # Increment download count
+        cur.execute(
+            "UPDATE published_mobs SET download_count = download_count + 1 WHERE short_name = %s AND author = %s",
+            (row["short_name"], row["author"]),
+        )
+        conn.commit()
+
+        # Re-encode texture bytes as base64 data URL
+        texture_data = None
+        if row["texture_png"]:
+            b64 = base64.b64encode(bytes(row["texture_png"])).decode("ascii")
+            texture_data = f"data:image/png;base64,{b64}"
+
         return {
-            "mob_name": mob["mob_name"],
-            "mob_description": mob["mob_description"],
-            "spec": mob.get("mob_spec"),
-            "texture_data": mob.get("texture_data"),
-            "mob_keywords": mob.get("mob_keywords"),
+            "short_name": row["short_name"],
+            "display_name": row["display_name"],
+            "author": row["author"],
+            "description": row["description"],
+            "tags": row["tags"] or [],
+            "spec": row["spec"],
+            "texture_data": texture_data,
         }
     finally:
-        db.disconnect()
+        conn.close()

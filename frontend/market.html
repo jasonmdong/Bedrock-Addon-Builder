@@ -170,40 +170,29 @@ if (localStorage.getItem("builder_theme_preference") === "dark") {
       const card = document.createElement("div");
       card.className = "mob-card";
 
-      // Parse author from mob_name (format: mobname_username)
-      const fullName = mob.mob_name || "";
-      const lastUnderscore = fullName.lastIndexOf("_");
-      let displayName = fullName;
-      let author = "";
-      if (lastUnderscore > 0 && mob.is_official === false) {
-        displayName = fullName.substring(0, lastUnderscore);
-        author = fullName.substring(lastUnderscore + 1);
-      }
-
-      // Friendly display name: underscores → spaces, title case
-      const friendlyName = displayName.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+      const friendlyName = (mob.display_name || mob.short_name || "").replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
 
       let html = `<h2>${esc(friendlyName)}</h2>`;
       html += `<div class="mob-meta">`;
-      if (author) html += `<span>👤 ${esc(author)}</span>`;
-      if (mob.creation_date) {
-        const d = new Date(mob.creation_date);
+      if (mob.author) html += `<span>👤 ${esc(mob.author)}</span>`;
+      if (mob.published_at) {
+        const d = new Date(mob.published_at);
         html += `<span>📅 ${d.toLocaleDateString()}</span>`;
       }
-      if (mob.complexity_score != null) html += `<span>⚙️ Complexity: ${mob.complexity_score}</span>`;
+      if (mob.download_count > 0) html += `<span>⬇️ ${mob.download_count}</span>`;
       html += `</div>`;
 
-      if (mob.mob_description) {
-        html += `<div class="mob-description">${esc(mob.mob_description)}</div>`;
+      if (mob.description) {
+        html += `<div class="mob-description">${esc(mob.description)}</div>`;
       }
 
-      const keywords = mob.mob_keywords || [];
-      if (keywords.length) {
-        html += `<div class="mob-keywords">${keywords.map(k => `<span>${esc(k)}</span>`).join("")}</div>`;
+      const tags = mob.tags || [];
+      if (tags.length) {
+        html += `<div class="mob-keywords">${tags.map(k => `<span>${esc(k)}</span>`).join("")}</div>`;
       }
 
       card.innerHTML = html;
-      card.addEventListener("click", () => importMob(mob.mob_name, card));
+      card.addEventListener("click", () => importMob(mob.short_name, card));
       gridEl.appendChild(card);
     }
   } catch (err) {
@@ -213,7 +202,7 @@ if (localStorage.getItem("builder_theme_preference") === "dark") {
   }
 })();
 
-async function importMob(fullMobName, cardEl) {
+async function importMob(shortName, cardEl) {
   // Require a user
   const user = localStorage.getItem("current_user");
   if (!user) {
@@ -224,7 +213,7 @@ async function importMob(fullMobName, cardEl) {
   cardEl.classList.add("importing");
 
   try {
-    const res = await fetch("/api/market/" + encodeURIComponent(fullMobName));
+    const res = await fetch("/api/market/" + encodeURIComponent(shortName));
     if (!res.ok) {
       const detail = await res.json().catch(() => ({}));
       throw new Error(detail.detail || res.statusText);
@@ -232,13 +221,12 @@ async function importMob(fullMobName, cardEl) {
     const data = await res.json();
     const spec = data.spec;
     if (!spec) {
-      alert("This mob has no spec data stored. It was published before specs were saved.");
+      alert("This mob has no spec data stored.");
       cardEl.classList.remove("importing");
       return;
     }
 
-    // Determine a local mob name from the spec's short_name
-    const mobName = spec.short_name || fullMobName;
+    const mobName = spec.short_name || shortName;
 
     // Save spec into the user's localStorage workspace
     const userDataKey = "user_" + user + "_data";

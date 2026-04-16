@@ -66,6 +66,9 @@ class NeonDatabaseConnection:
             );
             """
 
+            cursor.execute(create_table_sql)
+            self.conn.commit()
+
             # Add columns if they don't exist (for existing tables)
             alter_sql = [
                 "ALTER TABLE mob_geometries ADD COLUMN IF NOT EXISTS mob_spec JSONB",
@@ -74,11 +77,10 @@ class NeonDatabaseConnection:
             for sql in alter_sql:
                 try:
                     cursor.execute(sql)
+                    self.conn.commit()
                 except Exception:
-                    pass
+                    self.conn.rollback()
 
-            cursor.execute(create_table_sql)
-            self.conn.commit()
             cursor.close()
             print("✓ Table created or already exists")
             return True
