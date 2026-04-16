@@ -1816,40 +1816,110 @@ async def publish_mob_to_database(payload: dict = Body(...)):
         "keywords": ["hostile", "flying", "fire"]
     }
     """
-    # Import from data/database_insertion module
-    import sys
-    from pathlib import Path
-    
-    # Add database_insertion to path if not already there
-    db_insertion_path = Path(__file__).parent.parent.parent / "data" / "database_insertion"
-    if str(db_insertion_path) not in sys.path:
-        sys.path.insert(0, str(db_insertion_path))
-    
-    from publish_mob import publish_or_update_mob  # type: ignore
-    
+    # Extract fields from frontend payload
     mob_name = payload.get("mob_name")
     username = payload.get("username")
     prompts = payload.get("prompts", [])
     geometry = payload.get("geometry", {})
-    api_key = payload.get("api_key")
-    
+    mob_spec = payload.get("spec")
+    texture_data = payload.get("texture_data")
+
     # Validate required fields
     if not mob_name:
         raise HTTPException(status_code=400, detail="mob_name is required")
     if not username:
         raise HTTPException(status_code=400, detail="username is required")
-    if not prompts:
-        raise HTTPException(status_code=400, detail="prompts array is required")
-    if not geometry:
-        raise HTTPException(status_code=400, detail="geometry is required")
-    
-    # Use the combined publish_or_update function
-    result = publish_or_update_mob(mob_name, username, prompts, geometry, api_key)
-    
-    if not result.get("success"):
-        raise HTTPException(status_code=500, detail=result.get("error", "Unknown error"))
-    
-    return result
+    if not mob_spec:
+        raise HTTPException(status_code=400, detail="spec is required")
+
+    # Fall back to spec's geometry_json if geometry not provided separately
+    if not geometry and mob_spec:
+        geometry = mob_spec.get("geometry_json", {})
+
+    import sys, os, json
+    from pathlib import Path
+    from datetime import datetime
+
+    db_insertion_path = Path(__file__).parent.parent.parent / "data" / "database_insertion"
+    if str(db_insertion_path) not in sys.path:
+        sys.path.insert(0, str(db_insertion_path))
+
+    import neon_db  # type: ignore
+
+    full_mob_name = f"{mob_name}_{username}"
+    description = mob_spec.get("display_name", mob_name)
+    if prompts:
+        description = f"{description} — {'; '.join(prompts[:5])}"
+
+    # Derive simple keywords from the spec
+    keywords = []
+    components = mob_spec.get("components", {})
+    if any("fly" in k for k in components):
+        keywords.append("flying")
+    if any("shoot" in k or "ranged" in k for k in components):
+        keywords.append("ranged")
+    if any("explode" in k or "swell" in k for k in components):
+        keywords.append("explosive")
+    if mob_spec.get("damage", 0) > 0:
+        keywords.append("hostile")
+    if mob_spec.get("hp", 0) >= 100:
+        keywords.append("tanky")
+
+    prompts_json = json.dumps(prompts) if prompts else "[]"
+
+    connection_string = os.environ.get(
+        "DATABASE_URL",
+        "postgresql://neondb_owner:npg_gyK7U5GZOhDS@ep-restless-scene-a876hfcf-pooler.eastus2.azure.neon.tech/neondb?sslmode=require&channel_binding=require",
+    )
+    db = neon_db.NeonDatabaseConnection(connection_string)
+    if not db.connect():
+        raise HTTPException(status_code=500, detail="Failed to connect to database")
+
+    try:
+        # Check if already exists → update, otherwise insert
+        existing = db.get_mob(full_mob_name)
+        if existing:
+            success = db.update_mob(
+                mob_name=full_mob_name,
+                mob_description=description,
+                prompt=prompts_json,
+                mob_keywords=keywords,
+                mob_geometry=geometry,
+                mob_embedding=None,
+                bone_metadata=None,
+                complexity_score=None,
+                creation_date=datetime.now().isoformat(),
+                mob_spec=mob_spec,
+                texture_data=texture_data,
+            )
+        else:
+            success = db.insert_mob(
+                mob_name=full_mob_name,
+                mob_description=description,
+                prompt=prompts_json,
+                mob_keywords=keywords,
+                mob_geometry=geometry,
+                mob_embedding=None,
+                bone_metadata=None,
+                complexity_score=None,
+                is_official=False,
+                creation_date=datetime.now().isoformat(),
+                mob_spec=mob_spec,
+                texture_data=texture_data,
+            )
+
+        if not success:
+            raise HTTPException(status_code=500, detail="Database insert/update failed")
+
+        return {
+            "success": True,
+            "mob_name": full_mob_name,
+            "description": description,
+            "keywords": keywords,
+            "updated": existing is not None,
+        }
+    finally:
+        db.disconnect()
 
 
 async def check_published_mob(mob_name: str, username: str):
@@ -2192,3 +2262,77 @@ async def push_mob_version(mob_name: str, request: Request, payload: dict = Body
         (mob["id"], next_version["next_ver"], prompt, _json.dumps(spec), llm_provider, llm_model),
     )
     return {"ok": True, "version_number": next_version["next_ver"]}
+
+
+async def list_published_mobs():
+    """
+    GET /api/market — Return all published mobs (lightweight listing).
+    """
+    import sys, os
+    from pathlib import Path
+
+    db_insertion_path = Path(__file__).parent.parent.parent / "data" / "database_insertion"
+    if str(db_insertion_path) not in sys.path:
+        sys.path.insert(0, str(db_insertion_path))
+
+    import neon_db  # type: ignore
+
+    connection_string = os.environ.get(
+        'DATABASE_URL',
+        'postgresql://neondb_owner:npg_gyK7U5GZOhDS@ep-restless-scene-a876hfcf-pooler.eastus2.azure.neon.tech/neondb?sslmode=require&channel_binding=require'
+    )
+    db = neon_db.NeonDatabaseConnection(connection_string)
+    if not db.connect():
+        raise HTTPException(status_code=500, detail="Failed to connect to database")
+    try:
+        mobs = db.get_all_mobs()
+        if mobs is None:
+            raise HTTPException(status_code=500, detail="Failed to fetch mobs")
+        return {"mobs": mobs}
+    finally:
+        db.disconnect()
+
+
+def market_page():
+    """Serve the market HTML page."""
+    from backend.core.core import FRONTEND_DIR
+    path = FRONTEND_DIR / "market.html"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Market page not found")
+    return HTMLResponse(path.read_text(encoding="utf-8"))
+
+
+async def get_published_mob(mob_name: str):
+    """
+    GET /api/market/{mob_name} — Return a single published mob's spec + texture.
+    """
+    import sys, os
+    from pathlib import Path
+
+    db_insertion_path = Path(__file__).parent.parent.parent / "data" / "database_insertion"
+    if str(db_insertion_path) not in sys.path:
+        sys.path.insert(0, str(db_insertion_path))
+
+    import neon_db  # type: ignore
+
+    connection_string = os.environ.get(
+        'DATABASE_URL',
+        'postgresql://neondb_owner:npg_gyK7U5GZOhDS@ep-restless-scene-a876hfcf-pooler.eastus2.azure.neon.tech/neondb?sslmode=require&channel_binding=require'
+    )
+    db = neon_db.NeonDatabaseConnection(connection_string)
+    if not db.connect():
+        raise HTTPException(status_code=500, detail="Failed to connect to database")
+    try:
+        mob = db.get_mob(mob_name)
+        if mob is None:
+            raise HTTPException(status_code=404, detail=f"Mob '{mob_name}' not found")
+        # Return only what the frontend needs to reconstruct
+        return {
+            "mob_name": mob["mob_name"],
+            "mob_description": mob["mob_description"],
+            "spec": mob.get("mob_spec"),
+            "texture_data": mob.get("texture_data"),
+            "mob_keywords": mob.get("mob_keywords"),
+        }
+    finally:
+        db.disconnect()

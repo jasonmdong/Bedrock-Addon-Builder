@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mob Market — Bedrock Addon Builder</title>
+<style>
+:root {
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+  --bg: #f8fafc;
+  --text: #0f172a;
+  --card-bg: #ffffff;
+  --border: #e2e8f0;
+  --muted: #94a3b8;
+  --primary: #2563eb;
+  --danger: #dc2626;
+}
+body.theme-dark {
+  --bg: #05060b;
+  --text: #f8fafc;
+  --card-bg: #0f172a;
+  --border: #1f2937;
+  --muted: #cbd5f5;
+  --primary: #3b82f6;
+  --danger: #ef4444;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+}
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 2rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--card-bg);
+}
+header h1 { font-size: 1.5rem; }
+header a {
+  color: var(--primary);
+  text-decoration: none;
+  font-weight: 600;
+}
+header a:hover { text-decoration: underline; }
+#loading {
+  text-align: center;
+  padding: 4rem;
+  color: var(--muted);
+  font-size: 1.1rem;
+}
+#error {
+  text-align: center;
+  padding: 2rem;
+  color: var(--danger);
+  display: none;
+}
+.mob-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 1.25rem;
+  padding: 2rem;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+.mob-card {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.25rem;
+  transition: box-shadow 0.2s, transform 0.15s;
+  cursor: pointer;
+}
+.mob-card:hover {
+  box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+  transform: translateY(-2px);
+}
+.mob-card.importing {
+  opacity: 0.6;
+  pointer-events: none;
+}
+.mob-card h2 {
+  font-size: 1.15rem;
+  margin-bottom: 0.25rem;
+  word-break: break-word;
+}
+.mob-meta {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-bottom: 0.75rem;
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.mob-description {
+  font-size: 0.92rem;
+  line-height: 1.55;
+  color: var(--text);
+  opacity: 0.85;
+}
+.mob-keywords {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.75rem;
+}
+.mob-keywords span {
+  background: var(--border);
+  color: var(--text);
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+}
+.count-bar {
+  text-align: center;
+  padding: 0.75rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🏪 Mob Market</h1>
+  <a href="/">← Back to Builder</a>
+</header>
+
+<div id="loading">Loading published mobs...</div>
+<div id="error"></div>
+<div id="count-bar" class="count-bar" style="display:none;"></div>
+<div id="mob-grid" class="mob-grid"></div>
+
+<script>
+// Restore theme
+if (localStorage.getItem("builder_theme_preference") === "dark") {
+  document.body.classList.add("theme-dark");
+}
+
+(async function loadMarket() {
+  const loadingEl = document.getElementById("loading");
+  const errorEl = document.getElementById("error");
+  const gridEl = document.getElementById("mob-grid");
+  const countBar = document.getElementById("count-bar");
+
+  try {
+    const res = await fetch("/api/market");
+    if (!res.ok) {
+      const detail = await res.json().catch(() => ({}));
+      throw new Error(detail.detail || res.statusText);
+    }
+    const data = await res.json();
+    const mobs = data.mobs || [];
+
+    loadingEl.style.display = "none";
+
+    if (mobs.length === 0) {
+      errorEl.style.display = "block";
+      errorEl.textContent = "No published mobs yet. Be the first to publish!";
+      errorEl.style.color = "var(--muted)";
+      return;
+    }
+
+    countBar.style.display = "block";
+    countBar.textContent = mobs.length + " published mob" + (mobs.length !== 1 ? "s" : "");
+
+    for (const mob of mobs) {
+      const card = document.createElement("div");
+      card.className = "mob-card";
+
+      // Parse author from mob_name (format: mobname_username)
+      const fullName = mob.mob_name || "";
+      const lastUnderscore = fullName.lastIndexOf("_");
+      let displayName = fullName;
+      let author = "";
+      if (lastUnderscore > 0 && mob.is_official === false) {
+        displayName = fullName.substring(0, lastUnderscore);
+        author = fullName.substring(lastUnderscore + 1);
+      }
+
+      // Friendly display name: underscores → spaces, title case
+      const friendlyName = displayName.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+
+      let html = `<h2>${esc(friendlyName)}</h2>`;
+      html += `<div class="mob-meta">`;
+      if (author) html += `<span>👤 ${esc(author)}</span>`;
+      if (mob.creation_date) {
+        const d = new Date(mob.creation_date);
+        html += `<span>📅 ${d.toLocaleDateString()}</span>`;
+      }
+      if (mob.complexity_score != null) html += `<span>⚙️ Complexity: ${mob.complexity_score}</span>`;
+      html += `</div>`;
+
+      if (mob.mob_description) {
+        html += `<div class="mob-description">${esc(mob.mob_description)}</div>`;
+      }
+
+      const keywords = mob.mob_keywords || [];
+      if (keywords.length) {
+        html += `<div class="mob-keywords">${keywords.map(k => `<span>${esc(k)}</span>`).join("")}</div>`;
+      }
+
+      card.innerHTML = html;
+      card.addEventListener("click", () => importMob(mob.mob_name, card));
+      gridEl.appendChild(card);
+    }
+  } catch (err) {
+    loadingEl.style.display = "none";
+    errorEl.style.display = "block";
+    errorEl.textContent = "Failed to load market: " + err.message;
+  }
+})();
+
+async function importMob(fullMobName, cardEl) {
+  // Require a user
+  const user = localStorage.getItem("current_user");
+  if (!user) {
+    alert("Please go back to the builder and create or select a user first.");
+    return;
+  }
+
+  cardEl.classList.add("importing");
+
+  try {
+    const res = await fetch("/api/market/" + encodeURIComponent(fullMobName));
+    if (!res.ok) {
+      const detail = await res.json().catch(() => ({}));
+      throw new Error(detail.detail || res.statusText);
+    }
+    const data = await res.json();
+    const spec = data.spec;
+    if (!spec) {
+      alert("This mob has no spec data stored. It was published before specs were saved.");
+      cardEl.classList.remove("importing");
+      return;
+    }
+
+    // Determine a local mob name from the spec's short_name
+    const mobName = spec.short_name || fullMobName;
+
+    // Save spec into the user's localStorage workspace
+    const userDataKey = "user_" + user + "_data";
+    const raw = localStorage.getItem(userDataKey);
+    const userData = raw ? JSON.parse(raw) : { mobs: {}, settings: {} };
+    userData.mobs = userData.mobs || {};
+    userData.mobs[mobName] = spec;
+
+    // Save texture if available
+    if (data.texture_data) {
+      userData.textures = userData.textures || {};
+      userData.textures[mobName] = data.texture_data;
+    }
+
+    localStorage.setItem(userDataKey, JSON.stringify(userData));
+
+    // Tell the builder which mob to select on load
+    localStorage.setItem("builder_current_mob", mobName);
+
+    // Navigate to builder
+    window.location.href = "/";
+  } catch (err) {
+    alert("Failed to import mob: " + err.message);
+    cardEl.classList.remove("importing");
+  }
+}
+
+function esc(str) {
+  const el = document.createElement("span");
+  el.textContent = str;
+  return el.innerHTML;
+}
+</script>
+</body>
+</html>
