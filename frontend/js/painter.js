@@ -131,6 +131,7 @@ function initPainter() {
           tc.height = img.height;
           window.viewer3D.texWidth = img.width;
           window.viewer3D.texHeight = img.height;
+          tctx.imageSmoothingEnabled = false;  // Restore after canvas resize clears context
           tctx.drawImage(img, 0, 0);
           window.viewer3D.texTexture.needsUpdate = true;
           if (typeof savePaintedTexture === "function") savePaintedTexture();

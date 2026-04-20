@@ -33,6 +33,8 @@ from backend.core.routes import (
     replace_spec,
     patch_spec,
     llm_spec_editor,
+    llm_animation_generate,
+    llm_animation_controller_generate,
     validate_spec_endpoint,
     llm_spec_mock,
     llm_geometry_generate,
@@ -114,6 +116,10 @@ app.post("/api/spec/patch")(patch_spec)
 app.post("/api/spec/llm")(llm_spec_editor)
 app.post("/api/spec/validate")(validate_spec_endpoint)
 app.get("/api/llm/categories")(get_llm_categories)
+
+# Animation generation routes
+app.post("/api/animation/generate")(llm_animation_generate)
+app.post("/api/animation/controller/generate")(llm_animation_controller_generate)
 
 # Build routes
 app.post("/build")(build_form)

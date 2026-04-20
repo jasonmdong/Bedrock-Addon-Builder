@@ -620,6 +620,7 @@ function render3DGeometry(geometryData, mobName, mobScale) {
   texCanvas.width = textureWidth;
   texCanvas.height = textureHeight;
   const texCtx = texCanvas.getContext('2d', { willReadFrequently: true });
+  texCtx.imageSmoothingEnabled = false;  // Disable pixel interpolation
   texCtx.fillStyle = '#ffffff';
   texCtx.fillRect(0, 0, texCanvas.width, texCanvas.height);
 
@@ -631,6 +632,7 @@ function render3DGeometry(geometryData, mobName, mobScale) {
       textureHeight = img.height;
       texCanvas.width = img.width;
       texCanvas.height = img.height;
+      texCtx.imageSmoothingEnabled = false;  // Restore after canvas resize clears context
       texCtx.drawImage(img, 0, 0);
       texture.needsUpdate = true;
       // Store dimensions for painting
@@ -765,6 +767,15 @@ function render3DGeometry(geometryData, mobName, mobScale) {
   viewer3D.scene.add(rootGroup);
   viewer3D.mesh = rootGroup;
   
+  // Save each bone's initial transform as the "bind pose" so we can restore it
+  for (const boneName in viewer3D.bones) {
+    const bone = viewer3D.bones[boneName];
+    if (!bone) continue;
+    bone.userData.bindPosition = bone.position.clone();
+    bone.userData.bindRotation = new THREE.Euler(bone.rotation.x, bone.rotation.y, bone.rotation.z, bone.rotation.order);
+    bone.userData.bindScale = bone.scale.clone();
+  }
+  
   console.log("[3D] Model rendered successfully");
 }
 
@@ -785,33 +796,59 @@ function initAnimationState() {
 function loadAnimation(animationData) {
   if (!animationState) initAnimationState();
   
+  // Reset bones to bind pose before loading new animation
+  resetBonePoses();
+
   animationState.animationData = animationData;
-  animationState.duration = animationData.animation_length || 1;
-  animationState.loop = animationData.loop === true || animationData.loop === "loop";
+  animationState.time = 0;
+  animationState.playing = false;
+  // Default loop true for Molang-driven animations that lack animation_length
+  animationState.loop = animationData.loop === true || animationData.loop === "loop"
+    || animationData.loop === undefined;
   animationState.keyframes = {};
   
-  // Parse bone animations
+  // Parse bone animations and detect Molang usage
+  let hasMolang = false;
   if (animationData.bones) {
     for (const boneName in animationData.bones) {
       const boneAnim = animationData.bones[boneName];
-      animationState.keyframes[boneName] = {
+      const kfs = {
         rotation: parseKeyframes(boneAnim.rotation),
         position: parseKeyframes(boneAnim.position),
         scale: parseKeyframes(boneAnim.scale)
       };
+      animationState.keyframes[boneName] = kfs;
+      // Check if any channel uses Molang
+      for (const ch of [kfs.rotation, kfs.position, kfs.scale]) {
+        if (ch && ch.some(k => k.molang)) hasMolang = true;
+      }
     }
   }
+
+  // For Molang-driven animations without explicit length, use a generous loop window
+  animationState.duration = animationData.animation_length || (hasMolang ? 4 : 1);
+  animationState.hasMolang = hasMolang;
   
-  console.log(`[Animation] Loaded animation: duration=${animationState.duration}s, loop=${animationState.loop}`);
+  console.log(`[Animation] Loaded animation: duration=${animationState.duration}s, loop=${animationState.loop}, molang=${hasMolang}`);
   updateTimelineUI();
 }
 
 function parseKeyframes(data) {
   if (!data) return null;
   
-  // Handle simple array value (constant)
+  // Handle simple array value (constant) — may contain Molang strings
   if (Array.isArray(data)) {
+    const hasMolang = data.some(v => typeof v === "string");
+    if (hasMolang) {
+      // Return as a Molang expression array to be evaluated per-frame
+      return [{ time: 0, value: data, molang: true }];
+    }
     return [{ time: 0, value: data }];
+  }
+
+  // Handle single Molang string (rare but valid)
+  if (typeof data === "string") {
+    return [{ time: 0, value: [data, data, data], molang: true }];
   }
   
   // Handle keyframe object
@@ -819,12 +856,16 @@ function parseKeyframes(data) {
   for (const time in data) {
     const value = data[time];
     if (Array.isArray(value)) {
-      keyframes.push({ time: parseFloat(time), value: value });
+      const hasMolang = value.some(v => typeof v === "string");
+      keyframes.push({ time: parseFloat(time), value: value, molang: hasMolang });
     } else if (typeof value === "object") {
       // Handle pre/post values for interpolation
+      const resolved = value.post || value.pre || [0, 0, 0];
+      const hasMolang = Array.isArray(resolved) && resolved.some(v => typeof v === "string");
       keyframes.push({ 
         time: parseFloat(time), 
-        value: value.post || value.pre || [0, 0, 0],
+        value: resolved,
+        molang: hasMolang,
         lerp_mode: value.lerp_mode || "linear"
       });
     }
@@ -832,6 +873,50 @@ function parseKeyframes(data) {
   
   keyframes.sort((a, b) => a.time - b.time);
   return keyframes;
+}
+
+/**
+ * Evaluate a simple Molang expression with the given context variables.
+ * Supports: math.cos, math.sin, math.abs, math.pi, query.anim_time,
+ * basic arithmetic (+, -, *, /), parentheses, and numeric literals.
+ */
+function evalMolang(expr, ctx) {
+  if (typeof expr === "number") return expr;
+  if (typeof expr !== "string") return 0;
+
+  let s = expr.trim().toLowerCase();
+  // Replace Molang variables with values
+  s = s.replace(/query\.anim_time/g, String(ctx.anim_time || 0));
+  s = s.replace(/query\.modified_distance_moved/g, String(ctx.anim_time || 0));
+  s = s.replace(/query\.ground_speed/g, String(ctx.ground_speed || 0));
+  s = s.replace(/variable\.\w+/g, "0");
+  s = s.replace(/query\.\w+/g, "0");
+
+  // Replace Molang math functions (Molang uses degrees)
+  s = s.replace(/math\.pi/g, String(Math.PI));
+  s = s.replace(/math\.cos\(/g, "__molang_cos(");
+  s = s.replace(/math\.sin\(/g, "__molang_sin(");
+  s = s.replace(/math\.abs\(/g, "Math.abs(");
+  s = s.replace(/math\.sqrt\(/g, "Math.sqrt(");
+  s = s.replace(/math\.pow\(/g, "Math.pow(");
+  s = s.replace(/math\.clamp\(/g, "__molang_clamp(");
+  s = s.replace(/math\.min\(/g, "Math.min(");
+  s = s.replace(/math\.max\(/g, "Math.max(");
+
+  // Sanitize: only allow safe characters
+  if (/[^0-9+\-*/().,%_ a-z\s]/.test(s)) return 0;
+
+  try {
+    const __molang_cos = (deg) => Math.cos(deg * Math.PI / 180);
+    const __molang_sin = (deg) => Math.sin(deg * Math.PI / 180);
+    const __molang_clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
+    const result = new Function("__molang_cos", "__molang_sin", "__molang_clamp", "Math", "return " + s)(
+      __molang_cos, __molang_sin, __molang_clamp, Math
+    );
+    return typeof result === "number" && isFinite(result) ? result : 0;
+  } catch (e) {
+    return 0;
+  }
 }
 
 function updateAnimation() {
@@ -861,38 +946,43 @@ function updateAnimation() {
 function applyAnimationFrame(time) {
   if (!viewer3D || !viewer3D.bones) return;
   
+  const ctx = { anim_time: time, ground_speed: 0 };
+
   for (const boneName in animationState.keyframes) {
     const bone = viewer3D.bones[boneName];
     if (!bone) continue;
     
     const boneKeyframes = animationState.keyframes[boneName];
     
-    // Apply rotation
+    // Apply rotation (additive on top of bind pose)
     if (boneKeyframes.rotation) {
-      const rot = interpolateKeyframes(boneKeyframes.rotation, time);
+      const rot = interpolateKeyframes(boneKeyframes.rotation, time, ctx);
       if (rot) {
-        bone.rotation.x = -rot[0] * Math.PI / 180;
-        bone.rotation.y = -rot[1] * Math.PI / 180;
-        bone.rotation.z = rot[2] * Math.PI / 180;
+        const bind = bone.userData.bindRotation;
+        bone.rotation.set(
+          (bind ? bind.x : 0) + (-rot[0] * Math.PI / 180),
+          (bind ? bind.y : 0) + (-rot[1] * Math.PI / 180),
+          (bind ? bind.z : 0) + (rot[2] * Math.PI / 180)
+        );
       }
     }
     
-    // Apply position offset
+    // Apply position offset (additive on top of bind position)
     if (boneKeyframes.position) {
-      const pos = interpolateKeyframes(boneKeyframes.position, time);
+      const pos = interpolateKeyframes(boneKeyframes.position, time, ctx);
       if (pos) {
-        const originalPivot = bone.userData.originalPivot || [0, 0, 0];
+        const bind = bone.userData.bindPosition || new THREE.Vector3();
         bone.position.set(
-          -originalPivot[0] - pos[0],
-          originalPivot[1] + pos[1],
-          originalPivot[2] + pos[2]
+          bind.x - pos[0],
+          bind.y + pos[1],
+          bind.z + pos[2]
         );
       }
     }
     
     // Apply scale
     if (boneKeyframes.scale) {
-      const scl = interpolateKeyframes(boneKeyframes.scale, time);
+      const scl = interpolateKeyframes(boneKeyframes.scale, time, ctx);
       if (scl) {
         bone.scale.set(scl[0], scl[1], scl[2]);
       }
@@ -900,17 +990,23 @@ function applyAnimationFrame(time) {
   }
 }
 
-function interpolateKeyframes(keyframes, time) {
+function interpolateKeyframes(keyframes, time, ctx) {
   if (!keyframes || keyframes.length === 0) return null;
+
+  // Resolve a keyframe value, evaluating Molang if needed
+  function resolveValue(kf) {
+    if (!kf.molang) return kf.value;
+    return kf.value.map(v => typeof v === "string" ? evalMolang(v, ctx) : v);
+  }
   
   // Before first keyframe
   if (time <= keyframes[0].time) {
-    return keyframes[0].value;
+    return resolveValue(keyframes[0]);
   }
   
   // After last keyframe
   if (time >= keyframes[keyframes.length - 1].time) {
-    return keyframes[keyframes.length - 1].value;
+    return resolveValue(keyframes[keyframes.length - 1]);
   }
   
   // Find surrounding keyframes
@@ -923,9 +1019,15 @@ function interpolateKeyframes(keyframes, time) {
     }
   }
   
-  if (!kf1 || !kf2) return keyframes[0].value;
+  if (!kf1 || !kf2) return resolveValue(keyframes[0]);
+
+  // If either keyframe has Molang, just evaluate the nearest one (no lerp for expressions)
+  if (kf1.molang || kf2.molang) {
+    const t = (time - kf1.time) / (kf2.time - kf1.time);
+    return t < 0.5 ? resolveValue(kf1) : resolveValue(kf2);
+  }
   
-  // Linear interpolation
+  // Linear interpolation between numeric keyframes
   const t = (time - kf1.time) / (kf2.time - kf1.time);
   return [
     kf1.value[0] + (kf2.value[0] - kf1.value[0]) * t,
@@ -973,6 +1075,83 @@ function resetAnimation() {
   animationState.playing = false;
   applyAnimationFrame(0);
   updateTimelineUI();
+}
+
+/**
+ * Load all animations from a mob spec's animation_json and show
+ * per-animation buttons in the timeline panel.
+ * @param {object} animationJson - The full animation.json object from the spec
+ */
+function loadAnimationsFromSpec(animationJson) {
+  const timeline = document.getElementById("animation-timeline");
+  const container = document.getElementById("anim-buttons");
+
+  // If no valid animation data, hide the panel
+  if (!animationJson || !animationJson.animations || Object.keys(animationJson.animations).length === 0) {
+    if (timeline) timeline.style.display = "none";
+    if (container) container.innerHTML = "";
+    // Stop any playing animation and reset bones
+    if (animationState && animationState.playing) {
+      animationState.playing = false;
+    }
+    resetBonePoses();
+    return;
+  }
+
+  // Show the timeline panel
+  if (timeline) timeline.style.display = "";
+  if (!container) return;
+
+  container.innerHTML = "";
+
+  const animations = animationJson.animations;
+  const animNames = Object.keys(animations);
+
+  animNames.forEach(fullName => {
+    const btn = document.createElement("button");
+    // Show a short label: "animation.mob.idle" → "idle"
+    const parts = fullName.split(".");
+    btn.textContent = parts[parts.length - 1] || fullName;
+    btn.title = fullName;
+    btn.addEventListener("click", () => {
+      // Highlight active button
+      container.querySelectorAll("button").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      // Load and auto-play this animation
+      loadAnimation(animations[fullName]);
+      animationState.playing = true;
+      animationState.lastFrameTime = performance.now();
+      updateTimelineUI();
+    });
+    container.appendChild(btn);
+  });
+
+  // Auto-select the first animation (load but don't auto-play)
+  if (animNames.length > 0) {
+    loadAnimation(animations[animNames[0]]);
+    container.children[0].classList.add("active");
+  }
+}
+
+/**
+ * Reset all bone rotations/positions/scales to their bind pose.
+ */
+function resetBonePoses() {
+  if (!viewer3D || !viewer3D.bones) return;
+  for (const boneName in viewer3D.bones) {
+    const bone = viewer3D.bones[boneName];
+    if (!bone) continue;
+    // Restore to the saved bind pose (position/rotation/scale from initial geometry build)
+    if (bone.userData.bindPosition) {
+      bone.position.copy(bone.userData.bindPosition);
+    }
+    if (bone.userData.bindRotation) {
+      bone.rotation.copy(bone.userData.bindRotation);
+    }
+    if (bone.userData.bindScale) {
+      bone.scale.copy(bone.userData.bindScale);
+    }
+  }
 }
 
 // Viewport controls
@@ -1023,7 +1202,13 @@ function initViewportControls() {
 }
 
 // Initialize 3D Editor control buttons
+let _editorControlsInitialized = false;
 function init3DEditorControls() {
+  if (_editorControlsInitialized) {
+    console.log('[3D Editor] Controls already initialized, skipping');
+    return;
+  }
+  _editorControlsInitialized = true;
   console.log('[3D Editor] Initializing controls...');
   
   // Check if buttons exist
@@ -1211,6 +1396,7 @@ function refresh3DTexture(mobName) {
     if (viewer3D.texCanvas && viewer3D.texCtx) {
       viewer3D.texCanvas.width = img.width;
       viewer3D.texCanvas.height = img.height;
+      viewer3D.texCtx.imageSmoothingEnabled = false;  // Restore after canvas resize clears context
       viewer3D.texCtx.drawImage(img, 0, 0);
       viewer3D.texWidth = img.width;
       viewer3D.texHeight = img.height;
@@ -1243,9 +1429,251 @@ const editor3DState = {
   paintColor: '#ff0000',
   brushSize: 1,
   showWireframe: false,
-  snapToGrid: false,
-  gridSize: 16
+  // Transform drag state
+  _dragging: false,
+  _dragStart: null,       // {x, y} screen coords at drag start
+  _dragStartWorld: null,   // THREE.Vector3 world position at drag start
+  _origPosition: null,
+  _origRotation: null,
+  _origScale: null,
+  // Undo stack
+  _undoStack: [],
 };
+
+// Selection outline helper
+let selectionBox = null;
+let transformGizmo = null;  // The gizmo group (will contain arrow meshes)
+
+// Create rotation rings for rotate mode
+function createRotationGizmo() {
+  const gizmo = new THREE.Group();
+  gizmo.userData._isGizmo = true;
+  
+  const ringRadius = 10;
+  const tubeRadius = 0.4;
+  
+  // Color codes: Red=X, Green=Y, Blue=Z
+  const axes = [
+    { name: 'X', color: 0xff0000, rotationAxis: [1, 0, 0] },
+    { name: 'Y', color: 0x00ff00, rotationAxis: [0, 1, 0] },
+    { name: 'Z', color: 0x0000ff, rotationAxis: [0, 0, 1] }
+  ];
+  
+  axes.forEach(axis => {
+    // Create torus ring for rotation
+    const ringGeom = new THREE.TorusGeometry(ringRadius, tubeRadius, 16, 128);
+    const ringMat = new THREE.MeshPhongMaterial({ 
+      color: axis.color, 
+      emissive: axis.color, 
+      emissiveIntensity: 0.3,
+      side: THREE.DoubleSide
+    });
+    const ring = new THREE.Mesh(ringGeom, ringMat);
+    ring.userData.axis = axis.name;
+    ring.userData._isGizmoArrow = true;
+    ring.userData.color = axis.color;
+    
+    // Rotate ring to match axis plane
+    // TorusGeometry by default is in XY plane (around Z)
+    // X axis: rotate to YZ plane = rotate around Z by PI/2
+    // Y axis: rotate to XZ plane = rotate around X by PI/2
+    // Z axis: keep in XY plane (no rotation)
+    if (axis.name === 'X') {
+      ring.rotation.z = Math.PI / 2;
+    } else if (axis.name === 'Y') {
+      ring.rotation.x = Math.PI / 2;
+    }
+    // Z axis needs no rotation (already in XY plane)
+    
+    gizmo.add(ring);
+  });
+  
+  return gizmo;
+}
+
+// Create a transformation gizmo with three colored arrows (X, Y, Z) or rotation rings
+function createTransformGizmo() {
+  // If rotate mode, create rotation rings instead
+  if (editor3DState.tool === 'rotate') {
+    return createRotationGizmo();
+  }
+  
+  const gizmo = new THREE.Group();
+  gizmo.userData._isGizmo = true;
+  
+  const arrowLength = 12;
+  const arrowHeadLength = 3;
+  const arrowHeadWidth = 1.5;
+  const arrowShaftRadius = 0.3;
+  
+  // Color codes: Red=X, Green=Y, Blue=Z
+  const axes = [
+    { name: 'X', color: 0xff0000, direction: [1, 0, 0] },
+    { name: 'Y', color: 0x00ff00, direction: [0, 1, 0] },
+    { name: 'Z', color: 0x0000ff, direction: [0, 0, 1] }
+  ];
+  
+  axes.forEach(axis => {
+    // Create arrow as a group (shaft + head)
+    const arrowGroup = new THREE.Group();
+    arrowGroup.userData.axis = axis.name;
+    arrowGroup.userData._isGizmoArrow = true;
+    
+    // Shaft (thin cylinder)
+    const shaftGeom = new THREE.CylinderGeometry(arrowShaftRadius, arrowShaftRadius, arrowLength - arrowHeadLength, 8);
+    const shaftMat = new THREE.MeshPhongMaterial({ color: axis.color, emissive: axis.color, emissiveIntensity: 0.3 });
+    const shaft = new THREE.Mesh(shaftGeom, shaftMat);
+    shaft.position[axis.direction[0] ? 0 : (axis.direction[1] ? 1 : 2)] = (arrowLength - arrowHeadLength) / 2;
+    arrowGroup.add(shaft);
+    
+    // Arrow head (cone)
+    const headGeom = new THREE.ConeGeometry(arrowHeadWidth, arrowHeadLength, 8);
+    const headMat = new THREE.MeshPhongMaterial({ color: axis.color, emissive: axis.color, emissiveIntensity: 0.5 });
+    const head = new THREE.Mesh(headGeom, headMat);
+    const axisIdx = axis.direction[0] ? 0 : (axis.direction[1] ? 1 : 2);
+    head.position[axisIdx] = arrowLength - arrowHeadLength / 2;
+    arrowGroup.add(head);
+    
+    // Rotate arrow to align with axis
+    if (axis.name === 'X') {
+      arrowGroup.rotation.z = Math.PI / 2;
+    } else if (axis.name === 'Z') {
+      arrowGroup.rotation.x = -Math.PI / 2;
+    }
+    // Y axis needs no rotation (already points up)
+    
+    arrowGroup.userData.color = axis.color;
+    gizmo.add(arrowGroup);
+  });
+  
+  return gizmo;
+}
+
+function showTransformGizmo(target) {
+  // Remove old gizmo
+  if (transformGizmo && transformGizmo.parent) {
+    transformGizmo.parent.remove(transformGizmo);
+  }
+  
+  // Show gizmo for move, rotate, and scale modes
+  if (!['move', 'rotate', 'scale'].includes(editor3DState.tool)) {
+    transformGizmo = null;
+    return;
+  }
+  
+  if (!target) {
+    transformGizmo = null;
+    return;
+  }
+  
+  // Create and position new gizmo
+  transformGizmo = createTransformGizmo();
+  
+  // Position gizmo in front of the object (towards the camera)
+  updateGizmoPosition(target, transformGizmo);
+  
+  transformGizmo.userData.attachedTo = target;
+  
+  // Add gizmo to the same parent as the target
+  (target.parent || viewer3D.scene).add(transformGizmo);
+  
+  console.log('[3D Gizmo] Gizmo shown for', target.userData?.boneName || target.name);
+}
+
+function updateGizmoPosition(target, gizmo) {
+  // Calculate direction from object to camera
+  const objPos = target.getWorldPosition(new THREE.Vector3());
+  const camPos = viewer3D.camera.position;
+  const dirToCamera = new THREE.Vector3().subVectors(camPos, objPos).normalize();
+  
+  // Get object bounding box to determine offset distance
+  const bbox = new THREE.Box3().setFromObject(target);
+  const size = bbox.getSize(new THREE.Vector3());
+  const maxDim = Math.max(size.x, size.y, size.z);
+  
+  // Offset gizmo towards camera by half the object size + a bit extra
+  const offsetDistance = maxDim * 0.6;
+  const offsetVec = dirToCamera.multiplyScalar(offsetDistance);
+  
+  // Set gizmo position (in object's local space)
+  const localOffset = new THREE.Vector3().copy(offsetVec);
+  if (target.parent) {
+    target.parent.worldToLocal(localOffset);
+  }
+  
+  gizmo.position.copy(target.position).add(localOffset);
+}
+
+function hideTransformGizmo() {
+  if (transformGizmo && transformGizmo.parent) {
+    transformGizmo.parent.remove(transformGizmo);
+  }
+  transformGizmo = null;
+}
+
+function clearSelection() {
+  if (selectionBox && selectionBox.parent) {
+    selectionBox.parent.remove(selectionBox);
+  }
+  if (transformGizmo && transformGizmo.parent) {
+    transformGizmo.parent.remove(transformGizmo);
+  }
+  selectionBox = null;
+  transformGizmo = null;
+  editor3DState.selectedObject = null;
+}
+
+function selectObject(obj) {
+  if (!obj || !viewer3D) return;
+
+  // Walk up to find the bone group (THREE.Group with a boneName)
+  let target = obj;
+  while (target && !target.userData?.boneName && target.parent && target.parent !== viewer3D.scene && target.parent !== viewer3D.mesh) {
+    target = target.parent;
+  }
+
+  // Remove old outline
+  if (selectionBox && selectionBox.parent) {
+    selectionBox.parent.remove(selectionBox);
+  }
+
+  editor3DState.selectedObject = target;
+
+  // Create wireframe bounding box outline
+  const box = new THREE.Box3().setFromObject(target);
+  if (box.isEmpty()) return;
+
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+
+  const geo = new THREE.BoxGeometry(size.x, size.y, size.z);
+  const edges = new THREE.EdgesGeometry(geo);
+  selectionBox = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({
+    color: 0x1e90ff,
+    linewidth: 2,
+    depthTest: false,
+    transparent: true,
+  }));
+  selectionBox.renderOrder = 999;
+  selectionBox.position.copy(center);
+  // Convert to target's parent space if target has a parent
+  if (target.parent) {
+    target.parent.worldToLocal(selectionBox.position);
+  }
+  selectionBox.userData._isSelectionBox = true;
+
+  (target.parent || viewer3D.scene).add(selectionBox);
+  
+  // Show transform gizmo for move/rotate modes
+  showTransformGizmo(target);
+  
+  console.log('[3D Editor] Selected:', target.userData?.boneName || target.name || 'object');
+}
+
+function refreshSelectionBox() {
+  if (!editor3DState.selectedObject) return;
+  selectObject(editor3DState.selectedObject);
+}
 
 // Toggle grid visibility
 function toggleGrid() {
@@ -1275,6 +1703,7 @@ function toggleWireframe() {
 }
 
 function setEditorTool(tool) {
+  const prevTool = editor3DState.tool;
   editor3DState.tool = tool;
 
   // Update UI buttons
@@ -1283,10 +1712,105 @@ function setEditorTool(tool) {
   });
 
   // Update cursor
-  const canvas = document.getElementById('viewport-3d');
-  if (canvas) {
-    canvas.style.cursor = ['paint', 'erase', 'pick'].includes(tool) ? 'crosshair' : 'default';
+  const el = document.getElementById('viewport-3d');
+  if (el) {
+    if (['paint', 'erase', 'pick'].includes(tool)) el.style.cursor = 'crosshair';
+    else if (['move', 'rotate', 'scale'].includes(tool)) el.style.cursor = 'grab';
+    else el.style.cursor = 'default';
   }
+  
+  // Show/hide gizmo based on tool
+  if (['move', 'rotate', 'scale'].includes(tool) && editor3DState.selectedObject) {
+    showTransformGizmo(editor3DState.selectedObject);
+  } else {
+    hideTransformGizmo();
+  }
+
+  // Toggle unlit materials for paint tools so the rendered colors match the
+  // raw texture.  This keeps the "Pick" tool and the browser's native
+  // eyedropper (from the color-input swatch) in sync.
+  const isPaintTool = ['paint', 'erase', 'pick'].includes(tool);
+  const wasPaintTool = ['paint', 'erase', 'pick'].includes(prevTool);
+  if (isPaintTool !== wasPaintTool) {
+    setMobMaterialUnlit(isPaintTool);
+  }
+}
+
+// Switch mob mesh materials between unlit (MeshBasicMaterial) and lit
+// (MeshLambertMaterial) so that rendered pixel colors exactly match the
+// source texture when painting / picking colors.
+function setMobMaterialUnlit(unlit) {
+  if (!viewer3D || !viewer3D.mesh) return;
+  viewer3D.mesh.traverse(child => {
+    if (!child.isMesh) return;
+    const old = child.material;
+    if (unlit && old.type !== 'MeshBasicMaterial') {
+      const basic = new THREE.MeshBasicMaterial({
+        map: old.map,
+        side: old.side,
+        transparent: old.transparent,
+        alphaTest: old.alphaTest,
+        wireframe: old.wireframe,
+      });
+      basic.userData._origMaterial = old;  // stash for restore
+      child.material = basic;
+    } else if (!unlit && old.userData._origMaterial) {
+      const orig = old.userData._origMaterial;
+      orig.wireframe = old.wireframe;  // preserve wireframe toggle
+      child.material = orig;
+      old.dispose();
+    }
+  });
+}
+
+// =====================
+// UNDO SYSTEM
+// =====================
+
+function pushUndo(label) {
+  const obj = editor3DState.selectedObject;
+  if (!obj) return;
+  editor3DState._undoStack.push({
+    label,
+    object: obj,
+    position: obj.position.clone(),
+    rotation: obj.rotation.clone(),
+    scale: obj.scale.clone(),
+  });
+  // Keep stack bounded
+  if (editor3DState._undoStack.length > 50) editor3DState._undoStack.shift();
+}
+
+function undo() {
+  const entry = editor3DState._undoStack.pop();
+  if (!entry) return;
+  entry.object.position.copy(entry.position);
+  entry.object.rotation.copy(entry.rotation);
+  entry.object.scale.copy(entry.scale);
+  refreshSelectionBox();
+  console.log('[3D Editor] Undo:', entry.label);
+}
+
+// =====================
+// TRANSFORM HELPERS
+// =====================
+
+// Project a screen-space mouse delta into world-space movement
+function screenToWorldDelta(dx, dy, camera, distance) {
+  const vFov = camera.fov * Math.PI / 180;
+  const el = document.getElementById('viewport-3d');
+  const h = el ? el.clientHeight : 500;
+  const worldPerPx = (2 * distance * Math.tan(vFov / 2)) / h;
+
+  // Extract camera's local right (+X) and up (+Y) axes from its world matrix
+  const m = camera.matrixWorld.elements;
+  const right = new THREE.Vector3(m[0], m[1], m[2]).normalize();
+  const up = new THREE.Vector3(m[4], m[5], m[6]).normalize();
+
+  const delta = new THREE.Vector3();
+  delta.addScaledVector(right, dx * worldPerPx);
+  delta.addScaledVector(up, -dy * worldPerPx);
+  return delta;
 }
 
 // Paint on the texture at a UV coordinate
@@ -1343,8 +1867,13 @@ function pickColorAtUV(uv) {
   if (!viewer3D || !viewer3D.texCtx || !uv) return null;
   const tw = viewer3D.texWidth;
   const th = viewer3D.texHeight;
-  const px = Math.floor(uv.x * tw);
-  const py = Math.floor((1 - uv.y) * th);
+  
+  // Clamp coordinates to valid bounds
+  let px = Math.floor(uv.x * tw);
+  let py = Math.floor((1 - uv.y) * th);
+  px = Math.max(0, Math.min(px, tw - 1));
+  py = Math.max(0, Math.min(py, th - 1));
+  
   const pixel = viewer3D.texCtx.getImageData(px, py, 1, 1).data;
   const hex = '#' + ((1 << 24) + (pixel[0] << 16) + (pixel[1] << 8) + pixel[2]).toString(16).slice(1);
   return hex;
@@ -1367,6 +1896,8 @@ function setupRaycasting() {
   }
 
   let isPainting = false;
+  let isTransforming = false;
+  let gizmoAxis = null;  // Track which gizmo axis is being dragged (X, Y, or Z)
 
   function getIntersect(e) {
     const rect = container.getBoundingClientRect();
@@ -1415,7 +1946,154 @@ function setupRaycasting() {
     }
   }
 
+  // --- Transform drag handling ---
+  function startTransform(e, axis = null) {
+    const obj = editor3DState.selectedObject;
+    if (!obj) return false;
+
+    pushUndo(editor3DState.tool);
+    isTransforming = true;
+    gizmoAxis = axis;  // Store which axis is being used (or null for free transform)
+    editor3DState._dragging = true;
+    editor3DState._dragStart = { x: e.clientX, y: e.clientY };
+    editor3DState._origPosition = obj.position.clone();
+    editor3DState._origRotation = obj.rotation.clone();
+    editor3DState._origScale = obj.scale.clone();
+    container.style.cursor = 'grabbing';
+    return true;
+  }
+
+  function updateTransform(e) {
+    const obj = editor3DState.selectedObject;
+    if (!obj || !editor3DState._dragging) return;
+
+    const dx = e.clientX - editor3DState._dragStart.x;
+    const dy = e.clientY - editor3DState._dragStart.y;
+    const dist = viewer3D.controls ? viewer3D.controls.distance : 100;
+
+    if (editor3DState.tool === 'move') {
+      if (gizmoAxis) {
+        // Axis-constrained movement (from gizmo)
+        const axisDelta = dx - dy;  // Diagonal drag gives combined effect
+        const sensitivity = 0.2;
+        const worldDelta = axisDelta * sensitivity;
+        
+        obj.position.copy(editor3DState._origPosition);
+        if (gizmoAxis === 'X') {
+          obj.position.x -= worldDelta;  // X inverted
+        } else if (gizmoAxis === 'Y') {
+          obj.position.y += worldDelta;  // Y inverted (flipped)
+        } else if (gizmoAxis === 'Z') {
+          obj.position.z -= worldDelta;  // Z inverted
+        }
+      } else {
+        // Free movement (no gizmo)
+        const delta = screenToWorldDelta(dx, dy, viewer3D.camera, dist);
+        obj.position.copy(editor3DState._origPosition).add(delta);
+      }
+      refreshSelectionBox();
+    } else if (editor3DState.tool === 'rotate') {
+      if (gizmoAxis) {
+        // Axis-constrained rotation (from gizmo)
+        const axisDelta = dx - dy;  // Diagonal drag for rotation
+        const sensitivity = 0.005;
+        
+        obj.rotation.copy(editor3DState._origRotation);
+        if (gizmoAxis === 'X') {
+          obj.rotation.x -= axisDelta * sensitivity;  // X inverted
+        } else if (gizmoAxis === 'Y') {
+          obj.rotation.y -= axisDelta * sensitivity;  // Y inverted
+        } else if (gizmoAxis === 'Z') {
+          obj.rotation.z += axisDelta * sensitivity;
+        }
+      } else {
+        // Free rotation (no gizmo)
+        const sensitivity = 0.5;
+        obj.rotation.copy(editor3DState._origRotation);
+        obj.rotation.y += dx * sensitivity * Math.PI / 180;
+        obj.rotation.x -= dy * sensitivity * Math.PI / 180;
+      }
+      refreshSelectionBox();
+    } else if (editor3DState.tool === 'scale') {
+      if (gizmoAxis) {
+        // Axis-constrained scaling (from gizmo)
+        const axisDelta = dx - dy;  // Diagonal drag for scaling
+        const sensitivity = 0.02;  // Increased from 0.005 for more responsive scaling
+        const factor = 1 + axisDelta * sensitivity;
+        const clamped = Math.max(0.1, Math.min(5, factor));
+        
+        obj.scale.copy(editor3DState._origScale);
+        if (gizmoAxis === 'X') {
+          obj.scale.x *= clamped;  // X axis scaling
+        } else if (gizmoAxis === 'Y') {
+          obj.scale.y *= clamped;  // Y axis scaling
+        } else if (gizmoAxis === 'Z') {
+          obj.scale.z *= clamped;  // Z axis scaling
+        }
+      }
+      refreshSelectionBox();
+    }
+  }
+
+  function stopTransform() {
+    if (isTransforming) {
+      isTransforming = false;
+      gizmoAxis = null;
+      editor3DState._dragging = false;
+      container.style.cursor = ['move', 'rotate', 'scale'].includes(editor3DState.tool) ? 'grab' : 'default';
+    }
+  }
+
+  // --- Mouse events ---
   container.addEventListener('mousemove', (e) => {
+    // Transform dragging takes priority
+    if (isTransforming) {
+      updateTransform(e);
+      // Update gizmo position and offset as object moves
+      if (transformGizmo && editor3DState.selectedObject) {
+        updateGizmoPosition(editor3DState.selectedObject, transformGizmo);
+      }
+      return;
+    }
+
+    // Check for gizmo hover (highlight hovered arrow)
+    if (['move', 'rotate', 'scale'].includes(editor3DState.tool) && transformGizmo) {
+      const gizmoHit = getGizmoIntersect(e);
+      let hoveredAxis = null;
+      
+      if (gizmoHit) {
+        let arrowGroup = gizmoHit.object;
+        while (arrowGroup && !arrowGroup.userData._isGizmoArrow) {
+          arrowGroup = arrowGroup.parent;
+        }
+        if (arrowGroup) {
+          hoveredAxis = arrowGroup.userData.axis;
+        }
+      }
+      
+      // Update arrow highlight based on hover
+      transformGizmo.children.forEach(arrowGroup => {
+        arrowGroup.children.forEach(mesh => {
+          if (mesh.isMesh) {
+            if (arrowGroup.userData.axis === hoveredAxis) {
+              mesh.material.emissiveIntensity = 1.0;  // Brightened when hovered
+            } else {
+              mesh.material.emissiveIntensity = 0.3;  // Normal state
+            }
+          }
+        });
+      });
+      
+      container.style.cursor = hoveredAxis ? 'crosshair' : 'grab';
+    }
+
+    // Continuous painting while dragging
+    if (isPainting && ['paint', 'erase'].includes(editor3DState.tool)) {
+      handlePaintAction(e);
+      return;
+    }
+
+    // Hover detection
     const hit = getIntersect(e);
     if (hit) {
       editor3DState.hoverObject = hit.object;
@@ -1429,7 +2107,31 @@ function setupRaycasting() {
   container.addEventListener('mousedown', (e) => {
     if (e.button !== 0) return;
 
-    const isPaintTool = ['paint', 'erase', 'pick'].includes(editor3DState.tool);
+    const tool = editor3DState.tool;
+    const isPaintTool = ['paint', 'erase', 'pick'].includes(tool);
+    const isTransformTool = ['move', 'rotate', 'scale'].includes(tool);
+
+    // Check if gizmo was clicked first (gizmo interaction has priority)
+    if (isTransformTool && ['move', 'rotate', 'scale'].includes(tool)) {
+      const gizmoHit = getGizmoIntersect(e);
+      if (gizmoHit) {
+        // Find the arrow group (parent) that was hit
+        let arrowGroup = gizmoHit.object;
+        while (arrowGroup && !arrowGroup.userData._isGizmoArrow) {
+          arrowGroup = arrowGroup.parent;
+        }
+        
+        if (arrowGroup && arrowGroup.userData.axis) {
+          e.stopPropagation();
+          const axis = arrowGroup.userData.axis;
+          console.log(`[3D Gizmo] Dragging ${tool} on axis: ${axis}`);
+          startTransform(e, axis);
+          return;
+        }
+      }
+    }
+
+    // Paint tools
     if (isPaintTool && editor3DState.hoverObject) {
       e.stopPropagation();
       isPainting = true;
@@ -1437,11 +2139,23 @@ function setupRaycasting() {
       return;
     }
 
-    if (!editor3DState.hoverObject) return;
+    // Transform tools
+    if (isTransformTool) {
+      // For move/rotate/scale modes: ONLY transform if gizmo arrow was clicked
+      if (['move', 'rotate', 'scale'].includes(tool)) {
+        // Gizmo arrow click check was already done above, if we get here it's not a gizmo arrow
+        // Don't select a new object - keep current selection
+        return;
+      }
+    }
 
-    if (editor3DState.tool === 'select') {
-      editor3DState.selectedObject = editor3DState.hoverObject;
-      console.log('[3D Editor] Selected:', editor3DState.hoverObject.name || 'unnamed');
+    // Select tool
+    if (tool === 'select') {
+      if (editor3DState.hoverObject) {
+        selectObject(editor3DState.hoverObject);
+      } else {
+        clearSelection();
+      }
     }
   });
 
@@ -1472,11 +2186,28 @@ function addCube(position = [0, 0, 0], size = [8, 8, 8]) {
   const cube = new THREE.Mesh(geometry, material);
   cube.position.set(position[0], position[1], position[2]);
   cube.name = `cube_${Date.now()}`;
+  cube.userData._userAdded = true;
   
   viewer3D.scene.add(cube);
   
   console.log('[3D Editor] Added cube at:', position);
   return cube;
+}
+
+// Remove all user-added cubes from the scene
+function clearUserCubes() {
+  if (!viewer3D) return;
+  const toRemove = [];
+  viewer3D.scene.traverse(child => {
+    if (child.isMesh && child.userData._userAdded) toRemove.push(child);
+  });
+  toRemove.forEach(obj => {
+    if (obj === editor3DState.selectedObject) clearSelection();
+    obj.parent.remove(obj);
+    obj.geometry?.dispose();
+    obj.material?.dispose();
+  });
+  console.log(`[3D Editor] Cleared ${toRemove.length} user-added cube(s)`);
 }
 
 // Delete selected object
@@ -1515,6 +2246,7 @@ function init3DEditor() {
 // Export for external use
 window.render3DGeometry = render3DGeometry;
 window.loadAnimation = loadAnimation;
+window.loadAnimationsFromSpec = loadAnimationsFromSpec;
 window.viewer3D = viewer3D;
 window.refresh3DTexture = refresh3DTexture;
 window.editor3DState = editor3DState;
@@ -1527,6 +2259,7 @@ window.clearSelection = clearSelection;
 window.undo = undo;
 window.addCube = addCube;
 window.deleteSelected = deleteSelected;
+window.clearUserCubes = clearUserCubes;
 window.duplicateSelected = duplicateSelected;
 window.init3DEditor = init3DEditor;
 window.setupRaycasting = setupRaycasting;
