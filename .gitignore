@@ -27,6 +27,9 @@ SampleElephant/
 # Temp test files
 test_mctools.py
 
+# Blockbench source (large third-party repo)
+blockbench/
+
 # API Keys
 API_KEY.py
 **/API_KEY.py
