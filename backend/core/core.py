@@ -91,7 +91,6 @@ WORLD_TEMPLATE_BASES = [
     DATA_DIR / "base_world.mcworld",
     DATA_DIR / "base_world.zip",
 ]
-
 # LLM system prompt
 LLM_SYSTEM_PROMPT = """You are an expert Minecraft Bedrock Add-on developer.
 You edit Mob Specifications (MobSpec) to fulfill user requests.
@@ -111,7 +110,6 @@ FIELDS OVERVIEW:
      GOOD: ["red head", "dark green body", "dark green legs", "scales"]
      BAD:  ["Head: red, Body: green with scales"]  ← do NOT combine like this
      Always include at least a pattern keyword entry when relevant.
-
 GEOMETRY RULES:
 - For VANILLA Minecraft mobs (ghast, cow, zombie, creeper, spider, chicken, pig, wolf, skeleton, blaze, enderman, slime, iron_golem, etc.), use the vanilla geometry reference and set geometry_json={}.
   Example: user says "turn it into a ghast" → geometry="geometry.ghast", geometry_json={}.
@@ -129,7 +127,6 @@ GEOMETRY RULES:
     }
   ]
 }
-
 LOOT DROPS:
 - When the user asks the mob to drop specific items on death, you MUST add TWO things:
   1. In 'components': "minecraft:loot": {"table": "loot_tables/entities/<short_name>.json"}
@@ -138,7 +135,6 @@ LOOT DROPS:
 - Each entry MUST have: "item" (full Bedrock item ID like "minecraft:diamond"), "count_min" (int), "count_max" (int), "chance" (float 0.0-1.0)
 - Common item IDs: minecraft:diamond, minecraft:gold_ingot, minecraft:iron_ingot, minecraft:emerald, minecraft:bone, minecraft:leather, minecraft:blaze_rod, minecraft:ender_pearl, minecraft:nether_star, minecraft:coal, minecraft:redstone, minecraft:netherite_scrap, minecraft:arrow, minecraft:fire_charge, minecraft:magma_cream, minecraft:ghast_tear, minecraft:egg, minecraft:cooked_beef
 - ALWAYS include loot_drops when the user mentions drops/loot/items on death
-
 CRITICAL RULES:
 1. ALWAYS return a single VALID JSON object matching the schema.
 2. Include ALL required keys: identifier, display_name, short_name, engine_min, hp, damage, speed, collision_box, geometry, geometry_json, render_controller, texture_hint, texture_instructions, color_rgb, egg_base, egg_overlay, scale, components.
@@ -148,4 +144,113 @@ CRITICAL RULES:
 6. For explosive behavior, you MUST have both "minecraft:behavior.swell" and "minecraft:explode".
 7. ALWAYS update color_rgb when changing the mob type — it controls the texture color.
 8. PRESERVE GEOMETRY ON ITERATION: If the current spec has geometry_json marked as "(CUSTOM GEOMETRY PRESENT — DO NOT REPLACE)", keep geometry and geometry_json EXACTLY as they are. Only change geometry if the user explicitly asks to change the mob's shape/model/body. For behavior-only changes (loot, damage, speed, abilities, etc.), keep the existing geometry and geometry_json unchanged. Set geometry_json to {} ONLY if switching to a vanilla geometry reference.
+"""
+
+# LLM system prompt (dynamic, assembled from sections)
+LLM_SYSTEM_PROMPT_SECTIONS = {
+    "header": (
+        "You are an expert Minecraft Bedrock Add-on developer.\n"
+        "You edit Mob Specifications (MobSpec) to fulfill user requests.\n"
+    ),
+    "critical_rules": (
+        "CRITICAL RULES:\n"
+        "1. ALWAYS return a single VALID JSON object matching the schema.\n"
+        "2. Return ONLY the JSON object (no explanation).\n"
+        "3. Include ALL required keys: identifier, display_name, short_name, engine_min, hp, damage, speed, collision_box, geometry, geometry_json, render_controller, texture_hint, texture_instructions, color_rgb, egg_base, egg_overlay, scale, components.\n"
+        "4. To delete a component, set it to null in 'components'.\n"
+        "5. For explosive behavior, you MUST have both \"minecraft:behavior.swell\" and \"minecraft:explode\".\n"
+    ),
+    "behavior_overview": (
+        "BEHAVIOR:\n"
+        "- Use the 'components' object to add/remove AI goals and capabilities.\n"
+    ),
+    "geometry_overview": (
+        "GEOMETRY:\n"
+        "- 'geometry' is the geometry reference ID (e.g. \"geometry.cow\").\n"
+        "- 'geometry_json' is ONLY for truly custom models; use {} when using vanilla geometry.\n"
+    ),
+    "geometry_rules": (
+        "GEOMETRY RULES:\n"
+        "- For VANILLA mobs, use a vanilla geometry reference and set geometry_json={}. The app will auto-fetch Mojang geometry.\n"
+        "- For NON-VANILLA creatures (elephant, dragon, robot, etc.), generate custom geometry_json with the correct body shape.\n"
+        "- Custom geometry_json format:\n"
+        "{\n"
+        "  \"format_version\": \"1.12.0\",\n"
+        "  \"minecraft:geometry\": [\n"
+        "    {\n"
+        "      \"description\": { \"identifier\": \"geometry.custom\", \"texture_width\": 64, \"texture_height\": 64 },\n"
+        "      \"bones\": [\n"
+        "        { \"name\": \"root\", \"pivot\": [0, 0, 0], \"cubes\": [ { \"origin\": [-4,0,-4], \"size\": [8,8,8], \"uv\": [0,0] } ] }\n"
+        "      ]\n"
+        "    }\n"
+        "  ]\n"
+        "}\n"
+        "- If you generate custom geometry_json, use standard bone names for animation compatibility: head, body, leg0, leg1, leg2, leg3.\n"
+    ),
+    "geometry_preservation": (
+        "PRESERVE GEOMETRY ON ITERATION:\n"
+        "- If the current spec indicates custom geometry exists, keep geometry and geometry_json EXACTLY as-is unless the user explicitly requests a shape/model change.\n"
+        "- For behavior-only changes (loot, stats, AI, abilities), keep geometry and geometry_json unchanged.\n"
+        "- Set geometry_json to {} ONLY when switching to a vanilla geometry reference.\n"
+    ),
+    "visuals": (
+        "VISUALS:\n"
+        "- 'color_rgb' sets the base color [R,G,B]. Update it when changing the mob type.\n"
+        "- 'texture_instructions' is an array of simple per-part directives.\n"
+        "  IMPORTANT: Use ONE entry per body part/pattern. Do NOT combine multiple parts in one string.\n"
+        "  Examples:\n"
+        "  GOOD: [\"red head\", \"dark green body\", \"dark green legs\", \"scales\"]\n"
+        "  BAD:  [\"Head: red, Body: green with scales\"]\n"
+    ),
+    "loot": (
+        "LOOT DROPS:\n"
+        "- If the user asks for drops/loot on death, add BOTH:\n"
+        "  1) In components: \"minecraft:loot\": {\"table\": \"loot_tables/entities/<short_name>.json\"}\n"
+        "  2) Top-level loot_drops entries like:\n"
+        "     {\"item\":\"minecraft:diamond\",\"count_min\":1,\"count_max\":3,\"chance\":1.0}\n"
+        "- Each loot_drops entry MUST include item, count_min, count_max, chance (0.0-1.0).\n"
+    ),
+}
+
+
+def build_llm_system_prompt(
+    *,
+    include_behavior: bool = True,
+    include_geometry: bool = False,
+    include_geometry_rules: bool = False,
+    include_geometry_preservation: bool = False,
+    include_visuals: bool = False,
+    include_loot: bool = False,
+) -> str:
+    """Assemble the base system prompt from small sections.
+
+    This keeps the LLM context generous but avoids sending irrelevant blocks.
+    """
+    s = LLM_SYSTEM_PROMPT_SECTIONS
+    parts: list[str] = [s["header"], s["critical_rules"]]
+    if include_behavior:
+        parts.append(s["behavior_overview"])
+    if include_geometry:
+        parts.append(s["geometry_overview"])
+    if include_geometry_rules:
+        parts.append(s["geometry_rules"])
+    if include_geometry_preservation:
+        parts.append(s["geometry_preservation"])
+    if include_visuals:
+        parts.append(s["visuals"])
+    if include_loot:
+        parts.append(s["loot"])
+    return "\n".join(p.strip() for p in parts if p and p.strip())
+LLM_SYSTEM_PROMPT_COMPACT = """You are an expert Minecraft Bedrock Add-on developer.
+Edit Bedrock Mob Specifications (MobSpec) to fulfill user requests.
+
+KEY RULES:
+- Return ONLY a single valid JSON object with the complete updated spec.
+- Preserve existing geometry and geometry_json unless the user explicitly asks to change the mob's shape or model.
+- Use vanilla geometry references for vanilla mobs and set geometry_json={} for vanilla geometry.
+- For non-vanilla creatures, generate custom geometry_json and use a custom geometry identifier like geometry.custom_<name>.
+- Include required top-level keys, especially identifier, display_name, short_name, engine_min, hp, damage, speed, collision_box, geometry, geometry_json, render_controller, texture_hint, texture_instructions, color_rgb, egg_base, egg_overlay, scale, components.
+- If the user asks for loot, add the loot component and loot_drops entries.
+- For exploding behavior, include both minecraft:behavior.swell and minecraft:explode.
+- Do NOT include explanations in the final output; return only the JSON spec.
 """

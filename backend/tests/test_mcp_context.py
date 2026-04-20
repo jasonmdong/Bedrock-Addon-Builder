@@ -1,6 +1,11 @@
 """Tests for MCP context retrieval and structured prompt intent extraction."""
 
 import os
+import sys
+from pathlib import Path
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT_DIR))
 
 os.environ["MCTOOLS_ENABLED"] = "false"
 
@@ -58,14 +63,14 @@ def test_template_heuristics_use_intent_profile():
 
 
 def test_prompt_without_mcp_or_intents():
-    prompt = _get_full_system_prompt("entity_logic_ai", None, None, None)
+    prompt = _get_full_system_prompt("increase hp by 10", {"hp": 20}, "entity_logic_ai", None, None, None)
     assert "AUTHORITATIVE BEDROCK SCHEMA" not in prompt
     assert "STRUCTURED USER INTENT" not in prompt
 
 
 def test_prompt_with_structured_intent_block():
     profile = extract_prompt_intents("make it a tameable flying dragon", "entity_logic_ai")
-    prompt = _get_full_system_prompt("entity_logic_ai", None, None, profile)
+    prompt = _get_full_system_prompt("make it a tameable flying dragon", {"hp": 20}, "entity_logic_ai", None, None, profile)
     assert "STRUCTURED USER INTENT" in prompt
     assert "tameable" in prompt.lower()
     assert "flying" in prompt.lower()
