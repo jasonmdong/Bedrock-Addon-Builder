@@ -239,8 +239,9 @@
         <div style="background: var(--secondary-bg); color: var(--secondary-text); padding: 0.5rem; border-radius: 4px; margin: 0.5rem 0; font-size: 0.8rem;">
           <strong>Private:</strong> The API key is stored locally in your browser only. Never sent to our server.
         </div>
-        <div class="actions">
+        <div class="actions" style="display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;">
           <button type="button" class="primary" id="llm-run">Ask LLM</button>
+          <button type="button" class="secondary" id="llm-run-mock" title="Adds a history entry using the current JSON—counts toward daily AI like Ask LLM; no API call. Use to test history and AI limits.">Mock ask (history)</button>
         </div>
       </div>
 
