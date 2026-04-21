@@ -123,6 +123,13 @@ function initEventListeners() {
       alert("Please select or create a user first.");
       return;
     }
+    if (typeof canAddMob === "function" && !canAddMob()) {
+      const lim = typeof getTierMobLimit === "function" ? getTierMobLimit() : 5;
+      alert(
+        `Mob limit reached (${lim === -1 ? "unlimited" : lim + " mobs"} on this demo plan). Delete a mob or change demo plan.`
+      );
+      return;
+    }
     
     // Show the add mob modal
     const addMobModalOverlay = document.getElementById("add-mob-modal-overlay");
@@ -193,6 +200,7 @@ function initApp() {
   safe("loadTemplates", (typeof loadTemplates !== "undefined") ? loadTemplates : null);
   safe("loadSpec", (typeof loadSpec !== "undefined") ? loadSpec : null);
   safe("renderLlmHistory", (typeof renderLlmHistory !== "undefined") ? renderLlmHistory : null);
+  safe("updateTierUsagePanel", (typeof updateTierUsagePanel !== "undefined") ? updateTierUsagePanel : null);
 }
 
 // Start the app when DOM is ready

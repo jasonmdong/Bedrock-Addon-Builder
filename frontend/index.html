@@ -32,17 +32,57 @@
 
     <div class="new-user-form">
 
-      <input type="text" id="new-user-input" placeholder="Enter new username...">
-
-      <button type="button" class="primary" id="create-user-btn">Create</button>
+      <input type="text" id="new-user-input" placeholder="Enter new username..." autocomplete="username">
 
     </div>
+
+    <p class="tier-poc-note" id="tier-poc-note">
+      <strong>Demo plans</strong> — no payment. Choose a tier to try different limits (POC for future subscriptions).
+    </p>
+
+    <div class="tier-select-cards" id="tier-select-cards">
+        <div class="tier-card" data-tier="free">
+        <div class="tier-card-name">Free</div>
+        <div class="tier-card-desc">5 mobs · 3 history · 20 AI/day</div>
+      </div>
+      <div class="tier-card" data-tier="creator">
+        <div class="tier-card-name">Creator</div>
+        <div class="tier-card-desc">50 mobs · 20 history · 200 AI/day<br><span class="tier-price">$8–$15/mo (illustrative)</span></div>
+      </div>
+      <div class="tier-card" data-tier="pro">
+        <div class="tier-card-name">Pro</div>
+        <div class="tier-card-desc">Unlimited mobs &amp; AI (demo)<br><span class="tier-price">$20–$40/mo (illustrative)</span></div>
+      </div>
+    </div>
+
+    <button type="button" class="primary" id="create-user-btn" style="width:100%;margin-top:0.75rem">Create account</button>
 
   </div>
 
 </div>
 
-
+<!-- Change demo plan (POC — no payment) -->
+<div id="change-plan-modal-overlay" class="user-modal-overlay hidden">
+  <div class="user-modal">
+    <h2>Change demo plan</h2>
+    <p class="tier-poc-note">Switch tier to try different limits. No charge — local demo only.</p>
+    <div class="tier-select-cards" id="change-plan-tier-cards">
+      <div class="tier-card" data-tier="free">
+        <div class="tier-card-name">Free</div>
+        <div class="tier-card-desc">5 mobs · 3 history · 20 AI/day</div>
+      </div>
+      <div class="tier-card" data-tier="creator">
+        <div class="tier-card-name">Creator</div>
+        <div class="tier-card-desc">50 mobs · 20 history · 200 AI/day</div>
+      </div>
+      <div class="tier-card" data-tier="pro">
+        <div class="tier-card-name">Pro</div>
+        <div class="tier-card-desc">Unlimited mobs · unlimited AI/day (demo)</div>
+      </div>
+    </div>
+    <button type="button" class="primary" id="save-plan-btn" style="width:100%;margin-top:0.75rem">Save plan</button>
+  </div>
+</div>
 
 <!-- Add Mob Modal -->
 
@@ -50,11 +90,12 @@
 
   <div class="user-modal">
 
-    <h2>Create New Mob</h2>
+    <h2>New blank mob</h2>
+    <p class="hint" style="margin: 0.35rem 0 0.75rem; font-size: 0.85rem;">Uses the default template from the server. No AI — name it and edit the JSON or use the LLM assistant after.</p>
 
     <div class="new-user-form">
 
-      <input type="text" id="new-mob-input" placeholder="Enter mob name...">
+      <input type="text" id="new-mob-input" placeholder="Mob name (e.g. my_fire_snake)..." autocomplete="off">
 
       <button type="button" class="primary" id="create-mob-btn">Create</button>
 
@@ -100,9 +141,14 @@
 
   <div class="user-section" id="user-section">
 
-    <div class="current-user" id="current-user-display">Guest</div>
+    <div class="current-user-row">
+      <div class="current-user" id="current-user-display">Guest</div>
+      <span id="current-user-tier-badge" class="user-tier-badge tier-badge-free hidden" title="Demo plan tier">free</span>
+    </div>
+    <div id="sidebar-usage-line" class="sidebar-usage-line" aria-live="polite"></div>
 
     <button type="button" class="ghost switch-user-btn" id="switch-user-btn">Switch User</button>
+    <button type="button" class="ghost" id="change-plan-btn" style="font-size: 0.85rem; padding: 0.4rem 0.8rem; width: 100%; margin-top: 0.35rem;">Change demo plan</button>
 
     <div class="data-buttons">
 
@@ -239,6 +285,7 @@
         <div style="background: var(--secondary-bg); color: var(--secondary-text); padding: 0.5rem; border-radius: 4px; margin: 0.5rem 0; font-size: 0.8rem;">
           <strong>Private:</strong> The API key is stored locally in your browser only. Never sent to our server.
         </div>
+        <div id="tier-usage-llm-inline" class="tier-usage-inline" aria-live="polite"></div>
         <div class="actions">
           <button type="button" class="primary" id="llm-run">Ask LLM</button>
         </div>
@@ -254,7 +301,18 @@
           <div style="margin-top:0.5rem; display:flex; gap:0.5rem;">
             <button id="clear-llm-history" class="ghost" style="flex:1;">Clear</button>
           </div>
-          <div style="margin-top:0.5rem; font-size:0.8rem; color:var(--muted);">Session: <span id="llm-session-count">0</span> iterations</div>
+          <div style="margin-top:0.5rem; font-size:0.8rem; color:var(--muted); display:flex; flex-direction:column; gap:0.35rem;">
+            <span>Session: <span id="llm-session-count">0</span> iterations in this mob</span>
+            <div id="tier-usage-panel" class="tier-usage-panel" aria-live="polite">
+              <div class="tier-usage-head"><span class="tier-usage-head-label">Demo plan</span> <span id="tier-usage-name" class="tier-usage-plan-pill">—</span></div>
+              <ul class="tier-usage-list">
+                <li><span class="tier-usage-k">AI prompts (today)</span> <span id="tier-usage-ai" class="tier-usage-v">—</span></li>
+                <li><span class="tier-usage-k">Mobs in workspace</span> <span id="tier-usage-mobs" class="tier-usage-v">—</span></li>
+                <li><span class="tier-usage-k">LLM history (this mob)</span> <span id="tier-usage-history" class="tier-usage-v">—</span></li>
+              </ul>
+              <p class="tier-usage-foot">Each “Ask LLM” and each AI-generated new mob counts toward AI prompts. Resets at midnight (local time).</p>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -468,7 +526,9 @@
         </div>
       </div>
 
-      <p class="hint" style="margin: 0 0 0.75rem 0;">Paint directly on the 3D model. Toggle to 2D view to see the flat texture map.</p>
+      <p class="hint" style="margin: 0 0 0.75rem 0;">
+        The JSON below is geometry only (cubes and UV layout). Eyes and skin are in the texture PNG: switch to 2D Texture or use the painter, or attach the mob’s PNG in Blockbench. The 3D preview loads the texture saved for this mob (aligned with the pack you build).
+      </p>
 
       <div style="position: relative; margin-bottom: 1rem;">
 
@@ -490,7 +550,49 @@
 
         <h3 style="margin-top: 0; margin-bottom: 0.75rem; font-size: 0.95rem;">3D Model Preview</h3>
 
-        <div id="viewport-3d" class="viewport-3d"></div>
+        <!-- Canvas + animation overlay wrapper -->
+        <div style="position: relative;">
+
+          <div id="viewport-3d" class="viewport-3d"></div>
+
+          <!-- Animation Timeline — glassmorphism overlay pinned to canvas bottom -->
+          <div id="animation-timeline" class="animation-timeline" style="display: none;">
+            <div class="timeline-row">
+
+              <!-- Transport -->
+              <button type="button" id="anim-play" class="tl-btn tl-btn-play" title="Play / Pause">&#9654;</button>
+              <button type="button" id="anim-reset" class="tl-btn" title="Reset to start" style="font-size: 1rem;">&#8635;</button>
+
+              <div class="tl-divider"></div>
+
+              <!-- Time + Scrubber -->
+              <span id="anim-time" class="timeline-time">0.00 / 0.00</span>
+              <input type="range" id="anim-slider" min="0" max="100" value="0" class="timeline-slider" title="Scrub timeline" />
+
+              <div class="tl-divider"></div>
+
+              <!-- Only this list selects the clip (no duplicate preset buttons) -->
+              <select id="anim-clip-select" class="tl-clip-select" title="Preview any clip from this mob’s animation.json (hover for full id)">
+                <option value="">— clip —</option>
+              </select>
+
+              <div class="tl-divider"></div>
+
+              <!-- Loop -->
+              <label class="tl-label" title="Loop animation">
+                <input type="checkbox" id="anim-loop" checked /> Loop
+              </label>
+
+              <!-- Speed -->
+              <label class="tl-label" title="Playback speed" style="gap: 0.3rem;">
+                <input type="range" id="anim-speed" min="0.25" max="2" step="0.25" value="1" style="width: 64px;" />
+                <span id="anim-speed-label" class="tl-speed-label">1&#215;</span>
+              </label>
+
+            </div>
+          </div>
+
+        </div>
 
         <!-- 3D Editor Toolbar -->
 
@@ -620,6 +722,7 @@
 
         </div>
 
+
         <!-- AI Animation Generator -->
         <div id="animation-generator" style="margin-top: 1rem; padding: 1rem; background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; color: var(--text);">
 
@@ -717,25 +820,25 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/diff/5.1.0/diff.min.js"></script>
 
-<script src="js/core/user.js?v=11"></script>
+<script src="js/core/user.js?v=15"></script>
 
-<script src="js/ui/modals.js?v=11"></script>
+<script src="js/ui/modals.js?v=16"></script>
 
-<script src="js/viewer/viewer3d.js?v=11"></script>
+  <script src="js/viewer/viewer3d.js?v=18"></script>
 
-<script src="js/viewer/painter.js?v=11"></script>
+<script src="js/viewer/painter.js?v=12"></script>
 
-<script src="js/editor/editor.js?v=11"></script>
+  <script src="js/editor/editor.js?v=17"></script>
 
-<script src="js/editor/form-editor.js?v=11"></script>
+<script src="js/editor/form-editor.js?v=12"></script>
 
-<script src="js/build/llm.js?v=11"></script>
+<script src="js/build/llm.js?v=15"></script>
 
-<script src="js/build/builder.js?v=11"></script>
+<script src="js/build/builder.js?v=15"></script>
 
-<script src="js/build/mctools.js?v=11"></script>
+<script src="js/build/mctools.js?v=12"></script>
 
-<script src="js/core/app.js?v=11"></script>
+<script src="js/core/app.js?v=15"></script>
 
 
 

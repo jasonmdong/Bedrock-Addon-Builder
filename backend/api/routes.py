@@ -1843,3 +1843,36 @@ async def check_published_mob(mob_name: str, username: str):
         "exists": exists,
         "full_name": f"{mob_name}_{username}"
     }
+
+
+VALID_TIERS = {"free", "creator", "pro"}
+
+
+def upsert_user(payload: dict = Body(...)):
+    """POST /api/users — Create or update a user with their subscription tier."""
+    from backend.database.db import execute_query, fetch_one
+    username = (payload.get("username") or "").strip()
+    tier = payload.get("subscription_tier", "free")
+    if not username:
+        raise HTTPException(status_code=400, detail="username is required")
+    if tier not in VALID_TIERS:
+        tier = "free"
+    execute_query(
+        """
+        INSERT INTO users (username, subscription_tier)
+        VALUES (%s, %s)
+        ON CONFLICT (username) DO UPDATE SET subscription_tier = EXCLUDED.subscription_tier
+        """,
+        (username, tier),
+    )
+    row = fetch_one("SELECT username, subscription_tier FROM users WHERE username = %s", (username,))
+    return {"username": row["username"], "subscription_tier": row["subscription_tier"]}
+
+
+def get_user(username: str):
+    """GET /api/users/{username} — Fetch a user's subscription tier."""
+    from backend.database.db import fetch_one
+    row = fetch_one("SELECT username, subscription_tier FROM users WHERE username = %s", (username,))
+    if not row:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"username": row["username"], "subscription_tier": row["subscription_tier"]}

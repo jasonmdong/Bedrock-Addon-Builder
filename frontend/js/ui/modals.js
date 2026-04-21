@@ -51,107 +51,74 @@ function initAddMobModal() {
     }
   });
   
-  // Create mob handler - uses full AI pipeline with thinking + custom geometry generation
+  // Create mob — blank mob from default server template (no AI)
   async function createNewMob() {
     const name = newMobInput.value.trim();
     if (!name) {
       alert("Please enter a mob name.");
       return;
     }
-    
+
+    if (typeof canAddMob === "function" && !canAddMob()) {
+      const lim = typeof getTierMobLimit === "function" ? getTierMobLimit() : 5;
+      alert(
+        `Mob limit reached for your demo plan (${lim === -1 ? "unlimited" : lim + " max"}). Delete a mob or use "Change demo plan" for a higher tier.`
+      );
+      return;
+    }
+
     const safeName = name.toLowerCase().replace(/[^a-z0-9_]/g, "_");
-    
-    // Check if mob already exists
+    if (!safeName) {
+      alert("Use letters, numbers, or underscores in the name.");
+      return;
+    }
+
     if (getUserMob(safeName)) {
       alert(`A mob named '${safeName}' already exists.`);
       return;
     }
-    
-    // Use full AI pipeline: thinking + RAG + custom geometry generation
+
+    const createBtn = document.getElementById("create-mob-btn");
+    const originalText = createBtn?.textContent;
+    if (createBtn) {
+      createBtn.textContent = "Creating…";
+      createBtn.disabled = true;
+    }
+
     try {
-      // Show loading state
-      const createBtn = document.getElementById("create-mob-btn");
-      const originalText = createBtn?.textContent;
-      if (createBtn) {
-        createBtn.textContent = "AI Thinking...";
-        createBtn.disabled = true;
-      }
-      
-      // Get LLM settings from localStorage
-      const provider = localStorage.getItem("builder_llm_provider") || "openai";
-      const apiKey = localStorage.getItem("builder_llm_api_key") || "";
-      
-      // Call complete mob generation endpoint - AI thinks through traits then generates custom geometry
-      const res = await fetch("/api/mob/generate-complete", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          mob_name: name,
-          provider: provider,
-          api_key: apiKey
-        })
-      });
-      
+      const res = await fetch("/api/spec");
       if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.detail || `Server error: ${res.status}`);
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Server error: ${res.status}`);
       }
-      
       const data = await res.json();
-      const spec = data.mob;
-      
-      // Store AI metadata in spec
-      if (data.similar_mobs && data.similar_mobs.length > 0) {
-        spec._inspiration_mobs = data.similar_mobs;
-        console.log(`[AI] Used ${data.similar_mobs.length} similar mobs as context:`, data.similar_mobs);
-      }
-      if (data.reasoning) {
-        spec._ai_reasoning = data.reasoning;
-        console.log(`[AI] Reasoning for ${name}:`, data.reasoning);
-      }
-      
-      // Apply the AI-generated custom geometry
-      if (data.geometry) {
-        spec.geometry_json = data.geometry;
-        // Extract geometry identifier
-        try {
-          const geoId = data.geometry["minecraft:geometry"]?.[0]?.description?.identifier;
-          if (geoId) spec.geometry = geoId;
-        } catch (e) { /* keep default */ }
-        console.log(`[AI] Generated custom geometry for ${name}`);
-      }
-      
+      const spec = JSON.parse(JSON.stringify(data.spec || {}));
+      spec.short_name = safeName;
+      const rawLabel = name.trim().replace(/_/g, " ");
+      spec.display_name =
+        rawLabel.length > 0
+          ? rawLabel.charAt(0).toUpperCase() + rawLabel.slice(1)
+          : safeName.replace(/_/g, " ");
+      spec.identifier = `custom:${safeName}`;
+      delete spec._inspiration_mobs;
+      delete spec._ai_reasoning;
+      delete spec._template_base;
+
       saveUserMob(safeName, spec);
       currentMobName = safeName;
       await loadMobList();
       await selectMob(safeName);
-      
-      // Display inspiration mobs in status bar
-      if (data.similar_mobs && data.similar_mobs.length > 0) {
-        const inspirationList = data.similar_mobs.slice(0, 3).join(", ");
-        const more = data.similar_mobs.length > 3 ? ` +${data.similar_mobs.length - 3} more` : "";
-        setStatus(`Created "${name}" inspired by: ${inspirationList}${more}`);
-      } else {
-        setStatus(`Created "${name}" with AI-generated traits`);
-      }
-      
-      // Close modal
+      setStatus(`Created blank mob "${spec.display_name}" — edit the spec or use the LLM assistant.`);
+
       addMobModalOverlay.classList.add("hidden");
       newMobInput.value = "";
-      
-      // Restore button state
-      if (createBtn) {
-        createBtn.textContent = originalText;
-        createBtn.disabled = false;
-      }
     } catch (err) {
-      // Restore button state on error
-      const createBtn = document.getElementById("create-mob-btn");
+      alert("Error creating mob: " + err.message);
+    } finally {
       if (createBtn) {
-        createBtn.textContent = "Create";
+        createBtn.textContent = originalText || "Create";
         createBtn.disabled = false;
       }
-      alert("Error creating mob: " + err.message);
     }
   }
   
@@ -186,6 +153,14 @@ function initLoadTemplateModal() {
     const name = templateMobInput.value.trim();
     if (!name) {
       alert("Please enter a mob name.");
+      return;
+    }
+
+    if (typeof canAddMob === "function" && !canAddMob()) {
+      const lim = typeof getTierMobLimit === "function" ? getTierMobLimit() : 5;
+      alert(
+        `Mob limit reached for your demo plan (${lim === -1 ? "unlimited" : lim + " max"}). Delete a mob or change demo plan.`
+      );
       return;
     }
     

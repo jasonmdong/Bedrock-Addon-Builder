@@ -13,6 +13,7 @@ const userListEl = document.getElementById("user-list");
 const newUserInput = document.getElementById("new-user-input");
 const createUserBtn = document.getElementById("create-user-btn");
 const currentUserDisplay = document.getElementById("current-user-display");
+const currentUserTierBadge = document.getElementById("current-user-tier-badge");
 const switchUserBtn = document.getElementById("switch-user-btn");
 const backupBtn = document.getElementById("backup-btn");
 const restoreBtn = document.getElementById("restore-btn");
@@ -71,7 +72,28 @@ function saveUserMob(mobName, spec) {
   if (!user) return false;
   const data = getUserData(user);
   data.mobs = data.mobs || {};
-  data.mobs[mobName] = spec;
+  let toStore = spec;
+  try {
+    if (
+      spec &&
+      spec.animation_json &&
+      spec.geometry_json &&
+      Array.isArray(spec.geometry_json["minecraft:geometry"]) &&
+      spec.geometry_json["minecraft:geometry"].length &&
+      typeof window !== "undefined" &&
+      typeof window.mergeProceduralPreviewClipsLocal === "function"
+    ) {
+      const mergedAnim = window.mergeProceduralPreviewClipsLocal(
+        spec.geometry_json,
+        spec.animation_json,
+        spec.short_name || mobName
+      );
+      toStore = { ...spec, animation_json: mergedAnim };
+    }
+  } catch (e) {
+    toStore = spec;
+  }
+  data.mobs[mobName] = toStore;
   saveUserData(user, data);
   return true;
 }
@@ -127,18 +149,265 @@ function deleteUserMobTexture(mobName) {
   return false;
 }
 
-// Create a new user
-function createUser(username) {
+// Get tier for a user
+function getUserTier(username) {
+  return localStorage.getItem(`user_${username}_tier`) || "free";
+}
+
+const VALID_SIGNUP_TIERS = new Set(["free", "creator", "pro"]);
+
+// Create a new user (tier = POC plan selection; no payment)
+function createUser(username, tier = "free") {
   const users = getAppUsers();
   if (users.includes(username)) {
     alert("User already exists!");
     return false;
   }
+  if (!VALID_SIGNUP_TIERS.has(tier)) {
+    tier = "free";
+  }
   users.push(username);
   saveAppUsers(users);
-  // Initialize empty workspace for user
   saveUserData(username, { mobs: {}, settings: {} });
+  localStorage.setItem(`user_${username}_tier`, tier);
+  syncUserToBackend(username, tier);
   return true;
+}
+
+// Sync user to Neon DB (fire-and-forget)
+async function syncUserToBackend(username, tier) {
+  try {
+    await fetch("/api/users", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, subscription_tier: tier }),
+    });
+  } catch (e) {
+    console.warn("User sync failed (offline?):", e);
+  }
+}
+
+// Fetch and cache tier from backend
+async function refreshUserTierFromBackend(username) {
+  try {
+    const res = await fetch(`/api/users/${encodeURIComponent(username)}`);
+    if (res.ok) {
+      const data = await res.json();
+      localStorage.setItem(`user_${username}_tier`, data.subscription_tier || "free");
+    }
+  } catch (e) {
+    console.warn("Tier fetch failed:", e);
+  }
+}
+
+const TIER_LIMITS = {
+  free:    { mobs: 5,  history: 3,  ai_daily: 20 },
+  creator: { mobs: 50, history: 20, ai_daily: 200 },
+  pro:     { mobs: -1, history: -1, ai_daily: -1 },
+};
+
+/** Max LLM history entries stored per mob (-1 = use practical cap in llm.js). */
+function getTierHistoryLimit() {
+  const user = getCurrentUser();
+  const tier = user ? getUserTier(user) : "free";
+  const lim = TIER_LIMITS[tier]?.history ?? 3;
+  if (lim === -1) return 50;
+  return Math.min(lim, 50);
+}
+
+function _aiUsageDateKey() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function _aiUsageStorageKey(username) {
+  return `user_${username}_ai_actions_${_aiUsageDateKey()}`;
+}
+
+function getAiUsageCountToday(username) {
+  if (!username) return 0;
+  const raw = localStorage.getItem(_aiUsageStorageKey(username));
+  return raw ? parseInt(raw, 10) || 0 : 0;
+}
+
+/** Increment after a successful AI call (LLM assistant or full mob generation). */
+function recordAiAction(username) {
+  if (!username) return;
+  const key = _aiUsageStorageKey(username);
+  const n = getAiUsageCountToday(username) + 1;
+  localStorage.setItem(key, String(n));
+  updateAiUsageDisplay();
+}
+
+/**
+ * Whether the user may run another AI action today (POC quota; no payment).
+ * @returns {{ ok: boolean, reason?: string, used?: number, cap?: number, remaining?: number }}
+ */
+function canRunAiAction() {
+  const user = getCurrentUser();
+  if (!user) return { ok: false, reason: "no_user" };
+  const tier = getUserTier(user);
+  const cap = TIER_LIMITS[tier]?.ai_daily ?? 20;
+  if (cap === -1) return { ok: true, remaining: -1, cap: -1 };
+  const used = getAiUsageCountToday(user);
+  if (used >= cap) return { ok: false, reason: "daily_cap", used, cap, remaining: 0 };
+  return { ok: true, used, cap, remaining: cap - used };
+}
+
+/** Must match llm.js llmStackKey() for localStorage. */
+function _llmStackStorageKey(user, mob) {
+  if (!user) return null;
+  const m = mob || "global";
+  return `llm_stack_${user}_${m}`;
+}
+
+function getCurrentMobHistoryCount() {
+  const user = getCurrentUser();
+  if (!user) return 0;
+  let mob = null;
+  try {
+    if (typeof currentMobName !== "undefined" && currentMobName) mob = currentMobName;
+  } catch (e) {
+    /* ignore */
+  }
+  if (!mob) {
+    try {
+      mob = localStorage.getItem("builder_current_mob") || null;
+    } catch (e) {
+      /* ignore */
+    }
+  }
+  const key = _llmStackStorageKey(user, mob);
+  if (!key) return 0;
+  const raw = localStorage.getItem(key);
+  let arr = raw ? JSON.parse(raw) : [];
+  if (!Array.isArray(arr)) arr = [];
+  return arr.length;
+}
+
+/**
+ * Update the demo plan usage panel (included / used / left per tier).
+ * Safe to call from llm.js, editor, and after tier changes.
+ */
+function updateTierUsagePanel() {
+  const panel = document.getElementById("tier-usage-panel");
+  const sidebarLine = document.getElementById("sidebar-usage-line");
+  const nameEl = document.getElementById("tier-usage-name");
+  const aiEl = document.getElementById("tier-usage-ai");
+  const mobsEl = document.getElementById("tier-usage-mobs");
+  const histEl = document.getElementById("tier-usage-history");
+
+  const user = getCurrentUser();
+  if (!user) {
+    if (nameEl) nameEl.textContent = "—";
+    if (aiEl) aiEl.textContent = "Sign in to see limits.";
+    if (mobsEl) mobsEl.textContent = "—";
+    if (histEl) histEl.textContent = "—";
+    if (sidebarLine) sidebarLine.textContent = "";
+    return;
+  }
+
+  const tier = getUserTier(user);
+  const lim = TIER_LIMITS[tier] || TIER_LIMITS.free;
+  const tierLabel = tier.charAt(0).toUpperCase() + tier.slice(1);
+
+  if (nameEl) {
+    nameEl.textContent = tierLabel;
+    nameEl.className = `tier-usage-plan-pill tier-badge-${tier}`;
+  }
+
+  const aiCap = lim.ai_daily;
+  const aiUsed = getAiUsageCountToday(user);
+  if (aiEl) {
+    if (aiCap === -1) {
+      aiEl.textContent = `Included: unlimited · Used: ${aiUsed} · Left: unlimited`;
+    } else {
+      const left = Math.max(0, aiCap - aiUsed);
+      aiEl.textContent = `Included: ${aiCap}/day · Used: ${aiUsed} · Left: ${left}`;
+    }
+  }
+
+  const mobCap = lim.mobs;
+  const mobUsed = Object.keys(getCurrentUserMobs()).length;
+  if (mobsEl) {
+    if (mobCap === -1) {
+      mobsEl.textContent = `Included: unlimited · Used: ${mobUsed} · Left: unlimited`;
+    } else {
+      const left = Math.max(0, mobCap - mobUsed);
+      mobsEl.textContent = `Included: ${mobCap} · Used: ${mobUsed} · Left: ${left}`;
+    }
+  }
+
+  const histCap = getTierHistoryLimit();
+  const histUsed = getCurrentMobHistoryCount();
+  if (histEl) {
+    if (lim.history === -1) {
+      histEl.textContent = `Included: ${histCap} stored (demo cap) · Used: ${histUsed} · Left: ${Math.max(0, histCap - histUsed)}`;
+    } else {
+      const left = Math.max(0, histCap - histUsed);
+      histEl.textContent = `Included: ${histCap} · Used: ${histUsed} · Left: ${left}`;
+    }
+  }
+
+  if (sidebarLine) {
+    const aiPart =
+      aiCap === -1
+        ? `AI · ${aiUsed} used`
+        : `AI · ${aiUsed}/${aiCap} · ${Math.max(0, aiCap - aiUsed)} left`;
+    const mobPart =
+      mobCap === -1
+        ? `${mobUsed} mobs`
+        : `${mobUsed}/${mobCap} mobs · ${Math.max(0, mobCap - mobUsed)} left`;
+    sidebarLine.textContent = `${tierLabel}: ${aiPart} · ${mobPart}`;
+  }
+
+  const llmInline = document.getElementById("tier-usage-llm-inline");
+  if (llmInline) {
+    if (!user) {
+      llmInline.textContent = "";
+    } else if (aiCap === -1) {
+      llmInline.textContent = `Demo plan · AI prompts today: ${aiUsed} used (unlimited on Pro)`;
+    } else {
+      const left = Math.max(0, aiCap - aiUsed);
+      llmInline.textContent = `Demo plan · AI prompts: ${aiUsed} used · ${left} left of ${aiCap} today`;
+    }
+  }
+
+  if (panel) panel.style.display = "";
+}
+
+/** @deprecated use updateTierUsagePanel */
+function updateAiUsageDisplay() {
+  updateTierUsagePanel();
+}
+
+/** Change demo tier without creating a new account (POC). */
+function setUserTier(username, tier) {
+  if (!username || !VALID_SIGNUP_TIERS.has(tier)) return false;
+  localStorage.setItem(`user_${username}_tier`, tier);
+  syncUserToBackend(username, tier);
+  updateAiUsageDisplay();
+  updateUserDisplay();
+  try {
+    document.dispatchEvent(new CustomEvent("user-tier-changed", { detail: { username, tier } }));
+  } catch (e) { /* ignore */ }
+  return true;
+}
+
+function canAddMob() {
+  const user = getCurrentUser();
+  if (!user) return false;
+  const tier = getUserTier(user);
+  const limit = TIER_LIMITS[tier]?.mobs ?? 5;
+  if (limit === -1) return true;
+  const mobs = getCurrentUserMobs();
+  return Object.keys(mobs).length < limit;
+}
+
+function getTierMobLimit() {
+  const user = getCurrentUser();
+  if (!user) return 5;
+  const tier = getUserTier(user);
+  return TIER_LIMITS[tier]?.mobs ?? 5;
 }
 
 // Delete a user
@@ -150,6 +419,7 @@ function deleteUser(username) {
     saveAppUsers(users);
     // Remove user data
     localStorage.removeItem(getUserDataKey(username));
+    localStorage.removeItem(`user_${username}_tier`);
     return true;
   }
   return false;
@@ -182,11 +452,17 @@ function renderUserList() {
   users.forEach(username => {
     const li = document.createElement("li");
     li.className = "user-list-item";
-    
+
     const nameSpan = document.createElement("span");
     nameSpan.className = "user-name";
     nameSpan.textContent = username;
     li.appendChild(nameSpan);
+
+    const tier = getUserTier(username);
+    const badge = document.createElement("span");
+    badge.className = `user-tier-badge tier-badge-${tier}`;
+    badge.textContent = tier;
+    li.appendChild(badge);
     
     const deleteBtn = document.createElement("button");
     deleteBtn.className = "delete-user-btn";
@@ -197,6 +473,7 @@ function renderUserList() {
         deleteUser(username);
         if (getCurrentUser() === username) {
           localStorage.removeItem(CURRENT_USER_KEY);
+          updateUserDisplay();
         }
         renderUserList();
       }
@@ -211,20 +488,31 @@ function renderUserList() {
 // Select and login as user
 function selectUser(username) {
   setCurrentUser(username);
-  if (currentUserDisplay) currentUserDisplay.textContent = username;
   hideUserModal();
-  // Reload the app with user's data
+  updateUserDisplay();
+  updateAiUsageDisplay();
+  refreshUserTierFromBackend(username).then(() => {
+    updateUserDisplay();
+    updateAiUsageDisplay();
+  });
   loadSpec();
 }
 
-// Update UI to show current user
+// Update UI to show current user and demo tier badge (POC; no payment)
 function updateUserDisplay() {
   if (!currentUserDisplay) return;
   const user = getCurrentUser();
   if (user) {
     currentUserDisplay.textContent = user;
+    const tier = getUserTier(user);
+    if (currentUserTierBadge) {
+      currentUserTierBadge.textContent = tier;
+      currentUserTierBadge.className = `user-tier-badge tier-badge-${tier}`;
+      currentUserTierBadge.classList.remove("hidden");
+    }
   } else {
     currentUserDisplay.textContent = "Guest";
+    currentUserTierBadge?.classList.add("hidden");
   }
 }
 
@@ -302,21 +590,82 @@ function initUserSystem() {
     // No user logged in, show modal
     showUserModal();
   } else {
-    // User exists, update display
     updateUserDisplay();
+    updateAiUsageDisplay();
+    const u = getCurrentUser();
+    if (u) refreshUserTierFromBackend(u).then(() => { updateUserDisplay(); updateAiUsageDisplay(); });
   }
   
   // Event listeners for user management (with null checks)
   switchUserBtn?.addEventListener("click", showUserModal);
+
+  const changePlanOverlay = document.getElementById("change-plan-modal-overlay");
+  const changePlanBtn = document.getElementById("change-plan-btn");
+  const savePlanBtn = document.getElementById("save-plan-btn");
+  const changePlanTierRoot = document.getElementById("change-plan-tier-cards");
+  const changePlanTierCards = changePlanTierRoot?.querySelectorAll(".tier-card") || [];
+
+  function syncChangePlanSelection(tier) {
+    changePlanTierCards.forEach((c) => {
+      c.classList.toggle("selected", c.dataset.tier === tier);
+    });
+  }
+
+  changePlanBtn?.addEventListener("click", () => {
+    const u = getCurrentUser();
+    if (!u) {
+      alert("Select a user first.");
+      return;
+    }
+    syncChangePlanSelection(getUserTier(u));
+    changePlanOverlay?.classList.remove("hidden");
+  });
+
+  changePlanOverlay?.addEventListener("click", (e) => {
+    if (e.target === changePlanOverlay) changePlanOverlay.classList.add("hidden");
+  });
+
+  changePlanTierCards.forEach((card) => {
+    card.addEventListener("click", () => {
+      changePlanTierCards.forEach((c) => c.classList.remove("selected"));
+      card.classList.add("selected");
+    });
+  });
+
+  savePlanBtn?.addEventListener("click", () => {
+    const u = getCurrentUser();
+    if (!u) return;
+    const selected = changePlanTierRoot?.querySelector(".tier-card.selected");
+    const tier = selected?.dataset.tier || "free";
+    if (setUserTier(u, tier)) {
+      changePlanOverlay?.classList.add("hidden");
+      setStatus?.(`Demo plan set to ${tier}.`);
+    }
+  });
   
+  // Tier card selection (signup POC — scoped to modal)
+  const tierCardRoot = document.getElementById("tier-select-cards");
+  const tierCards = tierCardRoot?.querySelectorAll(".tier-card") || [];
+  tierCards.forEach((card) => {
+    card.addEventListener("click", () => {
+      tierCards.forEach((c) => c.classList.remove("selected"));
+      card.classList.add("selected");
+    });
+  });
+  tierCardRoot?.querySelector(".tier-card[data-tier='free']")?.classList.add("selected");
+
   createUserBtn?.addEventListener("click", () => {
     const username = newUserInput.value.trim();
     if (!username) {
       alert("Please enter a username.");
       return;
     }
-    if (createUser(username)) {
+    const selectedCard = tierCardRoot?.querySelector(".tier-card.selected");
+    const tier = selectedCard?.dataset.tier || "free";
+    if (createUser(username, tier)) {
       newUserInput.value = "";
+      tierCards.forEach((c) => c.classList.remove("selected"));
+      tierCardRoot?.querySelector(".tier-card[data-tier='free']")?.classList.add("selected");
       selectUser(username);
     }
   });

@@ -29,21 +29,30 @@ function llmStackKey(user, mob) {
   const m = mob || 'global';
   return `llm_stack_${user}_${m}`;
 }
-const LLM_STACK_MAX = 50;
+function _llmHistoryMax() {
+  return typeof getTierHistoryLimit === "function" ? getTierHistoryLimit() : 50;
+}
 
 function readLlmStack(user, mob) {
   const key = llmStackKey(user, mob);
   if (!key) return [];
   const raw = localStorage.getItem(key);
-  return raw ? JSON.parse(raw) : [];
+  let arr = raw ? JSON.parse(raw) : [];
+  const max = _llmHistoryMax();
+  if (arr.length > max) {
+    arr = arr.slice(0, max);
+    localStorage.setItem(key, JSON.stringify(arr));
+  }
+  return arr;
 }
 
 function pushLlmStack(user, mob, entry) {
   const key = llmStackKey(user, mob);
   if (!key) return;
+  const max = _llmHistoryMax();
   const arr = readLlmStack(user, mob);
   arr.unshift(entry);
-  arr.splice(LLM_STACK_MAX);
+  arr.splice(max);
   localStorage.setItem(key, JSON.stringify(arr));
 }
 
@@ -217,6 +226,20 @@ async function requestLlm() {
     setStatus("Enter instructions for the LLM assistant.", true);
     return;
   }
+  if (typeof canRunAiAction === "function") {
+    const quota = canRunAiAction();
+    if (!quota.ok && quota.reason === "daily_cap") {
+      setStatus(
+        `Daily AI limit reached (${quota.used}/${quota.cap} on this demo plan). Use "Change demo plan" for Pro (unlimited in POC) or try again tomorrow.`,
+        true
+      );
+      return;
+    }
+    if (!quota.ok && quota.reason === "no_user") {
+      setStatus("Select or create a user first.", true);
+      return;
+    }
+  }
   const provider = llmProvider ? llmProvider.value : "openai";
   const category = llmCategory ? llmCategory.value : "entity_logic_ai";
   const apiKey = llmKey ? llmKey.value.trim() : "";
@@ -259,11 +282,11 @@ async function requestLlm() {
   
   const beforeSpec = JSON.parse(JSON.stringify(currentSpec));
   
-  const requestBody = { 
-    prompt: instruction, 
+  const requestBody = {
+    prompt: instruction,
     provider: provider,
     category: category,
-    current_spec: currentSpec 
+    current_spec: currentSpec
   };
   if (apiKey) {
     requestBody.api_key = apiKey;
@@ -353,6 +376,9 @@ async function requestLlm() {
       if (typeof render3DGeometry === "function") {
         render3DGeometry(payload.spec.geometry_json, currentMobName);
       }
+      if (typeof syncAnimationPreviewForMob === "function") {
+        syncAnimationPreviewForMob(payload.spec);
+      }
     } else if (newGeo && newGeo !== oldGeo) {
       const geoName = newGeo.replace("geometry.", "");
       if (typeof fetchAndDisplayGeometry === "function") {
@@ -364,12 +390,25 @@ async function requestLlm() {
       if (currentGeoJson && currentGeoJson["minecraft:geometry"] && typeof render3DGeometry === "function") {
         render3DGeometry(currentGeoJson, currentMobName);
       }
+      if (typeof syncAnimationPreviewForMob === "function") {
+        syncAnimationPreviewForMob(payload.spec);
+      }
     }
-  }
 
-  // Refresh animation buttons if animation_json changed
-  if (typeof loadAnimationsFromSpec === "function") {
-    loadAnimationsFromSpec(payload.spec.animation_json || null);
+    // Refresh animation buttons if animation_json changed — must run BEFORE mob-loaded
+    // so that updateClipSelector (triggered by mob-loaded) wins and sets the correct clip
+    if (typeof loadAnimationsFromSpec === "function") {
+      loadAnimationsFromSpec(payload.spec.animation_json || null);
+    }
+
+    try {
+      const sp = typeof getUserMob === "function" ? getUserMob(currentMobName) : null;
+      if (sp) {
+        document.dispatchEvent(new CustomEvent("mob-loaded", { detail: sp }));
+      }
+    } catch (e) {
+      /* ignore */
+    }
   }
   
   // Build status message with MCP augmentation info
@@ -388,6 +427,7 @@ async function requestLlm() {
       const entry = { ts: new Date().toISOString(), prompt: instruction, spec: payload.spec };
       pushLlmStack(user, mob, entry);
       renderLlmHistory();
+      if (typeof recordAiAction === "function") recordAiAction(user);
     }
   } catch (e) {
     console.warn('Failed to write llm history', e);
@@ -573,6 +613,7 @@ function renderLlmHistory() {
     llmHistoryList.appendChild(container);
   });
   if (llmSessionCount) llmSessionCount.textContent = String(hist.length);
+  if (typeof updateTierUsagePanel === "function") updateTierUsagePanel();
 }
 
 function restoreHistoryEntry(index, btnEl) {
@@ -623,6 +664,13 @@ function restoreHistoryEntry(index, btnEl) {
 }
 
 function initLlmHandlers() {
+  document.addEventListener("user-tier-changed", () => {
+    try {
+      renderLlmHistory();
+      if (typeof updateTierUsagePanel === "function") updateTierUsagePanel();
+    } catch (e) { /* ignore */ }
+  });
+
   clearLlmHistoryBtn?.addEventListener('click', () => {
     const user = getCurrentUser();
     const mob = currentMobName || null;

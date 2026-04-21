@@ -72,6 +72,9 @@ async function loadMobList() {
   if (mobNames.length > 0 && !mobNames.includes(currentMobName)) {
     currentMobName = mobNames[0];
   }
+  try {
+    if (typeof updateTierUsagePanel === "function") updateTierUsagePanel();
+  } catch (e) { /* ignore */ }
 }
 
 async function selectMob(name) {
@@ -719,15 +722,39 @@ function escapeHtml(text) {
 
   function updateClipSelector(animJson) {
     if (!clipSelectEl) return;
-    clipSelectEl.innerHTML = '<option value="">-- no animation --</option>';
+    clipSelectEl.innerHTML = '<option value="">— clip —</option>';
     if (!animJson || !animJson.animations) return;
-    Object.keys(animJson.animations).forEach(key => {
+    const keys = Object.keys(animJson.animations);
+    const shortName = (fullKey) => (fullKey.split('.').pop() || '').toLowerCase();
+    const sortRank = (k) => {
+      const s = shortName(k);
+      if (s === 'idle') return 0;
+      if (s.includes('walk') || s.includes('run')) return 1;
+      if (s === 'swim' || s === 'swimming' || s === 'slither' || s === 'moving') return 1.5;
+      if (s.includes('attack') || s.includes('breath') || s.includes('fire') || s.includes('shoot')) return 2;
+      if (s.includes('fly')) return 3;
+      return 50;
+    };
+    keys.sort((a, b) => {
+      const ra = sortRank(a);
+      const rb = sortRank(b);
+      if (ra !== rb) return ra - rb;
+      return a.localeCompare(b);
+    });
+    keys.forEach(key => {
       const opt = document.createElement('option');
       opt.value = key;
-      const label = key.replace(/^animation\.\w+\./, '');
+      const label = shortName(key) || key.replace(/^animation\.\w+\./, '');
       opt.textContent = label;
+      opt.title = key;
       clipSelectEl.appendChild(opt);
     });
+
+    // Auto-select the first sorted clip (idle) and apply it to the viewer
+    if (clipSelectEl.options.length > 1) {
+      clipSelectEl.selectedIndex = 1;
+      applyAnimationToViewer(animJson, clipSelectEl.value);
+    }
   }
 
   function applyAnimationToViewer(animJson, clipKey) {
@@ -736,7 +763,9 @@ function escapeHtml(text) {
     if (!clip) return;
     if (typeof loadAnimation === 'function') {
       loadAnimation(clip);
-      // Show timeline panel
+      if (typeof window.playAnimationPreview === 'function') {
+        window.playAnimationPreview();
+      }
       const timeline = document.getElementById('animation-timeline');
       if (timeline) timeline.style.display = '';
     }
@@ -809,14 +838,25 @@ function escapeHtml(text) {
       const animCount = _animJson ? Object.keys(_animJson.animations || {}).length : 0;
       setAnimStatus(`✓ Generated ${animCount} animation(s)${_animCtrlJson ? ' + controller' : ''}.`);
 
-      updateClipSelector(_animJson);
       showJsonPreview();
       saveAnimationsToSpec(_animJson, _animCtrlJson);
 
-      // Auto-play first clip
-      if (clipSelectEl && clipSelectEl.options.length > 1) {
-        clipSelectEl.selectedIndex = 1;
-        applyAnimationToViewer(_animJson, clipSelectEl.value);
+      const mobs = typeof getCurrentUserMobs === 'function' ? getCurrentUserMobs() : {};
+      const specAfter = currentMobName ? mobs[currentMobName] : null;
+      if (specAfter && typeof syncAnimationPreviewForMob === 'function') {
+        specAfter.animation_json = _animJson;
+        specAfter.animation_controller_json = _animCtrlJson;
+        syncAnimationPreviewForMob(specAfter);
+      }
+      const forClipList =
+        (typeof getEffectiveAnimationJsonForPreview === 'function' && getEffectiveAnimationJsonForPreview()) ||
+        _animJson;
+      updateClipSelector(forClipList);
+      if (!(specAfter && typeof syncAnimationPreviewForMob === 'function')) {
+        if (clipSelectEl && clipSelectEl.options.length > 1) {
+          clipSelectEl.selectedIndex = 1;
+          applyAnimationToViewer(_animJson, clipSelectEl.value);
+        }
       }
     } catch (err) {
       setAnimStatus(`Error: ${err.message}`, true);
@@ -831,12 +871,14 @@ function escapeHtml(text) {
   if (generateBtn) generateBtn.addEventListener('click', runAnimationGeneration);
   if (regenBtn) regenBtn.addEventListener('click', runAnimationGeneration);
 
-  // Clip selector → load into viewer
+  // Clip selector — play the selected animation clip
   if (clipSelectEl) {
     clipSelectEl.addEventListener('change', () => {
-      if (clipSelectEl.value && _animJson) {
-        applyAnimationToViewer(_animJson, clipSelectEl.value);
-      }
+      if (!clipSelectEl.value) return;
+      const merged =
+        (typeof getEffectiveAnimationJsonForPreview === 'function' && getEffectiveAnimationJsonForPreview()) ||
+        _animJson;
+      applyAnimationToViewer(merged, clipSelectEl.value);
     });
   }
 
@@ -869,8 +911,9 @@ function escapeHtml(text) {
     });
   }
 
-  // When a mob is loaded, restore any saved animations and populate clip selector
-  const origSelectMob = window.selectMob;
+  // When a mob is loaded, populate clip selector from stored animation_json immediately,
+  // then kick off a backend materialize call to merge procedurally-generated clips
+  // (walk from leg bones, fly from wing bones) that only exist at build time.
   document.addEventListener('mob-loaded', (e) => {
     const spec = e.detail;
     if (!spec) return;
@@ -878,6 +921,21 @@ function escapeHtml(text) {
     _animCtrlJson = spec.animation_controller_json || null;
     updateClipSelector(_animJson);
     showJsonPreview();
+    // Fire-and-forget: enrich with build-time clips (walk, fly, etc.)
+    if (typeof syncAnimationPreviewForMob === 'function') {
+      syncAnimationPreviewForMob(spec);
+    }
+  });
+
+  // When the backend materializer returns, refresh the clip list with enriched animations
+  document.addEventListener('animation-preview-ready', (e) => {
+    const enriched = e.detail;
+    if (!enriched) return;
+    _animJson = enriched;
+    updateClipSelector(_animJson);
+    if (typeof loadAnimationsFromSpec === 'function') {
+      loadAnimationsFromSpec(enriched);
+    }
   });
 })();
 
