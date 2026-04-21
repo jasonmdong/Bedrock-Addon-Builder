@@ -33,3 +33,6 @@ API_KEY.py
 
 # Sample/temp folders
 SampleElephant/
+
+# Claude / Cursor IDE (local)
+.claude/
