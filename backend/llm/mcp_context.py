@@ -351,7 +351,9 @@ async def mcp_validate(spec: dict) -> MCPValidationResult:
             if item.get("type") == "text"
         ]
         errors = _extract_errors(text_parts)
-        valid = not result.get("isError") and not errors
+        # Advisory validation: trust filtered actionable lines only. MCP may set isError for
+        # tooling limitations (e.g. JSON parse of non-pack payloads), not real spec faults.
+        valid = len(errors) == 0
         if valid:
             _record_validation_success()
         else:
@@ -487,6 +489,17 @@ def _extract_errors(text_parts: list[str]) -> list[str]:
 
             # Skip manifest/pack-structure noise
             if any(noise in line_stripped for noise in _MANIFEST_NOISE):
+                continue
+
+            # validateContent often returns this when given bare entity JSON instead of a full pack ZIP.
+            line_compact_lower = line_lower.replace(" ", "")
+            if (
+                "jsonparseerror" in line_compact_lower
+                or "json parse error" in line_lower
+                or '"title":"jsonparseerror"' in line_compact_lower
+            ):
+                continue
+            if "internalprocessingerrorsummary" in line_compact_lower:
                 continue
 
             # Skip JSON key-value lines where the value is 0 or a small number

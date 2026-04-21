@@ -180,17 +180,22 @@ _FACE_SHADE = {
 # ---------------------------------------------------------------------------
 
 def _box_uv_faces(u: int, v: int, w: int, h: int, d: int) -> dict:
-    """Compute all 6 face UV rects for Bedrock box UV mapping."""
+    """Compute all 6 face UV rects for Bedrock **box** UV (uv: [u, v]).
+
+    Names match Bedrock cardinals: north = face toward -Z (entity front when modeled
+    correctly), south = +Z, east = +X, west = -X, up/down = ±Y. Layout matches
+    `frontend/js/viewer/viewer3d.js` applyBoxUV (Three.js +X,-X,+Y,-Y,+Z,-Z order).
+    """
     w = max(w, 0)
     h = max(h, 0)
     d = max(d, 0)
     return {
-        "top":    (u + d,       v,       w, d),
-        "bottom": (u + d + w,   v,       w, d),
-        "right":  (u,           v + d,   d, h),
-        "front":  (u + d,       v + d,   w, h),
-        "left":   (u + d + w,   v + d,   d, h),
-        "back":   (u + 2*d + w, v + d,   w, h),
+        "up":    (u + d,       v,       w, d),
+        "down":  (u + d + w,   v,       w, d),
+        "east":  (u,           v + d,   d, h),
+        "north": (u + d,       v + d,   w, h),
+        "west":  (u + d + w,   v + d,   d, h),
+        "south": (u + 2*d + w, v + d,   w, h),
     }
 
 
@@ -485,9 +490,18 @@ def _paint_rocky(pixels, x, y, w, h, base_rgb, tw, th, seed):
 # ---------------------------------------------------------------------------
 
 def _paint_eyes(pixels, x, y, w, h, tw, th):
-    """Paint proportionally-sized eyes with iris, pupil, and highlight."""
+    """Paint proportionally-sized eyes with iris, pupil, and highlight.
+
+    All draws are clipped to the north-face rectangle [x,y]+[w,h]. Previously
+    we only clipped to the full atlas, so features could spill into the UV
+    island below (often the head's *down* face), which looked like a second
+    pair of eyes on the underside in-game.
+    """
     if w < 4 or h < 4:
         return
+
+    def _on_face(px: int, py: int) -> bool:
+        return x <= px < x + w and y <= py < y + h and 0 <= px < tw and 0 <= py < th
 
     eye_size = max(2, min(w // 5, h // 4))
     eye_y = y + h // 3
@@ -506,7 +520,7 @@ def _paint_eyes(pixels, x, y, w, h, tw, th):
             for dx in range(eye_size):
                 px = ex_start + dx
                 py = eye_y + dy
-                if 0 <= px < tw and 0 <= py < th:
+                if _on_face(px, py):
                     pixels[py][px] = (*white, 255)
 
         # Iris (centered, slightly smaller)
@@ -517,7 +531,7 @@ def _paint_eyes(pixels, x, y, w, h, tw, th):
             for dx in range(iris_size):
                 px = iris_x + dx
                 py = iris_y + dy
-                if 0 <= px < tw and 0 <= py < th:
+                if _on_face(px, py):
                     pixels[py][px] = (*iris_color, 255)
 
         # Pupil (center dot)
@@ -528,13 +542,13 @@ def _paint_eyes(pixels, x, y, w, h, tw, th):
             for dx in range(pupil_size):
                 px = pupil_x + dx
                 py = pupil_y + dy
-                if 0 <= px < tw and 0 <= py < th:
+                if _on_face(px, py):
                     pixels[py][px] = (*pupil_color, 255)
 
         # Highlight (top-right pixel of each eye)
         hx = ex_start + eye_size - max(1, eye_size // 3)
         hy = eye_y + max(0, eye_size // 4)
-        if 0 <= hx < tw and 0 <= hy < th:
+        if _on_face(hx, hy):
             pixels[hy][hx] = (*highlight, 255)
 
     # Nose/nostrils centered below eyes
@@ -543,7 +557,7 @@ def _paint_eyes(pixels, x, y, w, h, tw, th):
     nose_color = (50, 35, 30)
     for dx in range(nose_w):
         nx = x + w // 2 - nose_w // 2 + dx
-        if 0 <= nx < tw and 0 <= nose_y < th:
+        if _on_face(nx, nose_y):
             pixels[nose_y][nx] = (*nose_color, 255)
 
     # Mouth line
@@ -553,7 +567,7 @@ def _paint_eyes(pixels, x, y, w, h, tw, th):
     if mouth_y < y + h - 1:
         for dx in range(mouth_w):
             mx = x + w // 2 - mouth_w // 2 + dx
-            if 0 <= mx < tw and 0 <= mouth_y < th:
+            if _on_face(mx, mouth_y):
                 pixels[mouth_y][mx] = (*mouth_color, 255)
 
 
@@ -712,7 +726,7 @@ def generate_mob_texture(
                 )
                 is_body_front = (
                     role == "body"
-                    and face_name in ("front", "north")
+                    and face_name == "north"
                 )
 
                 if is_body_underside:
@@ -734,7 +748,9 @@ def generate_mob_texture(
                         face_name,
                     )
 
-                if role == "head" and face_name in ("front", "north"):
+                # Bedrock north = -Z (muzzle direction). Do not treat legacy "front"
+                # as a separate slot — box UV now emits "north" only for that face.
+                if role == "head" and face_name == "north":
                     head_fronts.append((fu, fv, fw, fh))
                 if role in ("body", "head", "tail"):
                     pattern_rects.append((fu, fv, fw, fh))
@@ -742,8 +758,10 @@ def generate_mob_texture(
     # Step 3: Patterns
     _apply_patterns(pixels, pattern_rects, patterns, base_rgb, tex_w, tex_h)
 
-    # Step 4: Eyes and facial features
-    for (fx, fy, fw, fh) in head_fronts:
+    # Step 4: Eyes and facial features — single largest head north face only.
+    # Multiple head cubes (snout, ears) would otherwise duplicate eyes on side UVs.
+    if head_fronts:
+        fx, fy, fw, fh = max(head_fronts, key=lambda r: r[2] * r[3])
         _paint_eyes(pixels, fx, fy, fw, fh, tex_w, tex_h)
 
     # Step 5: Encode

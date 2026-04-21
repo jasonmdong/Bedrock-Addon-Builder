@@ -26,6 +26,7 @@ from backend.llm.orchestrator import (
     build_plan, format_plan_for_prompt, should_use_orchestration,
     plan_is_simple, apply_plan,
 )
+from backend.build.builders import prepare_geometry_for_texture
 from backend.llm.texture_gen import generate_mob_texture
 from backend.llm.component_sanitizer import sanitize_spec
 
@@ -175,14 +176,14 @@ def _preserve_geometry(output_spec: dict, input_spec: dict) -> dict:
 
     # LLM dropped the custom geometry — restore from input
     output_spec["geometry_json"] = input_spec["geometry_json"]
-    # Also restore the geometry reference ID if the LLM changed it to
-    # a vanilla one (e.g. "geometry.chicken" instead of the original
-    # custom ID like "geometry.custom_fire_dragon")
+    # Also restore the geometry reference ID.  The input had custom geometry so
+    # its geometry ID should always win over whatever vanilla/default the LLM chose.
     input_geo_id = input_spec.get("geometry", "")
     output_geo_id = output_spec.get("geometry", "")
-    if input_geo_id.startswith("geometry.custom") and not output_geo_id.startswith("geometry.custom"):
+    vanilla_ids = {"geometry.cow", "geometry.chicken", "geometry.pig", "geometry.zombie", "geometry.custom"}
+    if input_geo_id and (output_geo_id != input_geo_id) and (output_geo_id in vanilla_ids or not output_geo_id):
         output_spec["geometry"] = input_geo_id
-        print(f"[LLM] Restored custom geometry: {input_geo_id} (LLM had changed to {output_geo_id})")
+        print(f"[LLM] Restored custom geometry id: {input_geo_id} (LLM had changed to {output_geo_id!r})")
     else:
         print(f"[LLM] Preserved custom geometry_json from input spec")
 
@@ -1030,8 +1031,10 @@ def llm_rewrite_spec(prompt: str, current: dict, provider: str,
         # distinct body-part colors, proportional eyes, edge shading)
         if has_geo:
             try:
+                geo_tex = prepare_geometry_for_texture(geo)
+                output_spec["geometry_json"] = geo_tex
                 texture_b64 = generate_mob_texture(
-                    geometry_json=geo,
+                    geometry_json=geo_tex,
                     display_name=output_spec.get("display_name", ""),
                     color_rgb=output_spec.get("color_rgb"),
                     texture_hint=output_spec.get("texture_hint", ""),
@@ -1048,7 +1051,7 @@ def llm_rewrite_spec(prompt: str, current: dict, provider: str,
             safe_id = (output_spec.get("short_name") or "custom_mob").replace(":", "_")
             try:
                 design_result = mcp_design_model_sync(
-                    geo, safe_id, prompt,
+                    output_spec.get("geometry_json") or geo, safe_id, prompt,
                     color_rgb=output_spec.get("color_rgb"),
                     display_name=output_spec.get("display_name", ""),
                 )
@@ -1147,6 +1150,13 @@ Output format is a valid minecraft:geometry JSON object. The structure must be:
   ]
 }
 
+CRITICAL COORDINATE SYSTEM:
+- NEGATIVE Z (-Z) = FRONT of mob (face, eyes, mouth). HEAD must be at negative Z values.
+- POSITIVE Z  (+Z) = BACK of mob (tail). TAIL must be at positive Z values.
+- Do NOT place the head at positive Z — that puts the face backwards and eyes on the wrong side.
+- WRONG: head cube origin at [x, y, +8]   (face looks backwards)
+- CORRECT: head cube origin at [x, y, -12] (face looks forward, -Z direction)
+
 Key rules:
 1. All coordinates use Y-up coordinate system (Y is vertical)
 2. pivot defines the rotation point for a bone
@@ -1154,12 +1164,13 @@ Key rules:
 4. size is [width_x, height_y, depth_z] — use WHOLE NUMBERS or near-whole sizes (e.g. 8, 10, 14)
 5. Parent bones must be defined before children reference them
 6. Humanoid mobs typically have: root, body, head, left_arm, right_arm, left_leg, right_leg
-7. Quadruped mobs typically have: root, body, head, leg0-3
+7. Quadruped mobs typically have: root, body, head, leg0-3 (head at negative Z, back legs at positive Z)
 8. Use appropriate UV coordinates for box UV mapping
 9. Legs should start at Y=0 and extend upward; body sits on top of legs
+10. Ground plane: the **lowest point of the entire model** (usually the bottom of the feet) must be at **Y=0**.
+    Do not offset the whole mob upward — floating geometry reads as hovering in Minecraft.
 
 Scale reference (cube sizes in pixels):
-- Small mob (chicken): body [6, 6, 6], head [4, 6, 3], legs [1, 5, 1]
 - Medium mob (cow):    body [14, 10, 8], head [8, 8, 6], legs [4, 12, 4]
 - Large mob (horse):   body [16, 12, 10], head [8, 10, 6], legs [4, 14, 4]
 - Huge mob (elephant): body [18, 14, 12], head [10, 10, 10], legs [5, 12, 5]
@@ -1258,6 +1269,7 @@ def llm_generate_geometry(
     texture_b64 = ""
     mcp_design_used = False
     if output and isinstance(output, dict) and output.get("minecraft:geometry"):
+        output = prepare_geometry_for_texture(output)
         safe_name = mob_name.replace(":", "_").replace(" ", "_").lower()
 
         # Procedural UV-mapped texture (preferred)

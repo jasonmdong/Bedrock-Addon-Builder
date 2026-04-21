@@ -20,7 +20,7 @@ import os
 import time
 from typing import Optional
 
-from backend.core.core import (
+from backend.config.settings import (
     LLM_MODEL_NAME,
     DEEPSEEK_MODEL_NAME,
     GEMINI_MODEL_NAME,

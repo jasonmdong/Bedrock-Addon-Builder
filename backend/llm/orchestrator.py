@@ -243,7 +243,7 @@ def _parse_json_response(content: str) -> dict:
 
 def _plan_openai(api_key: Optional[str], user_content: str) -> dict:
     from openai import OpenAI
-    from backend.core.core import LLM_MODEL_NAME
+    from backend.config.settings import LLM_MODEL_NAME
     key = api_key or os.environ.get("GITHUB_TOKEN")
     if not key:
         raise RuntimeError("No API key for OpenAI planner")
@@ -261,7 +261,7 @@ def _plan_openai(api_key: Optional[str], user_content: str) -> dict:
 
 def _plan_deepseek(api_key: Optional[str], user_content: str) -> dict:
     from openai import OpenAI
-    from backend.core.core import DEEPSEEK_MODEL_NAME
+    from backend.config.settings import DEEPSEEK_MODEL_NAME
     key = api_key or os.environ.get("DEEPSEEK_API_KEY")
     if not key:
         raise RuntimeError("No DEEPSEEK_API_KEY for planner")
@@ -280,7 +280,7 @@ def _plan_deepseek(api_key: Optional[str], user_content: str) -> dict:
 
 def _plan_gemini(api_key: Optional[str], user_content: str) -> dict:
     from google import genai
-    from backend.core.core import GEMINI_MODEL_NAME
+    from backend.config.settings import GEMINI_MODEL_NAME
     key = api_key or os.environ.get("GEMINI_API_KEY")
     if not key:
         raise RuntimeError("No GEMINI_API_KEY for planner")
@@ -298,7 +298,7 @@ def _plan_gemini(api_key: Optional[str], user_content: str) -> dict:
 
 def _plan_claude(api_key: Optional[str], user_content: str) -> dict:
     import anthropic
-    from backend.core.core import CLAUDE_MODEL_NAME
+    from backend.config.settings import CLAUDE_MODEL_NAME
     key = api_key or os.environ.get("ANTHROPIC_API_KEY")
     if not key:
         raise RuntimeError("No ANTHROPIC_API_KEY for planner")
@@ -314,7 +314,7 @@ def _plan_claude(api_key: Optional[str], user_content: str) -> dict:
 
 def _plan_ollama(api_key: Optional[str], user_content: str) -> dict:
     from openai import OpenAI
-    from backend.core.core import OLLAMA_MODEL_NAME, OLLAMA_BASE_URL
+    from backend.config.settings import OLLAMA_MODEL_NAME, OLLAMA_BASE_URL
     client = OpenAI(base_url=f"{OLLAMA_BASE_URL}/v1", api_key="ollama", timeout=30.0)
     resp = client.chat.completions.create(
         model=OLLAMA_MODEL_NAME,
