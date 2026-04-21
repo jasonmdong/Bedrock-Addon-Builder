@@ -420,6 +420,15 @@ async function requestLlm() {
   // Show MCP detail badge if available
   _renderMcpBadge(payload.mcp);
 
+  // Kick off background BDS smoke test with the full spec
+  fetch("/api/smoke/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ spec: payload.spec })
+  }).then(r => r.ok ? r.json() : null).then(job => {
+    if (job && job.job_id) _pollSmokeBadge(job.job_id);
+  }).catch(() => {});
+
   try {
     const user = getCurrentUser();
     const mob = currentMobName || null;
@@ -507,6 +516,71 @@ function _renderMcpBadge(mcp) {
   }
 
   badge.textContent = parts.join(" | ");
+}
+
+function _getOrCreateSmokeBadge() {
+  let badge = document.getElementById("llm-smoke-badge");
+  if (!badge) {
+    const mcpBadge = document.getElementById("llm-mcp-badge");
+    const statusArea = document.getElementById("status");
+    const anchor = mcpBadge || statusArea;
+    if (!anchor) return null;
+    badge = document.createElement("div");
+    badge.id = "llm-smoke-badge";
+    badge.style.cssText = "font-size:0.75rem;margin-top:4px;";
+    anchor.parentNode.insertBefore(badge, anchor.nextSibling);
+  }
+  return badge;
+}
+
+function _pollSmokeBadge(jobId) {
+  const badge = _getOrCreateSmokeBadge();
+  if (!badge) return;
+
+  badge.style.display = "block";
+  badge.style.color = "var(--muted)";
+  badge.textContent = "BDS validating...";
+
+  let attempts = 0;
+  const MAX_ATTEMPTS = 30; // 30 × 2s = 60s timeout
+
+  const timer = setInterval(async () => {
+    attempts++;
+    try {
+      const res = await fetch(`/api/smoke/status/${jobId}`);
+      if (!res.ok) { clearInterval(timer); return; }
+      const job = await res.json();
+
+      if (job.status === "pending" || job.status === "building") {
+        badge.textContent = job.status === "building" ? "BDS building pack..." : "BDS validating...";
+      } else if (job.status === "running") {
+        badge.textContent = "BDS summoning mob...";
+      } else if (job.status === "skipped") {
+        badge.style.color = "var(--muted)";
+        badge.textContent = "BDS smoke skipped (BDS_PATH not set)";
+        clearInterval(timer);
+      } else if (job.status === "done") {
+        clearInterval(timer);
+        const r = job.result || {};
+        if (r.passed) {
+          badge.style.color = "#4caf50";
+          badge.textContent = `BDS smoke passed — ${job.mob_name} spawned successfully`;
+        } else {
+          badge.style.color = "#f44336";
+          const errs = (r.errors || []).map(e => e.rule).join(", ");
+          badge.textContent = `BDS smoke FAILED — ${r.error_message || errs || "unknown error"}`;
+        }
+      }
+    } catch (e) {
+      clearInterval(timer);
+    }
+
+    if (attempts >= MAX_ATTEMPTS) {
+      clearInterval(timer);
+      badge.style.color = "var(--muted)";
+      badge.textContent = "BDS smoke timed out";
+    }
+  }, 2000);
 }
 
 function renderLlmHistory() {

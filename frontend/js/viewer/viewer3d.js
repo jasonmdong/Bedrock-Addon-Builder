@@ -833,6 +833,14 @@ function loadAnimation(animationData) {
   updateTimelineUI();
 }
 
+/** Start playback after loadAnimation (clip dropdown / preview sync). */
+function playAnimationPreview() {
+  if (!animationState) initAnimationState();
+  animationState.playing = true;
+  animationState.lastFrameTime = performance.now();
+  updateTimelineUI();
+}
+
 function parseKeyframes(data) {
   if (!data) return null;
   
@@ -1078,6 +1086,30 @@ function resetAnimation() {
 }
 
 /**
+ * Same ordering as editor.js `updateClipSelector` so idle/walk/fly ordering matches
+ * the clip dropdown. Plain `Object.keys()` order can put fly first and overwrite
+ * the clip the dropdown just applied.
+ */
+function sortAnimationClipKeys(keys) {
+  const shortName = (fullKey) => (fullKey.split(".").pop() || "").toLowerCase();
+  const sortRank = (k) => {
+    const s = shortName(k);
+    if (s === "idle") return 0;
+    if (s.includes("walk") || s.includes("run")) return 1;
+    if (s === "swim" || s === "swimming" || s === "slither" || s === "moving") return 1.5;
+    if (s.includes("attack") || s.includes("breath") || s.includes("fire") || s.includes("shoot")) return 2;
+    if (s.includes("fly")) return 3;
+    return 50;
+  };
+  return [...keys].sort((a, b) => {
+    const ra = sortRank(a);
+    const rb = sortRank(b);
+    if (ra !== rb) return ra - rb;
+    return a.localeCompare(b);
+  });
+}
+
+/**
  * Load all animations from a mob spec's animation_json and show
  * per-animation buttons in the timeline panel.
  * @param {object} animationJson - The full animation.json object from the spec
@@ -1105,7 +1137,7 @@ function loadAnimationsFromSpec(animationJson) {
   container.innerHTML = "";
 
   const animations = animationJson.animations;
-  const animNames = Object.keys(animations);
+  const animNames = sortAnimationClipKeys(Object.keys(animations));
 
   animNames.forEach(fullName => {
     const btn = document.createElement("button");
@@ -1126,10 +1158,20 @@ function loadAnimationsFromSpec(animationJson) {
     container.appendChild(btn);
   });
 
-  // Auto-select the first animation (load but don't auto-play)
+  // Match the clip dropdown (`anim-clip-select`) if set; else first sorted clip (idle first).
+  let clipToLoad = animNames[0];
+  const clipSelect = document.getElementById("anim-clip-select");
+  if (clipSelect && clipSelect.value && animations[clipSelect.value]) {
+    clipToLoad = clipSelect.value;
+  }
+
+  // Auto-select that clip (load but don't auto-play)
   if (animNames.length > 0) {
-    loadAnimation(animations[animNames[0]]);
-    container.children[0].classList.add("active");
+    loadAnimation(animations[clipToLoad]);
+    const activeIdx = animNames.indexOf(clipToLoad);
+    if (activeIdx >= 0 && container.children[activeIdx]) {
+      container.children[activeIdx].classList.add("active");
+    }
   }
 }
 
@@ -2243,9 +2285,65 @@ function init3DEditor() {
   console.log('[3D Editor] Initialized');
 }
 
+// =====================================================================
+// Animation preview materializer
+// Calls /api/animation/materialize-preview to merge procedurally-generated
+// clips (walk from leg bones, fly from wing bones, etc.) that only exist
+// at build time into the viewer's clip list.
+// =====================================================================
+
+let _materializedAnimJson = null;
+
+async function syncAnimationPreviewForMob(spec) {
+  if (!spec || !spec.geometry_json) return;
+  _materializedAnimJson = null;
+  let anim = spec.animation_json;
+  if (!anim || typeof anim !== 'object') {
+    anim = { format_version: '1.8.0', animations: {} };
+  } else {
+    anim = { ...anim, animations: { ...(anim.animations || {}) } };
+  }
+  if (!anim.animations || typeof anim.animations !== 'object') {
+    anim.animations = {};
+  }
+  try {
+    const res = await fetch('/api/animation/materialize-preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        short_name: spec.short_name || spec.mob_name || 'custom_mob',
+        geometry_json: spec.geometry_json,
+        animation_json: anim,
+      }),
+    });
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      console.warn('[AnimPreview] materialize-preview HTTP', res.status, errText || res.statusText);
+      return;
+    }
+    const data = await res.json();
+    const enriched = data.animation_json;
+    if (!enriched || !enriched.animations || typeof enriched.animations !== 'object') {
+      console.warn('[AnimPreview] materialize-preview returned no animations object');
+      return;
+    }
+    _materializedAnimJson = enriched;
+    document.dispatchEvent(new CustomEvent('animation-preview-ready', { detail: enriched }));
+  } catch (e) {
+    console.warn('[AnimPreview] materialize-preview failed:', e);
+  }
+}
+
+function getEffectiveAnimationJsonForPreview() {
+  return _materializedAnimJson;
+}
+
 // Export for external use
 window.render3DGeometry = render3DGeometry;
+window.syncAnimationPreviewForMob = syncAnimationPreviewForMob;
+window.getEffectiveAnimationJsonForPreview = getEffectiveAnimationJsonForPreview;
 window.loadAnimation = loadAnimation;
+window.playAnimationPreview = playAnimationPreview;
 window.loadAnimationsFromSpec = loadAnimationsFromSpec;
 window.viewer3D = viewer3D;
 window.refresh3DTexture = refresh3DTexture;

@@ -216,6 +216,17 @@ async function fetchAndDisplayGeometry(geometryMobName, textureMobName = null) {
 
     render3DGeometry(geometryData, mobNameForTexture);
 
+    if (typeof syncAnimationPreviewForMob === "function" && mobNameForTexture) {
+      const spec = typeof getUserMob === "function" ? getUserMob(mobNameForTexture) : null;
+      if (spec) {
+        const specForAnim =
+          spec.geometry_json && spec.geometry_json["minecraft:geometry"]
+            ? spec
+            : { ...spec, geometry_json: geometryData };
+        syncAnimationPreviewForMob(specForAnim);
+      }
+    }
+
     if (currentMobName) {
       const spec = getUserMob(currentMobName);
       if (spec && (!spec.geometry_json || !spec.geometry_json["minecraft:geometry"])) {
@@ -397,6 +408,9 @@ function initBuildHandlers() {
 
   // --- One-Click Play (.mcworld) ---
   initPlayWorld();
+
+  // --- BDS Smoke Test ---
+  initBdsSmoke();
 }
 
 // ---------------------------------------------------------------------------
@@ -492,6 +506,108 @@ function initPlayWorld() {
     } finally {
       playWorldBtn.disabled = false;
       playWorldBtn.textContent = "▶ Play World";
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// BDS Smoke Test
+// ---------------------------------------------------------------------------
+const bdsSmokeBtn = document.getElementById("bds-smoke-btn");
+const bdsSmokeStatus = document.getElementById("bds-smoke-status");
+
+function _setSmokeStatus(text, color) {
+  if (bdsSmokeStatus) {
+    bdsSmokeStatus.style.display = text ? "block" : "none";
+    bdsSmokeStatus.textContent = text;
+    bdsSmokeStatus.style.color = color || "var(--text)";
+  }
+}
+
+function initBdsSmoke() {
+  bdsSmokeBtn?.addEventListener("click", async (e) => {
+    e.preventDefault();
+
+    if (currentMobName) {
+      const saved = await saveSpec();
+      if (saved === null) return;
+    }
+
+    const selectedMobNames = Array.from(mobListEl.querySelectorAll(".mob-item"))
+      .filter(item => item.querySelector("input[type='checkbox']").checked)
+      .map(item => item.querySelector(".mob-name").textContent);
+
+    if (selectedMobNames.length === 0) {
+      _setSmokeStatus("No mobs selected. Check at least one mob in the sidebar.", "var(--danger)");
+      return;
+    }
+
+    const selectedSpecs = selectedMobNames.map(name => getUserMob(name)).filter(Boolean);
+    if (selectedSpecs.length === 0) {
+      _setSmokeStatus("Could not load specs for selected mobs.", "var(--danger)");
+      return;
+    }
+
+    const textures = {};
+    for (const name of selectedMobNames) {
+      const spec = getUserMob(name);
+      const shortName = (spec && spec.short_name) || name;
+      const tex = getUserMobTexture(name);
+      if (tex) textures[shortName] = tex;
+    }
+
+    bdsSmokeBtn.disabled = true;
+    bdsSmokeBtn.textContent = "Running BDS...";
+    _setSmokeStatus("Building & running smoke test (this takes ~60s)...", "#f59e0b");
+
+    try {
+      const formData = new FormData();
+      formData.append("build_mode", "bundle");
+      formData.append("specs_json", JSON.stringify(selectedSpecs));
+      formData.append("textures_json", JSON.stringify(textures));
+      formData.append("smoke", "true");
+
+      const res = await fetch("/api/build", { method: "POST", body: formData });
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        _setSmokeStatus("Build failed: " + (data.detail || res.statusText), "var(--danger)");
+        return;
+      }
+
+      const smoke = data.smoke;
+      if (!smoke) {
+        _setSmokeStatus("Build succeeded but no smoke result returned. Is BDS_PATH set?", "var(--danger)");
+        return;
+      }
+
+      if (smoke.error_message && !smoke.bds_ready) {
+        _setSmokeStatus("BDS error: " + smoke.error_message, "var(--danger)");
+        return;
+      }
+
+      const lines = [];
+      lines.push(smoke.passed ? "✅ PASSED" : "❌ FAILED");
+      lines.push(`Mobs tested: ${(smoke.mob_identifiers || []).join(", ") || "none"}`);
+
+      if (smoke.errors && smoke.errors.length > 0) {
+        lines.push(`\nErrors (${smoke.errors.length}):`);
+        smoke.errors.forEach(err => lines.push(`  [${err.rule}] ${err.line}`));
+      }
+      if (smoke.warnings && smoke.warnings.length > 0) {
+        lines.push(`\nWarnings (${smoke.warnings.length}):`);
+        smoke.warnings.forEach(w => lines.push(`  [${w.rule}] ${w.line}`));
+      }
+      if (smoke.passed && (!smoke.errors || smoke.errors.length === 0)) {
+        lines.push("No errors or warnings.");
+      }
+
+      _setSmokeStatus(lines.join("\n"), smoke.passed ? "#10b981" : "var(--danger)");
+    } catch (err) {
+      _setSmokeStatus("Network error: " + err.message, "var(--danger)");
+    } finally {
+      bdsSmokeBtn.disabled = false;
+      bdsSmokeBtn.textContent = "🧪 Test in BDS";
     }
   });
 }
