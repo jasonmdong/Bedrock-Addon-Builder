@@ -23,6 +23,30 @@ import base64
 import uuid
 import time
 import zipfile
+import sys
+from pathlib import Path
+
+# Repo root: MCP/mcp_server/tools/build_mcworld.py -> parents[3]
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from backend.build.builders import (
+    _augment_walk_animation_with_missing_legs,
+    _build_scripts_animate_entries,
+    _inject_locomotion_pre_animation,
+    _ensure_fly_animation,
+    _ensure_idle_animation,
+    _ensure_swim_animation,
+    _ensure_walk_animation,
+    _has_fly_components,
+    _has_leg_bones,
+    _has_wing_bones,
+    _normalize_spec_animation_json,
+    _prune_fly_animations_without_wing_bones,
+    _remap_animation_bones_to_geometry,
+    _strip_fly_ai_for_winged_walker,
+)
 
 
 def _anim_short_key(anim_key: str, mob_name: str) -> str:
@@ -39,19 +63,6 @@ def _anim_short_key(anim_key: str, mob_name: str) -> str:
     if len(parts) >= 3 and parts[0] == "animation":
         return parts[-1]
     return anim_key
-
-
-def _get_wing_bone_names(geo_data: dict) -> list:
-    """Return names of wing bones in the geometry."""
-    names = []
-    if not geo_data or not isinstance(geo_data, dict):
-        return names
-    for geo_entry in geo_data.get("minecraft:geometry", []):
-        for bone in geo_entry.get("bones", []):
-            name = bone.get("name", "")
-            if "wing" in name.lower():
-                names.append(name)
-    return names
 
 
 def _fix_geometry_scale(geo_data: dict) -> None:
@@ -497,44 +508,54 @@ async def build_mcworld(mobs: list[dict], pack_name: str = "custom_mobs") -> str
             if "minecraft:shooter" in bp_comps and "minecraft:behavior.ranged_attack" in bp_comps:
                 bp_comps.pop("minecraft:behavior.melee_attack", None)
 
-            # Ensure fly components AND behaviors when mob has fly animations,
-            # wing bones, or fly-related components.
-            _fly_keys = ("minecraft:can_fly", "minecraft:movement.fly",
-                         "minecraft:navigation.fly", "minecraft:flying_speed")
+            # Fly AI only for true fliers. Winged walkers (e.g. dragons) keep walk
+            # navigation so ground idle/walk work; fly clip uses client Molang.
+            # Explicit fly components in the spec override winged-walker detection.
             _mob_anim = mob.get("animation_json") or {}
             _mob_geo = mob.get("geometry_data") or {}
-            _has_fly = (
-                any("fly" in k for k in _mob_anim.get("animations", {}))
-                or bool(_get_wing_bone_names(_mob_geo))
-                or any(k in bp_comps for k in _fly_keys)
+            _has_fly_anim = any(
+                "fly" in k for k in _mob_anim.get("animations", {})
             )
-            if _has_fly:
+            _has_legs_geo = _has_leg_bones(_mob_geo)
+            _explicit_fly = _has_fly_components(bp_comps)
+            _winged_walker = _has_wing_bones(_mob_geo) and _has_legs_geo and not _explicit_fly
+            _should_fly = (
+                (_has_fly_anim or _has_wing_bones(_mob_geo) or _explicit_fly)
+                and not _winged_walker
+            )
+            if _should_fly:
                 bp_comps.pop("minecraft:movement.basic", None)
                 bp_comps.setdefault("minecraft:movement.fly", {})
                 bp_comps.pop("minecraft:navigation.walk", None)
-                bp_comps.setdefault("minecraft:navigation.fly", {
-                    "can_path_over_water": True,
-                    "can_path_over_lava": True,
-                })
+                _nav_fly = bp_comps.setdefault("minecraft:navigation.fly", {})
+                _nav_fly.setdefault("can_path_over_water", True)
+                _nav_fly.setdefault("can_path_over_lava", True)
+                _nav_fly.setdefault("can_path_from_air", True)
                 bp_comps.setdefault("minecraft:can_fly", {})
                 bp_comps.setdefault("minecraft:flying_speed", {"value": 0.4})
+                bp_comps["minecraft:physics"] = {"has_collision": True}
                 bp_comps.pop("minecraft:behavior.wander", None)
-                bp_comps["minecraft:behavior.float"] = {"priority": 0}
+                bp_comps.pop("minecraft:behavior.random_stroll", None)
+                bp_comps["minecraft:behavior.float"] = {"priority": 1}
                 if "minecraft:behavior.random_fly" not in bp_comps:
                     bp_comps["minecraft:behavior.random_fly"] = {
                         "priority": 5,
                         "avoid_damage_blocks": True,
                         "can_land_on_trees": False,
                         "xz_dist": 15,
-                        "y_dist": 5,
+                        "y_dist": 1,
                         "y_offset": 0,
                         "speed_multiplier": 1.0,
                     }
-                if "minecraft:behavior.random_stroll" not in bp_comps:
-                    bp_comps["minecraft:behavior.random_stroll"] = {
-                        "priority": 7,
-                        "speed_multiplier": 0.6,
-                    }
+                else:
+                    _rf = bp_comps.get("minecraft:behavior.random_fly")
+                    if isinstance(_rf, dict):
+                        if _rf.get("y_offset") == 3:
+                            _rf["y_offset"] = 0
+                        if _rf.get("y_dist") == 7:
+                            _rf["y_dist"] = 1
+            elif _winged_walker:
+                _strip_fly_ai_for_winged_walker(bp_comps)
 
             # Ensure targeting filter has required "subject" field
             _nat = bp_comps.get("minecraft:behavior.nearest_attackable_target", {})
@@ -636,30 +657,35 @@ async def build_mcworld(mobs: list[dict], pack_name: str = "custom_mobs") -> str
             else:
                 geometry_id = None
 
-            # Auto-generate fly animation if mob has wing bones but none
-            _wing_names = _get_wing_bone_names(geometry_data) if geometry_data else []
-            if _wing_names:
+            # Bone-based clips + LLM cleanup (same order as patch_resource_pack)
+            if geometry_data:
                 if not anim_json or not isinstance(anim_json, dict):
                     anim_json = {"format_version": "1.8.0", "animations": {}}
-                _anims = anim_json.setdefault("animations", {})
-                if not any("fly" in k.lower() for k in _anims):
-                    _fly_key = f"animation.{mob_name}.fly"
-                    _fly_bones = {}
-                    for _wn in _wing_names:
-                        if "left" in _wn.lower():
-                            _fly_bones[_wn] = {"rotation": {"0.0": [0, 0, -45], "0.5": [0, 0, 15], "1.0": [0, 0, -45]}}
-                        elif "right" in _wn.lower():
-                            _fly_bones[_wn] = {"rotation": {"0.0": [0, 0, 45], "0.5": [0, 0, -15], "1.0": [0, 0, 45]}}
-                        else:
-                            _fly_bones[_wn] = {"rotation": {"0.0": [0, 0, -30], "0.5": [0, 0, 30], "1.0": [0, 0, -30]}}
-                    _fly_bones["body"] = {"rotation": {"0.0": [2, 0, 0], "0.5": [-2, 0, 0], "1.0": [2, 0, 0]}}
-                    _anims[_fly_key] = {"loop": True, "animation_length": 1.0, "bones": _fly_bones}
+                _asp = {
+                    "short_name": mob_name,
+                    "geometry_json": geometry_data,
+                    "animation_json": anim_json,
+                }
+                _normalize_spec_animation_json(_asp)
+                _prune_fly_animations_without_wing_bones(_asp)
+                _ensure_fly_animation(_asp)
+                _ensure_swim_animation(_asp)
+                _ensure_walk_animation(_asp)
+                _ensure_idle_animation(_asp)
+                _augment_walk_animation_with_missing_legs(_asp)
+                anim_json = _asp["animation_json"]
 
             # Sanitize + build short-name map and remap controller references
             anim_short_map = {}
-            if anim_json and isinstance(anim_json, dict) and anim_json.get("animations"):
+            _anim_entries = (
+                anim_json.get("animations")
+                if isinstance(anim_json, dict)
+                else None
+            )
+            if anim_json and isinstance(anim_json, dict) and isinstance(_anim_entries, dict) and _anim_entries:
                 import copy as _cp
                 anim_json = _cp.deepcopy(anim_json)
+                _remap_animation_bones_to_geometry(anim_json, geometry_data)
                 _sanitize_animations(anim_json)
 
                 for anim_key in anim_json["animations"]:
@@ -683,10 +709,21 @@ async def build_mcworld(mobs: list[dict], pack_name: str = "custom_mobs") -> str
 
             # Client entity (with animation/controller refs wired in)
             if geometry_id:
+                mc_ent = entity_data.get("minecraft:entity", {})
+                comps = mc_ent.get("components", {})
+                _has_fly_anim_rp = bool(
+                    anim_json and isinstance(anim_json, dict)
+                    and any("fly" in k for k in (anim_json.get("animations") or {}))
+                )
+                _explicit_fly = _has_fly_components(comps) or _has_fly_anim_rp
+                _has_legs_mcp = _has_leg_bones(geometry_data)
+                _has_wings_mcp = _has_wing_bones(geometry_data)
+                _is_pure_flier = (_explicit_fly or _has_wings_mcp) and not _has_legs_mcp
                 client_entity = _build_client_entity(
                     identifier, mob_name, geometry_id,
                     animation_json=anim_json,
                     animation_controller_json=anim_ctrl_json,
+                    pure_flier=_is_pure_flier,
                 )
             else:
                 client_entity = generate_client_entity(identifier, mob_name, style)
@@ -833,6 +870,7 @@ def _build_client_entity(
     geometry_id: str,
     animation_json: dict = None,
     animation_controller_json: dict = None,
+    pure_flier: bool = False,
 ) -> dict:
     """Build a client entity definition with optional animation/controller refs."""
     desc = {
@@ -853,69 +891,30 @@ def _build_client_entity(
 
     # Register individual animation clips in the animations dict
     anim_refs = {}
-    if animation_json and isinstance(animation_json, dict) and animation_json.get("animations"):
+    _anims_block = (
+        animation_json.get("animations")
+        if isinstance(animation_json, dict)
+        else None
+    )
+    if animation_json and isinstance(animation_json, dict) and isinstance(_anims_block, dict) and _anims_block:
         for anim_key in animation_json["animations"]:
             short_key = _anim_short_key(anim_key, mob_name)
             anim_refs[short_key] = anim_key
 
-    # Also register animation controller shortname (keeps it loadable)
-    has_controller = (
-        animation_controller_json
-        and isinstance(animation_controller_json, dict)
-        and animation_controller_json.get("animation_controllers")
-    )
-    if has_controller:
-        for ctrl_key in animation_controller_json["animation_controllers"]:
-            short_ctrl_key = ctrl_key.replace(
-                f"controller.animation.{mob_name}.", ""
-            ).replace("controller.animation.", "")
-            anim_refs[short_ctrl_key] = ctrl_key
+    # Do NOT add animation controllers to anim_refs — Bedrock auto-initializes
+    # controllers listed there, which conflicts with scripts.animate and silences
+    # clips (matches backend.build.builders.patch_resource_pack).
 
     if anim_refs:
         desc["animations"] = anim_refs
 
-        has_walk = any(
-            k in ("walk", "walking", "run", "running")
-            for k, v in anim_refs.items()
-            if not v.startswith("controller.animation.")
-        )
-        has_fly = any(
-            k in ("fly", "flying")
-            for k, v in anim_refs.items()
-            if not v.startswith("controller.animation.")
-        )
-        animate_list = []
-        for short_key, full_id in anim_refs.items():
-            if full_id.startswith("controller.animation."):
-                continue
-            if short_key == "idle":
-                if has_fly and has_walk:
-                    cond = "query.is_on_ground && !query.is_moving"
-                elif has_fly:
-                    cond = "query.is_on_ground"
-                elif has_walk:
-                    cond = "!query.is_moving"
-                else:
-                    cond = "1.0"
-                animate_list.append({short_key: cond})
-            elif short_key in ("walk", "walking", "run", "running"):
-                if has_fly:
-                    animate_list.append({short_key: "query.is_on_ground && query.is_moving"})
-                else:
-                    animate_list.append({short_key: "query.is_moving"})
-            elif short_key in ("fly", "flying"):
-                animate_list.append({short_key: "!query.is_on_ground"})
-            elif short_key in ("attack", "attacking", "breath", "fire",
-                               "fire_breath", "fire_attack", "shoot",
-                               "bite", "charge"):
-                animate_list.append({short_key: "variable.attacking"})
-            else:
-                pass
+        animate_list = _build_scripts_animate_entries(anim_refs, pure_flier=pure_flier)
         if animate_list:
             desc["scripts"] = {"animate": animate_list}
+            _inject_locomotion_pre_animation(desc["scripts"])
 
     return {
-        "format_version": "1.10.0",
+        "format_version": "1.20.0",
         "minecraft:client_entity": {
             "description": desc
         }
