@@ -1,0 +1,812 @@
+{
+  "identifier": "custom:fire_dragon",
+  "display_name": "Fire Dragon",
+  "short_name": "fire_dragon",
+  "engine_min": [
+    1,
+    21,
+    0
+  ],
+  "hp": 62,
+  "damage": 11.0,
+  "speed": 0.42,
+  "collision_box": {
+    "width": 2.7,
+    "height": 3.4
+  },
+  "geometry": "geometry.custom_fire_dragon",
+  "render_controller": "controller.render.default",
+  "texture_hint": "fire dragon, bright red and black, glowing orange eyes, cracked scales with lava glow, huge wings with flame edges, sharp horns, powerful build",
+  "egg_base": "#A10000",
+  "egg_overlay": "#FF6800",
+  "scale": 2.1,
+  "color_rgb": [
+    162,
+    0,
+    0
+  ],
+  "geometry_json": {
+    "format_version": "1.12.0",
+    "minecraft:geometry": [
+      {
+        "description": {
+          "identifier": "geometry.custom_fire_dragon",
+          "texture_width": 256,
+          "texture_height": 64
+        },
+        "bones": [
+          {
+            "name": "body",
+            "pivot": [
+              0,
+              20,
+              0
+            ],
+            "cubes": [
+              {
+                "origin": [
+                  -8,
+                  10,
+                  -7
+                ],
+                "size": [
+                  16,
+                  10,
+                  18
+                ],
+                "uv": [
+                  0,
+                  0
+                ]
+              }
+            ]
+          },
+          {
+            "name": "head",
+            "parent": "body",
+            "pivot": [
+              0,
+              27,
+              -13
+            ],
+            "cubes": [
+              {
+                "origin": [
+                  -5,
+                  22,
+                  -21
+                ],
+                "size": [
+                  10,
+                  7,
+                  8
+                ],
+                "uv": [
+                  0,
+                  28
+                ]
+              },
+              {
+                "origin": [
+                  -2,
+                  28,
+                  -23
+                ],
+                "size": [
+                  4,
+                  2,
+                  2
+                ],
+                "uv": [
+                  40,
+                  28
+                ]
+              }
+            ]
+          },
+          {
+            "name": "wing_left",
+            "parent": "body",
+            "pivot": [
+              -12,
+              25,
+              1
+            ],
+            "cubes": [
+              {
+                "origin": [
+                  -21,
+                  26,
+                  -2
+                ],
+                "size": [
+                  14,
+                  1,
+                  12
+                ],
+                "uv": [
+                  60,
+                  0
+                ]
+              }
+            ]
+          },
+          {
+            "name": "wing_right",
+            "parent": "body",
+            "pivot": [
+              12,
+              25,
+              1
+            ],
+            "cubes": [
+              {
+                "origin": [
+                  7,
+                  26,
+                  -2
+                ],
+                "size": [
+                  14,
+                  1,
+                  12
+                ],
+                "uv": [
+                  60,
+                  14
+                ]
+              }
+            ]
+          },
+          {
+            "name": "tail",
+            "parent": "body",
+            "pivot": [
+              0,
+              18,
+              17
+            ],
+            "cubes": [
+              {
+                "origin": [
+                  -2,
+                  12,
+                  17
+                ],
+                "size": [
+                  4,
+                  4,
+                  18
+                ],
+                "uv": [
+                  88,
+                  0
+                ]
+              }
+            ]
+          },
+          {
+            "name": "leg0",
+            "parent": "body",
+            "pivot": [
+              -6,
+              10,
+              -5
+            ],
+            "cubes": [
+              {
+                "origin": [
+                  -7,
+                  0,
+                  -6
+                ],
+                "size": [
+                  3,
+                  10,
+                  5
+                ],
+                "uv": [
+                  88,
+                  22
+                ]
+              }
+            ]
+          },
+          {
+            "name": "leg1",
+            "parent": "body",
+            "pivot": [
+              6,
+              10,
+              -5
+            ],
+            "cubes": [
+              {
+                "origin": [
+                  4,
+                  0,
+                  -6
+                ],
+                "size": [
+                  3,
+                  10,
+                  5
+                ],
+                "uv": [
+                  100,
+                  22
+                ]
+              }
+            ]
+          },
+          {
+            "name": "leg2",
+            "parent": "body",
+            "pivot": [
+              -6,
+              10,
+              7
+            ],
+            "cubes": [
+              {
+                "origin": [
+                  -7,
+                  0,
+                  8
+                ],
+                "size": [
+                  3,
+                  10,
+                  5
+                ],
+                "uv": [
+                  88,
+                  32
+                ]
+              }
+            ]
+          },
+          {
+            "name": "leg3",
+            "parent": "body",
+            "pivot": [
+              6,
+              10,
+              7
+            ],
+            "cubes": [
+              {
+                "origin": [
+                  4,
+                  0,
+                  8
+                ],
+                "size": [
+                  3,
+                  10,
+                  5
+                ],
+                "uv": [
+                  100,
+                  32
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "texture_instructions": [
+    "cracked red and black scales",
+    "glowing lava veins",
+    "orange fire in mouth and eyes",
+    "huge wings edged in flame",
+    "spiked tail",
+    "horns and clawed feet"
+  ],
+  "loot_drops": [
+    {
+      "item": "minecraft:dragon_fireball",
+      "count_min": 2,
+      "count_max": 4,
+      "chance": 0.65
+    },
+    {
+      "item": "minecraft:nether_star",
+      "count_min": 1,
+      "count_max": 1,
+      "chance": 0.12
+    },
+    {
+      "item": "minecraft:gold_ingot",
+      "count_min": 5,
+      "count_max": 14,
+      "chance": 0.96
+    }
+  ],
+  "components": {
+    "minecraft:health": {
+      "value": 62,
+      "max": 62
+    },
+    "minecraft:movement": {
+      "value": 0.42
+    },
+    "minecraft:navigation.fly": {},
+    "minecraft:movement.fly": {},
+    "minecraft:can_fly": {},
+    "minecraft:fire_immune": {},
+    "minecraft:attack": {
+      "damage": 11
+    },
+    "minecraft:behavior.melee_attack": {
+      "priority": 3,
+      "speed_multiplier": 1.15
+    },
+    "minecraft:behavior.ranged_attack": {
+      "priority": 2,
+      "attack_interval_min": 1.1,
+      "attack_interval_max": 2.6,
+      "attack_radius": 20,
+      "burst_shots": 3,
+      "burst_interval": 0.25,
+      "speed_multiplier": 1.17
+    },
+    "minecraft:shooter": {
+      "def": "minecraft:dragon_fireball",
+      "sound": "random.fire"
+    },
+    "minecraft:behavior.nearest_attackable_target": {
+      "priority": 1,
+      "entity_types": [
+        {
+          "filters": {
+            "test": "is_family",
+            "value": "player"
+          },
+          "max_dist": 40
+        }
+      ]
+    },
+    "minecraft:loot": {
+      "table": "loot_tables/entities/fire_dragon.json"
+    }
+  },
+  "animation_controller": "controller.animation.my_first_mob",
+  "animation_json": {
+    "format_version": "1.8.0",
+    "animations": {
+      "animation.custom_dragon.fly": {
+        "loop": true,
+        "animation_length": 1,
+        "bones": {
+          "wing_left": {
+            "rotation": {
+              "0.0": [
+                0,
+                0,
+                -45
+              ],
+              "0.25": [
+                0,
+                0,
+                10
+              ],
+              "0.5": [
+                0,
+                0,
+                45
+              ],
+              "0.75": [
+                0,
+                0,
+                10
+              ],
+              "1.0": [
+                0,
+                0,
+                -45
+              ]
+            }
+          },
+          "wing_right": {
+            "rotation": {
+              "0.0": [
+                0,
+                0,
+                45
+              ],
+              "0.25": [
+                0,
+                0,
+                -10
+              ],
+              "0.5": [
+                0,
+                0,
+                -45
+              ],
+              "0.75": [
+                0,
+                0,
+                -10
+              ],
+              "1.0": [
+                0,
+                0,
+                45
+              ]
+            }
+          },
+          "tail": {
+            "rotation": {
+              "0.0": [
+                0,
+                0,
+                15
+              ],
+              "0.5": [
+                0,
+                0,
+                -15
+              ],
+              "1.0": [
+                0,
+                0,
+                15
+              ]
+            }
+          }
+        }
+      },
+      "animation.custom_dragon.attack": {
+        "loop": false,
+        "animation_length": 1,
+        "bones": {
+          "head": {
+            "rotation": {
+              "0.0": [
+                0,
+                0,
+                0
+              ],
+              "0.2": [
+                25,
+                0,
+                0
+              ],
+              "0.4": [
+                35,
+                0,
+                0
+              ],
+              "0.8": [
+                0,
+                0,
+                0
+              ],
+              "1.0": [
+                0,
+                0,
+                0
+              ]
+            }
+          },
+          "body": {
+            "rotation": {
+              "0.0": [
+                0,
+                0,
+                0
+              ],
+              "0.4": [
+                10,
+                0,
+                0
+              ],
+              "0.8": [
+                0,
+                0,
+                0
+              ],
+              "1.0": [
+                0,
+                0,
+                0
+              ]
+            }
+          },
+          "tail": {
+            "rotation": {
+              "0.0": [
+                0,
+                0,
+                0
+              ],
+              "0.4": [
+                0,
+                0,
+                10
+              ],
+              "0.8": [
+                0,
+                0,
+                0
+              ],
+              "1.0": [
+                0,
+                0,
+                0
+              ]
+            }
+          }
+        }
+      },
+      "animation.custom_dragon.idle": {
+        "loop": true,
+        "animation_length": 2,
+        "bones": {
+          "body": {
+            "rotation": {
+              "0.0": [
+                0,
+                0,
+                0
+              ],
+              "1.0": [
+                2,
+                0,
+                0
+              ],
+              "2.0": [
+                0,
+                0,
+                0
+              ]
+            }
+          },
+          "head": {
+            "rotation": {
+              "0.0": [
+                0,
+                0,
+                0
+              ],
+              "1.0": [
+                3,
+                0,
+                2
+              ],
+              "2.0": [
+                0,
+                0,
+                0
+              ]
+            }
+          },
+          "tail": {
+            "rotation": {
+              "0.0": [
+                0,
+                0,
+                10
+              ],
+              "1.0": [
+                0,
+                0,
+                -10
+              ],
+              "2.0": [
+                0,
+                0,
+                10
+              ]
+            }
+          }
+        }
+      }
+    }
+  },
+  "animation_controller_json": {
+    "format_version": "1.10.0",
+    "animation_controllers": {
+      "controller.animation.my_first_mob": {
+        "initial_state": "idle",
+        "states": {
+          "idle": {
+            "animations": [
+              "animation.custom_dragon.idle",
+              {
+                "animation.custom_dragon.attack": "(variable.attack_time > 0) || (variable.attacking > 0)"
+              }
+            ],
+            "transitions": [
+              {
+                "flying": "!query.is_on_ground"
+              },
+              {
+                "idle": "!query.is_moving && query.is_on_ground"
+              }
+            ]
+          },
+          "flying": {
+            "animations": [
+              "animation.custom_dragon.fly",
+              {
+                "animation.custom_dragon.attack": "(variable.attack_time > 0) || (variable.attacking > 0)"
+              }
+            ],
+            "transitions": [
+              {
+                "idle": "query.is_on_ground && !query.is_moving"
+              },
+              {
+                "flying": "!query.is_on_ground"
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  "_pipeline_meta": {
+    "category": "entity_logic_ai",
+    "detected_category": "entity_logic_ai",
+    "intent_profile": {
+      "category": "entity_logic_ai",
+      "signals": [
+        {
+          "name": "flying",
+          "confidence": 0.75,
+          "evidence": [
+            "fly",
+            "flying"
+          ]
+        },
+        {
+          "name": "ranged_attack",
+          "confidence": 0.75,
+          "evidence": [
+            "fire breath",
+            "fire breathing"
+          ]
+        }
+      ],
+      "requested_changes": [],
+      "constraints": {
+        "geometry_requested": false,
+        "preserve_behavior": false,
+        "preserve_geometry": false,
+        "preserve_texture": false,
+        "visual_requested": false
+      },
+      "style_keywords": [
+        "fire",
+        "dragon"
+      ],
+      "template_hint": "flying",
+      "intent_notes": [
+        "Dragon / wyvern style: use **four legs** (e.g. leg_front_left, leg_front_right, leg_back_left, leg_back_right), plus wing_left and wing_right on the body, head at negative Z. Place the **bottom of the feet / lowest body cube at Y=0** so the mob stands on the ground in-game (do not leave the whole rig floating above y=0)."
+      ]
+    },
+    "stages": [
+      {
+        "name": "intent_extraction",
+        "status": "completed",
+        "summary": "Structured prompt facts extracted",
+        "artifacts": {
+          "intent_profile": {
+            "category": "entity_logic_ai",
+            "signals": [
+              {
+                "name": "flying",
+                "confidence": 0.75,
+                "evidence": [
+                  "fly",
+                  "flying"
+                ]
+              },
+              {
+                "name": "ranged_attack",
+                "confidence": 0.75,
+                "evidence": [
+                  "fire breath",
+                  "fire breathing"
+                ]
+              }
+            ],
+            "requested_changes": [],
+            "constraints": {
+              "geometry_requested": false,
+              "preserve_behavior": false,
+              "preserve_geometry": false,
+              "preserve_texture": false,
+              "visual_requested": false
+            },
+            "style_keywords": [
+              "fire",
+              "dragon"
+            ],
+            "template_hint": "flying",
+            "intent_notes": [
+              "Dragon / wyvern style: use **four legs** (e.g. leg_front_left, leg_front_right, leg_back_left, leg_back_right), plus wing_left and wing_right on the body, head at negative Z. Place the **bottom of the feet / lowest body cube at Y=0** so the mob stands on the ground in-game (do not leave the whole rig floating above y=0)."
+            ]
+          }
+        }
+      },
+      {
+        "name": "mcp_context",
+        "status": "completed",
+        "summary": "Retrieved context from getModelTemplates",
+        "artifacts": {
+          "retrieval_ms": 1106,
+          "sources": [
+            "getModelTemplates"
+          ]
+        }
+      },
+      {
+        "name": "dynamic_context",
+        "status": "completed",
+        "summary": "Injected intent docs for flying, ranged_attack",
+        "artifacts": {
+          "intents": [
+            "flying",
+            "ranged_attack"
+          ],
+          "examples": [
+            "blaze"
+          ],
+          "chars": 2450
+        }
+      },
+      {
+        "name": "planning",
+        "status": "skipped",
+        "summary": "Planning disabled for this provider/prompt"
+      },
+      {
+        "name": "generation",
+        "status": "completed",
+        "summary": "Generated spec with provider openai",
+        "artifacts": {
+          "provider": "openai"
+        }
+      },
+      {
+        "name": "validation",
+        "status": "failed",
+        "summary": "MCP validation completed",
+        "artifacts": {
+          "valid": false,
+          "errors": [
+            "\"internalProcessingErrorSummary\": \"\"",
+            "\"title\": \"JSON Parse Error\"",
+            "\"title\": \"JSON Parse Error\"",
+            "\"defaultMessage\": \"Found 1 error in Min Engine Version check\"",
+            "\"errors\": 1"
+          ]
+        }
+      },
+      {
+        "name": "repair",
+        "status": "skipped",
+        "summary": "No retryable validation errors"
+      },
+      {
+        "name": "texture",
+        "status": "completed",
+        "summary": "Generated entity texture",
+        "artifacts": {
+          "generated": true
+        }
+      }
+    ],
+    "repair": {
+      "attempted": false,
+      "succeeded": false,
+      "errors": []
+    }
+  }
+}
