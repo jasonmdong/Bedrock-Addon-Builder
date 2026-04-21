@@ -31,3 +31,6 @@ test_mctools.py
 # API Keys
 API_KEY.py
 **/API_KEY.py
+
+# Claude / Cursor IDE (local)
+.claude/
