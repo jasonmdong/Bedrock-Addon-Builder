@@ -248,6 +248,8 @@ Two functions handle the two packs:
 
 7. **Build `scripts.animate` list** — Creates Molang-conditional animation
    playback entries (see [Animation Condition Logic](#animation-condition-logic-molang)).
+   For **stuck idle, stacked clips, invisible mob**, and related client bugs, see
+   [Client entity animation bugs](./CLIENT_ENTITY_ANIMATION_BUGS.md).
 
 8. **Set `client_desc["animations"]`** — The full `anim_refs` map becomes the
    client entity's animation reference table.
@@ -591,3 +593,22 @@ to keep behavior consistent across `.mcaddon` and `.mcworld` outputs.
 | `animation_json` echoed as placeholder string | Reset to `{}`, restore from input | `_sanitize_animation_fields()` |
 | Missing `subject: "other"` in attack filters | Auto-inject | Filter normalization |
 | `melee_attack` + `ranged_attack` (mob melees instead of shooting) | Remove melee | Builder conflict resolution |
+
+---
+
+## 3D Web Preview (frontend)
+
+In-browser preview uses **Three.js** (`frontend/js/viewer/viewer3d.js`): Bedrock
+`animation_json` clips are parsed into per-bone rotation/position/scale keyframes,
+interpolated by time, and applied to bone groups that match geometry bone names.
+
+| Behavior | Implementation |
+|----------|-----------------|
+| Sync after geometry loads | `syncAnimationPreviewForMob(spec)` — called from `mob-loaded` in `editor.js`, after `fetchAndDisplayGeometry` in `builder.js`, and after LLM geometry refresh in `llm.js`. |
+| Default clip | `pickDefaultAnimationClipKey()` — idle → walk → attack/breath → fly → first key. |
+| Bind pose | `captureBindPosesForViewer()` after `render3DGeometry`; `resetBonesToBindPose()` before loading a new clip so switching clips does not stack rotations. |
+| Timeline | Play / pause, reset, scrubber (drag does not fight playback), **Loop** checkbox, **Speed** 0.25–2×, **Idle / Walk / Attack / Fly** preset buttons (maps clip short names). |
+| Texture refresh | `refresh3DTexture` reapplies the current animation frame after the new texture loads. |
+
+**Exports:** `window.syncAnimationPreviewForMob`, `window.loadAnimation`,
+`window.pickDefaultAnimationClipKey`.

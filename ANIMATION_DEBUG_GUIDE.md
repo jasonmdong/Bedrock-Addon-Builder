@@ -64,6 +64,8 @@ print(f"[DEBUG] Raw LLM response:\n{response_text[:500]}")
 ```
 
 ### ❌ Issue: "Animation created but doesn't play"
+**Bedrock client entity / `scripts.animate` issues** (stuck idle, fly+walk stacking, invisible mob, weak walk blend): see **[docs/CLIENT_ENTITY_ANIMATION_BUGS.md](docs/CLIENT_ENTITY_ANIMATION_BUGS.md)**.
+
 **Likely causes (in order of probability):**
 
 1. **Animation controller not linked in entity.json**
