@@ -81,6 +81,13 @@ if not getattr(sys, '_llm_config_logged', False):
 # local dev flag toggle (need to fix server side sync still)
 LOCAL_LLM_DEV = True
 
+# BDS smoke-test configuration
+# Set BDS_PATH to the full path of bedrock_server (Linux) or
+# bedrock_server.exe (Windows) to enable Tier-3 runtime smoke tests.
+BDS_PATH = os.environ.get("BDS_PATH", "")
+BDS_TIMEOUT = int(os.environ.get("BDS_TIMEOUT", "60"))
+BDS_SMOKE_PORT = int(os.environ.get("BDS_SMOKE_PORT", "29132"))
+
 # World template candidates (now in data/templates/)
 DATA_DIR = BASE_DIR / "data"
 WORLD_TEMPLATE_BASES = [
@@ -115,24 +122,74 @@ FIELDS OVERVIEW:
 GEOMETRY RULES:
 - For VANILLA Minecraft mobs (ghast, cow, zombie, creeper, spider, chicken, pig, wolf, skeleton, blaze, enderman, slime, iron_golem, etc.), use the vanilla geometry reference and set geometry_json={}.
   Example: user says "turn it into a ghast" → geometry="geometry.ghast", geometry_json={}.
-- For NON-VANILLA creatures (elephant, dragon, dinosaur, unicorn, robot, etc.), you MUST generate custom geometry_json with an appropriate body shape. Do NOT use a cow/pig/zombie model as a substitute — build the right shape.
+- For NON-VANILLA creatures (anaconda, dragon, elephant, dinosaur, unicorn, robot, etc.), you MUST generate custom geometry_json with an appropriate body shape. Do NOT use a cow/pig/chicken model — build the correct shape for the creature.
   Example: user says "make an elephant" → geometry="geometry.custom_elephant", geometry_json={full custom geometry with large body, trunk, big ears, thick legs}.
 - When you generate custom geometry_json, use MINECRAFT PIXEL SCALE (16px = 1 block).
-  A cow body is size [14, 10, 8]. A chicken body is [6, 6, 6]. DO NOT use tiny fractional
-  sizes like [4.2, 3.5, 2.4] — those make invisible mobs. Legs MUST start at Y=0 or above.
-  Example format:
+  A cow body is size [14, 10, 8]. DO NOT use tiny fractional sizes like [4.2, 3.5, 2.4] — those make invisible mobs.
+  Legs and body segments MUST start at Y=0 or above.
+
+CRITICAL COORDINATE SYSTEM — MEMORIZE THIS:
+  - NEGATIVE Z (-Z) = FRONT of the mob (the face, eyes, mouth, attack direction).
+  - POSITIVE Z (+Z) = BACK of the mob (tail end, rump).
+  - NEGATIVE X (-X) = mob's LEFT side.   POSITIVE X (+X) = mob's RIGHT side.
+  - POSITIVE Y (+Y) = UP.
+  The head MUST be placed at the most NEGATIVE Z values. The tail at the most POSITIVE Z values.
+  Eyes and face textures map to the front face (-Z side) of the head cube.
+  A mob that shoots projectiles fires in the -Z direction from the head pivot.
+  WRONG: head cube at origin [0, 10, 8] (positive Z = backwards head = eyes face wrong way)
+  CORRECT: head cube at origin [-3, 10, -12] (negative Z = head faces front)
+
+BODY-TYPE RULES — match bones to the actual creature type:
+  QUADRUPED (wolf, horse, dog): body + head + leg0 + leg1 + leg2 + leg3
+    Head must be at negative Z from body (e.g. head pivot Z=-6 when body is centered at Z=0).
+  SERPENTINE / NO-LEGS (anaconda, snake, worm, eel): body segments + head, NO LEG BONES.
+    head → body0 → body1 → body2 → tail, with head at most negative Z and tail at most positive Z.
+  BIPED (zombie, skeleton, human): body + head + arm0 + arm1 + leg0 + leg1
+    Head sits above body at negative Z (same as quadruped).
+  FLYING DRAGON / WYVERN (user asked for a dragon-like creature): body + head + wing_left + wing_right (+ limbs if applicable)
+    Wings are wide, thin cubes: size [14, 1, 8]. Head must still be at negative Z.
+  WINGED QUADRUPED (flying dog, pegasus, winged wolf, "Clifford with wings"): body + head + leg0 + leg1 + leg2 + leg3 + wing_left + wing_right
+    Keep the normal quadruped proportions (upright torso, head forward at -Z, four legs under the body). Wings attach at shoulders/upper torso — NOT a long flat horizontal hull like a duck or serpent.
+    Do NOT name the geometry custom_dragon unless the user explicitly asked for a dragon.
+  INSECT / MULTI-LEG (spider, scorpion): body + head + multiple leg pairs
+    Head at negative Z, body behind it toward positive Z.
+
+NAMED REAL-WORLD ANIMAL + EXTRA ABILITIES:
+  If the user names a specific animal (dog, wolf, cat, horse, cow, Clifford, etc.) and also asks for flying, fire breath, or magic, KEEP THAT ANIMAL'S BODY PLAN.
+  Add abilities with components and (if needed) extra bones — e.g. flying dog → quadruped + wings, not a wyvern replacement.
+  If they say "big", "giant", "huge", or "Clifford", increase `scale` (typically 1.7–2.5) and enlarge body/head cube sizes and `collision_box` so it reads large in-game and in preview.
+
+SERPENTINE EXAMPLE — head at -Z (front), tail at +Z (back):
 {
   "format_version": "1.12.0",
   "minecraft:geometry": [
     {
       "description": { "identifier": "geometry.custom", "texture_width": 64, "texture_height": 64 },
       "bones": [
-        { "name": "body", "pivot": [0, 12, 0], "cubes": [ { "origin": [-5,8,-4], "size": [10,8,8], "uv": [0,0] } ] },
-        { "name": "head", "pivot": [0, 16, -4], "cubes": [ { "origin": [-3,16,-8], "size": [6,6,6], "uv": [0,16] } ] },
-        { "name": "leg0", "pivot": [-3, 8, 2], "cubes": [ { "origin": [-4,0,1], "size": [3,8,3], "uv": [0,32] } ] },
-        { "name": "leg1", "pivot": [3, 8, 2], "cubes": [ { "origin": [1,0,1], "size": [3,8,3], "uv": [12,32] } ] },
-        { "name": "leg2", "pivot": [-3, 8, -2], "cubes": [ { "origin": [-4,0,-3], "size": [3,8,3], "uv": [24,32] } ] },
-        { "name": "leg3", "pivot": [3, 8, -2], "cubes": [ { "origin": [1,0,-3], "size": [3,8,3], "uv": [36,32] } ] }
+        { "name": "root",  "pivot": [0, 0, 0] },
+        { "name": "body0", "parent": "root",  "pivot": [0, 5, -2],  "cubes": [ { "origin": [-4, 2, -8],  "size": [8, 6, 12], "uv": [0, 0]  } ] },
+        { "name": "head",  "parent": "body0", "pivot": [0, 8, -8],  "cubes": [ { "origin": [-3, 5, -16], "size": [6, 5, 8],  "uv": [0, 18] } ] },
+        { "name": "body1", "parent": "body0", "pivot": [0, 4,  4],  "cubes": [ { "origin": [-3, 2,  4],  "size": [6, 5, 10], "uv": [0, 29] } ] },
+        { "name": "body2", "parent": "body1", "pivot": [0, 3, 14],  "cubes": [ { "origin": [-3, 1, 14],  "size": [6, 4, 8],  "uv": [28, 29]} ] },
+        { "name": "tail",  "parent": "body2", "pivot": [0, 2, 22],  "cubes": [ { "origin": [-2, 1, 22],  "size": [4, 3, 8],  "uv": [0, 38] } ] }
+      ]
+    }
+  ]
+}
+
+QUADRUPED EXAMPLE — head at -Z (front), back legs at +Z:
+{
+  "format_version": "1.12.0",
+  "minecraft:geometry": [
+    {
+      "description": { "identifier": "geometry.custom", "texture_width": 64, "texture_height": 64 },
+      "bones": [
+        { "name": "body", "pivot": [0, 12, 0],  "cubes": [ { "origin": [-5,8,-4],  "size": [10,8,8], "uv": [0,0]  } ] },
+        { "name": "head", "pivot": [0, 16, -4], "cubes": [ { "origin": [-3,16,-10],"size": [6,6,6],  "uv": [0,16] } ] },
+        { "name": "leg0", "pivot": [-3, 8,  3], "cubes": [ { "origin": [-4,0, 2],  "size": [3,8,3],  "uv": [0,32] } ] },
+        { "name": "leg1", "pivot": [ 3, 8,  3], "cubes": [ { "origin": [ 1,0, 2],  "size": [3,8,3],  "uv": [12,32]} ] },
+        { "name": "leg2", "pivot": [-3, 8, -3], "cubes": [ { "origin": [-4,0,-4],  "size": [3,8,3],  "uv": [24,32]} ] },
+        { "name": "leg3", "pivot": [ 3, 8, -3], "cubes": [ { "origin": [ 1,0,-4],  "size": [3,8,3],  "uv": [36,32]} ] }
       ]
     }
   ]
@@ -151,7 +208,7 @@ CRITICAL RULES:
 1. ALWAYS return a single VALID JSON object matching the schema.
 2. Include ALL required keys: identifier, display_name, short_name, engine_min, hp, damage, speed, collision_box, geometry, geometry_json, render_controller, texture_hint, texture_instructions, color_rgb, egg_base, egg_overlay, scale, components.
 3. Use vanilla geometry for vanilla mobs. Generate custom geometry_json for non-vanilla creatures (elephant, dragon, etc.).
-4. BONE NAMING FOR ANIMATIONS: If you use custom geometry_json, use standard bone names: 'head', 'body', 'leg0', 'leg1', 'leg2', 'leg3'.
+4. BONE NAMING FOR ANIMATIONS: Match bone names to the creature type (see BODY-TYPE RULES above). Quadrupeds: head, body, leg0-leg3. Serpentine: head, body0, body1, body2, tail — NO leg bones. Pure dragons/wyverns: head, body, wing_left, wing_right (no legs if serpentine wyvern). Winged quadrupeds: head, body, leg0-leg3, wing_left, wing_right. Do NOT add leg bones to serpentine creatures.
 5. To delete a default component, set it to null in 'components'.
 6. For explosive behavior, you MUST have both "minecraft:behavior.swell" and "minecraft:explode".
 7. ALWAYS update color_rgb when changing the mob type — it controls the texture color.

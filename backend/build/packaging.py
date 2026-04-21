@@ -1,4 +1,5 @@
 """World creation and addon bundling utilities."""
+import hashlib
 import io
 import json
 import shutil
@@ -8,9 +9,35 @@ import zipfile
 from pathlib import Path
 from typing import Optional
 
-from backend.core.core import WORLD_TEMPLATE_BASES, BASE_DIR
-from backend.core.builders import make_uuid, safe_json_load, _manifest_version, make_png_rgba
+from backend.config.settings import WORLD_TEMPLATE_BASES, BASE_DIR
+from backend.build.builders import make_uuid, safe_json_load, _manifest_version, make_png_rgba
 from backend.schemas.spec_utils import validate_spec, default_spec
+
+# In-memory cache keyed by sha256(specs + textures). Max 20 entries (FIFO eviction).
+_mcworld_cache: dict[str, bytes] = {}
+_MCWORLD_CACHE_MAX = 20
+# Bump this when the ZIP rewrite logic changes so stale cached bytes are evicted.
+_MCWORLD_CACHE_VERSION = b"v4"
+
+
+def _mcworld_cache_key(specs: list[dict], res_root: Path) -> str:
+    h = hashlib.sha256()
+    h.update(_MCWORLD_CACHE_VERSION)
+    h.update(json.dumps(specs, sort_keys=True, default=str).encode())
+    # Include entity.json + animation files so cache invalidates when RP changes
+    for glob_pat in ("entity/*.entity.json", "animations/*.animation.json",
+                     "animation_controllers/*.animation_controllers.json"):
+        for f in sorted(res_root.glob(glob_pat)):
+            h.update(f.name.encode())
+            st = f.stat()
+            h.update(struct.pack("QQ", int(st.st_mtime * 1e6), st.st_size))
+    tex_dir = res_root / "textures" / "entity"
+    if tex_dir.exists():
+        for f in sorted(tex_dir.glob("*.png")):
+            h.update(f.name.encode())
+            st = f.stat()
+            h.update(struct.pack("QQ", int(st.st_mtime * 1e6), st.st_size))
+    return h.hexdigest()
 
 
 def zip_dir(src_dir: Path, out_zip: Path):
@@ -102,11 +129,22 @@ def create_mcworld(out_dir: Path,
 
     Translates our spec format to MCP's mob format, then calls its
     build_mcworld function which is known to produce visible mobs.
+    Result is cached by spec+texture hash so repeated downloads are O(1).
     """
     import asyncio
     import base64
     import copy
     import sys
+
+    main_spec_name = (specs[0] if specs else {}).get("short_name", "mob")
+
+    # O(1) fast path: serve from cache if spec+textures unchanged
+    cache_key = _mcworld_cache_key(specs, res_root)
+    if cache_key in _mcworld_cache:
+        mcworld_path = out_dir / f"{main_spec_name}.mcworld"
+        mcworld_path.write_bytes(_mcworld_cache[cache_key])
+        print(f"[WORLD] Cache hit — O(1) serve from memory")
+        return mcworld_path
 
     # Ensure MCP tools are importable
     mcp_root = Path(__file__).resolve().parents[2] / "MCP" / "mcp_server"
@@ -114,7 +152,7 @@ def create_mcworld(out_dir: Path,
         sys.path.insert(0, str(mcp_root))
 
     from tools.build_mcworld import build_mcworld as _mcp_build
-    from backend.core.builders import _fix_geometry_uv
+    from backend.build.builders import _fix_geometry_uv
 
     main_spec = specs[0] if specs else validate_spec(default_spec())
     safe_name = main_spec["short_name"]
@@ -128,7 +166,12 @@ def create_mcworld(out_dir: Path,
         # Read the actual behavior entity JSON from beh_root (written by
         # patch_behavior_pack with all LLM-generated components like
         # minecraft:shooter, minecraft:behavior.ranged_attack, etc.)
-        beh_entity_file = beh_root / "entities" / f"{mob_name}.json"
+        # patch_behavior_pack names files by short_name, not identifier suffix,
+        # so prefer short_name lookup and fall back to mob_name.
+        short_name = spec.get("short_name", mob_name)
+        beh_entity_file = beh_root / "entities" / f"{short_name}.json"
+        if not beh_entity_file.exists():
+            beh_entity_file = beh_root / "entities" / f"{mob_name}.json"
         if beh_entity_file.exists():
             entity_data = json.loads(beh_entity_file.read_bytes())
             print(f"[WORLD] Using LLM-generated behavior entity from {beh_entity_file.name}")
@@ -231,128 +274,116 @@ def create_mcworld(out_dir: Path,
     result = json.loads(result_json)
     mcworld_bytes = base64.b64decode(result["file_base64"])
 
-    # ── Replace entity files in the mcworld ────────────────────────────────
-    # MCP generates entity files from our mob data, but without the scripts block
-    # for animation controller wiring. We must use our pre-written entity files
-    # which have the correct geometry references and animation scripts.
-    mcworld_buffer = io.BytesIO(mcworld_bytes)
-    with zipfile.ZipFile(mcworld_buffer, "a", zipfile.ZIP_DEFLATED) as zf:
-        # Find the resource pack path in the mcworld
+    # ── Single-pass ZIP rewrite: replace MCP entity/geometry + inject animations ──
+    # Two-pass approach replaced with one traversal to halve the I/O cost.
+    src_zf_buf = io.BytesIO(mcworld_bytes)
+    with zipfile.ZipFile(src_zf_buf, "r") as src_zf:
+        all_entries = src_zf.namelist()
         res_pack_prefix = None
-        for item in zf.namelist():
-            if "resource_packs/" in item and "/manifest.json" in item:
-                res_pack_prefix = item.split("/manifest.json")[0]
-                break
-        
-        if res_pack_prefix:
-            # Remove ALL existing entity AND geometry files from the ZIP (MCP-generated ones).
-            # MCP assigns its own geometry identifiers, but our entity.json files reference
-            # geometry.{short_name} (set by patch_resource_pack). We must replace both to
-            # keep them in sync — otherwise the mob is invisible in-game.
-            entries_to_remove = [
-                entry for entry in zf.namelist()
-                if f"{res_pack_prefix}/entity/" in entry
-                or f"{res_pack_prefix}/models/entity/" in entry
-            ]
-            if entries_to_remove:
-                print(f"[WORLD] Removing {len(entries_to_remove)} MCP-generated entity/geometry files from ZIP")
-                # Rebuild ZIP without the MCP entity and geometry files
-                temp_buffer = io.BytesIO()
-                with zipfile.ZipFile(temp_buffer, "w", zipfile.ZIP_DEFLATED) as temp_zf:
-                    for entry in zf.namelist():
-                        if entry not in entries_to_remove:
-                            temp_zf.writestr(entry, zf.read(entry))
-                    
-                    # Write our entity files (correct geometry references + scripts block)
-                    ent_dir = res_root / "entity"
-                    if ent_dir.exists():
-                        for ent_file in sorted(ent_dir.glob("*.entity.json")):
-                            archive_path = f"{res_pack_prefix}/entity/{ent_file.name}"
-                            content = ent_file.read_text()
-                            temp_zf.writestr(archive_path, content)
-                            
-                            # Verify critical blocks
-                            if '"scripts"' in content:
-                                print(f"[WORLD] ✓ Using {ent_file.name} with scripts block")
-                            else:
-                                print(f"[WORLD] ✗ WARNING: {ent_file.name} missing scripts block")
-                    
-                    # Write our geometry files (correctly renamed identifiers matching entity.json)
-                    geo_dir = res_root / "models" / "entity"
-                    if geo_dir.exists():
-                        for geo_file in sorted(geo_dir.glob("*.geo.json")):
-                            archive_path = f"{res_pack_prefix}/models/entity/{geo_file.name}"
-                            temp_zf.writestr(archive_path, geo_file.read_text())
-                            print(f"[WORLD] ✓ Injected geometry {geo_file.name}")
-                
-                mcworld_bytes = temp_buffer.getvalue()
-        
-        # Continue with animation file injection using the updated buffer
-        mcworld_buffer = io.BytesIO(mcworld_bytes)
-    
-    # ── Inject animation and animation controller files ─────────────────────
-    mcworld_buffer = io.BytesIO(mcworld_bytes)
-    with zipfile.ZipFile(mcworld_buffer, "a", zipfile.ZIP_DEFLATED) as zf:
-        # Find the behavior pack path in the mcworld (format: behavior_packs/{name}_BP/)
         beh_pack_prefix = None
-        res_pack_prefix = None
-        for item in zf.namelist():
-            if "behavior_packs/" in item and "/manifest.json" in item:
-                beh_pack_prefix = item.split("/manifest.json")[0]
-                break
-        for item in zf.namelist():
-            if "resource_packs/" in item and "/manifest.json" in item:
+        for item in all_entries:
+            if res_pack_prefix is None and "resource_packs/" in item and "/manifest.json" in item:
                 res_pack_prefix = item.split("/manifest.json")[0]
+            if beh_pack_prefix is None and "behavior_packs/" in item and "/manifest.json" in item:
+                beh_pack_prefix = item.split("/manifest.json")[0]
+            if res_pack_prefix and beh_pack_prefix:
                 break
-        
-        # Inject animation files from res_root
-        if beh_pack_prefix:
-            anim_dir = beh_root / "animations"
-            if anim_dir.exists():
-                for anim_file in anim_dir.glob("*.json"):
-                    archive_path = f"{beh_pack_prefix}/animations/{anim_file.name}"
-                    zf.writestr(archive_path, anim_file.read_text())
-                    print(f"[WORLD] Injected {anim_file.name} into behavior pack")
-            
-            ac_dir = beh_root / "animation_controllers"
-            if ac_dir.exists():
-                for ac_file in ac_dir.glob("*.json"):
-                    archive_path = f"{beh_pack_prefix}/animation_controllers/{ac_file.name}"
-                    zf.writestr(archive_path, ac_file.read_text())
-                    print(f"[WORLD] Injected {ac_file.name} into behavior pack")
-        
-        # Inject animation files from res_root
+
+        # Entries MCP generated that we want to replace with our own
+        skip = set()
         if res_pack_prefix:
-            anim_dir = res_root / "animations"
-            if anim_dir.exists():
-                for anim_file in anim_dir.glob("*.animation.json"):
-                    archive_path = f"{res_pack_prefix}/animations/{anim_file.name}"
-                    zf.writestr(archive_path, anim_file.read_text())
-                    print(f"[WORLD] Injected {anim_file.name} into resource pack")
-            
-            ac_dir = res_root / "animation_controllers"
-            if ac_dir.exists():
-                for ac_file in ac_dir.glob("*.animation_controllers.json"):
-                    archive_path = f"{res_pack_prefix}/animation_controllers/{ac_file.name}"
-                    zf.writestr(archive_path, ac_file.read_text())
-                    print(f"[WORLD] Injected {ac_file.name} into resource pack")
-    
-    # Get the updated binary
-    mcworld_bytes = mcworld_buffer.getvalue()
+            skip = {
+                e for e in all_entries
+                if f"{res_pack_prefix}/entity/" in e
+                or f"{res_pack_prefix}/models/entity/" in e
+                or f"{res_pack_prefix}/animations/" in e
+                or f"{res_pack_prefix}/animation_controllers/" in e
+                or f"{res_pack_prefix}/textures/entity/" in e
+            }
+            if skip:
+                print(f"[WORLD] Replacing {len(skip)} MCP-generated entity/geo/anim/tex files")
+
+        out_buf = io.BytesIO()
+        with zipfile.ZipFile(out_buf, "w", zipfile.ZIP_DEFLATED) as dst_zf:
+            written_paths: set[str] = set()
+
+            def _write_entry(path: str, data: bytes | str) -> bool:
+                """Write entry only if path hasn't been written yet. Returns True if written."""
+                if path in written_paths:
+                    print(f"[WORLD] ⚠ dedup skipped duplicate: {path}")
+                    return False
+                dst_zf.writestr(path, data)
+                written_paths.add(path)
+                return True
+
+            # Copy everything MCP built, skipping files we will replace
+            for entry in src_zf.namelist():
+                if entry not in skip:
+                    _write_entry(entry, src_zf.read(entry))
+
+            # Inject our resource-pack entity + geometry files
+            if res_pack_prefix:
+                ent_dir = res_root / "entity"
+                if ent_dir.exists():
+                    for f in sorted(ent_dir.glob("*.entity.json")):
+                        content = f.read_text()
+                        if _write_entry(f"{res_pack_prefix}/entity/{f.name}", content):
+                            print(f"[WORLD] ✓ {'entity+scripts' if '\"scripts\"' in content else 'WARNING: no scripts'}: {f.name}")
+                geo_dir = res_root / "models" / "entity"
+                if geo_dir.exists():
+                    for f in sorted(geo_dir.glob("*.geo.json")):
+                        if _write_entry(f"{res_pack_prefix}/models/entity/{f.name}", f.read_text()):
+                            print(f"[WORLD] ✓ geometry: {f.name}")
+
+            # Inject behavior-pack animations + controllers
+            if beh_pack_prefix:
+                for sub, glob_pat in [("animations", "*.json"), ("animation_controllers", "*.json")]:
+                    d = beh_root / sub
+                    if d.exists():
+                        for f in d.glob(glob_pat):
+                            if _write_entry(f"{beh_pack_prefix}/{sub}/{f.name}", f.read_text()):
+                                print(f"[WORLD] ✓ BP {sub}: {f.name}")
+
+            # Inject resource-pack animations + controllers
+            if res_pack_prefix:
+                for sub, glob_pat in [("animations", "*.animation.json"),
+                                      ("animation_controllers", "*.animation_controllers.json")]:
+                    d = res_root / sub
+                    if d.exists():
+                        for f in d.glob(glob_pat):
+                            if _write_entry(f"{res_pack_prefix}/{sub}/{f.name}", f.read_text()):
+                                print(f"[WORLD] ✓ RP {sub}: {f.name}")
+
+            # Inject textures — MCP names its textures after the identifier suffix,
+            # but our entity.json references textures/entity/{short_name}.
+            # Without this injection the mob renders purple/black in-game.
+            if res_pack_prefix:
+                tex_dir = res_root / "textures" / "entity"
+                if tex_dir.exists():
+                    for f in tex_dir.glob("*.png"):
+                        if _write_entry(f"{res_pack_prefix}/textures/entity/{f.name}", f.read_bytes()):
+                            print(f"[WORLD] ✓ texture: {f.name}")
+
+    mcworld_bytes = out_buf.getvalue()
+
+    # Store in cache (FIFO eviction when full)
+    if len(_mcworld_cache) >= _MCWORLD_CACHE_MAX:
+        _mcworld_cache.pop(next(iter(_mcworld_cache)))
+    _mcworld_cache[cache_key] = mcworld_bytes
 
     mcworld_path = out_dir / f"{safe_name}.mcworld"
     mcworld_path.write_bytes(mcworld_bytes)
 
     for ident in result.get("mob_identifiers", []):
         print(f"[WORLD] Will auto-spawn {ident} near player on world load")
-    print(f"[WORLD] Generated .mcworld via MCP pipeline with injected animations")
+    print(f"[WORLD] Built .mcworld and cached for future O(1) downloads")
 
     return mcworld_path
 
 
 def build_addon(specs: list[dict], out_dir: Path, res_src: Optional[Path], beh_src: Optional[Path], textures_dir: Optional[Path] = None):
     """Build a complete addon bundle with resource and behavior packs."""
-    from backend.core.builders import patch_resource_pack, patch_behavior_pack
+    from backend.build.builders import patch_resource_pack, patch_behavior_pack
 
     work = Path(tempfile.mkdtemp(prefix="addon_"))
     logs = io.StringIO()
