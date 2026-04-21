@@ -20,10 +20,10 @@ from backend.schemas.spec_utils import (
 )
 from backend.llm.llm import llm_rewrite_spec, llm_generate_geometry
 from backend.llm.category_context import CATEGORIES, CATEGORY_LABELS
-from backend.core.packaging import build_addon
-from backend.core.builders import make_png_rgba
+from backend.build.packaging import build_addon
+from backend.build.builders import make_png_rgba
 
-from backend.core.core import BACKEND_DIR, COLOR_WORDS, SPECS_DIR, FRONTEND_DIR, LOCAL_LLM_DEV
+from backend.config.settings import BACKEND_DIR, COLOR_WORDS, SPECS_DIR, FRONTEND_DIR, LOCAL_LLM_DEV
 
 # In-memory cache for geometry fetched from GitHub (avoids burning rate limit)
 _geometry_cache: dict[str, dict] = {}
@@ -231,7 +231,7 @@ async def generate_mob_from_similar(payload: dict = Body(...)):
     
     try:
         from backend.mob_management import find_similar_mobs
-        from backend.core.core import DEFAULTS
+        from backend.config.settings import DEFAULTS
         
         # Find similar mobs for RAG context
         similar_mobs = find_similar_mobs(query, limit=5, min_similarity=0.3)
@@ -383,7 +383,7 @@ async def generate_complete_mob(payload: dict = Body(...)):
     
     try:
         from backend.mob_management import find_similar_mobs
-        from backend.core.core import DEFAULTS
+        from backend.config.settings import DEFAULTS
         
         # Create safe name from input
         safe_name = mob_name.lower().replace(" ", "_").replace("-", "_")
@@ -834,8 +834,8 @@ def get_mob(name: str):
 
 def get_mob_texture(name: str):
     """Get a mob's texture image."""
-    from backend.core.builders import make_png_rgba
-    from backend.core.core import COLOR_WORDS, SPECS_DIR
+    from backend.build.builders import make_png_rgba
+    from backend.config.settings import COLOR_WORDS, SPECS_DIR
     path = SPECS_DIR / f"{name}.png"
     if path.exists():
         return FileResponse(path, media_type="image/png")
@@ -848,7 +848,7 @@ def get_mob_texture(name: str):
 
 async def save_mob_texture(name: str, file: UploadFile = File(...)):
     """Save a custom texture for a mob."""
-    from backend.core.core import SPECS_DIR
+    from backend.config.settings import SPECS_DIR
     path = SPECS_DIR / f"{name}.png"
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("wb") as f:
@@ -897,7 +897,7 @@ def get_spec():
 
 def get_default_spec():
     """Return a clean blank spec using the built-in DEFAULTS."""
-    from backend.core.core import DEFAULTS
+    from backend.config.settings import DEFAULTS
     import copy
     return copy.deepcopy(DEFAULTS)
 
@@ -1369,12 +1369,12 @@ def validate_spec_endpoint(payload: dict = Body(...)):
 
 def index():
     """Serve the main HTML page."""
-    from backend.core.core import FRONTEND_DIR
+    from backend.config.settings import FRONTEND_DIR
     return HTMLResponse((FRONTEND_DIR / "index.html").read_text(encoding="utf-8"))
 
 def styles_css():
     """Serve the main stylesheet."""
-    from backend.core.core import FRONTEND_DIR
+    from backend.config.settings import FRONTEND_DIR
     path = FRONTEND_DIR / "styles.css"
     if not path.exists():
         # Fallback: minimal inline CSS if file missing
@@ -1383,12 +1383,16 @@ def styles_css():
 
 def serve_js(filename: str):
     """Serve JavaScript files from frontend/js directory."""
-    from backend.core.core import FRONTEND_DIR
-    # Sanitize filename to prevent directory traversal
-    safe_filename = filename.replace("..", "").replace("/", "").replace("\\", "")
-    path = FRONTEND_DIR / "js" / safe_filename
+    from backend.config.settings import FRONTEND_DIR
+    # Block directory traversal but allow subdirectory paths
+    if ".." in filename:
+        raise HTTPException(status_code=400, detail="Invalid path")
+    path = (FRONTEND_DIR / "js" / filename).resolve()
+    js_root = (FRONTEND_DIR / "js").resolve()
+    if not str(path).startswith(str(js_root)):
+        raise HTTPException(status_code=400, detail="Invalid path")
     if not path.exists() or not path.is_file():
-        raise HTTPException(status_code=404, detail=f"JS file not found: {safe_filename}")
+        raise HTTPException(status_code=404, detail=f"JS file not found: {filename}")
     return FileResponse(path, media_type="application/javascript")
 
 
@@ -1430,7 +1434,7 @@ async def api_build(resource: Optional[UploadFile] = File(None),
     import json
     import base64
     from backend.schemas.spec_utils import validate_spec
-    from backend.core.core import SPECS_DIR
+    from backend.config.settings import SPECS_DIR
     tmp = Path(tempfile.mkdtemp(prefix="http_"))
     try:
         specs_override = None
@@ -1487,19 +1491,14 @@ async def api_build(resource: Optional[UploadFile] = File(None),
 def download(name: str):
     """Download a previously built artifact."""
     root = Path(tempfile.gettempdir())
-    print(f"[DEBUG] Searching for {name} in {root}")
-    # Sort by mtime to find the newest one if multiple exist
-    candidates = []
-    for p in root.rglob(name):
-        if p.is_file():
-            candidates.append(p)
-
+    # Build always writes to mkdtemp(prefix="out_"), so search only one level deep
+    candidates = [p for p in root.glob(f"out_*/{name}") if p.is_file()]
     if candidates:
         newest = max(candidates, key=lambda x: x.stat().st_mtime)
-        print(f"[DEBUG] Found newest: {newest}")
+        print(f"[DEBUG] Serving: {newest}")
         return FileResponse(newest, filename=newest.name, media_type="application/zip")
 
-    print(f"[DEBUG] {name} not found")
+    print(f"[DEBUG] {name} not found in {root}/out_*/")
     return PlainTextResponse("Not found", status_code=404)
 
 
@@ -1509,6 +1508,9 @@ def download(name: str):
 
 # Add scripts/ to sys.path for launch_server_session imports
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "scripts"))
+
+# Background smoke-test jobs: job_id -> {status, result, mob_name}
+_smoke_jobs: dict = {}
 
 # Global state for the running server session
 _server_session_lock = threading.Lock()
@@ -1843,6 +1845,261 @@ async def check_published_mob(mob_name: str, username: str):
         "exists": exists,
         "full_name": f"{mob_name}_{username}"
     }
+
+
+def _run_smoke_job(job_id: str, mob_name: str, spec: dict) -> None:
+    """Background worker: builds an .mcaddon from spec and runs BDS smoke test."""
+    from backend.smoke.bds_runner import run_bds_smoke_sync
+    try:
+        _smoke_jobs[job_id]["status"] = "running"
+        out_dir = Path(tempfile.mkdtemp(prefix="smoke_"))
+        artifacts = build_addon([validate_spec(spec)], out_dir, None, None)
+        mcaddon_path = Path(artifacts.get("mcaddon") or artifacts.get("bundle_zip"))
+        result = run_bds_smoke_sync(mcaddon_path)
+        _smoke_jobs[job_id].update({
+            "status": "done",
+            "result": result.to_dict(),
+        })
+    except Exception as exc:
+        _smoke_jobs[job_id].update({"status": "error", "result": {"error": str(exc)}})
+
+
+def start_smoke_job(payload: dict = Body(...)):
+    """Start a background BDS smoke test for a given spec.
+
+    Accepts the full mob spec (including geometry_json, animation_json, etc.)
+    directly — no server-side save required. The spec is passed straight into
+    build_addon so all LLM-generated fields are used as-is.
+    """
+    spec = payload.get("spec")
+    if not spec or not isinstance(spec, dict):
+        raise HTTPException(status_code=400, detail="spec is required")
+    mob_name = spec.get("short_name") or "unknown"
+    job_id = uuid.uuid4().hex[:12]
+    _smoke_jobs[job_id] = {"status": "pending", "result": None, "mob_name": mob_name}
+    threading.Thread(
+        target=_run_smoke_job, args=(job_id, mob_name, spec), daemon=True
+    ).start()
+    return {"job_id": job_id, "mob_name": mob_name}
+
+
+def get_smoke_job_status(job_id: str):
+    """Return the current status of a background BDS smoke job."""
+    job = _smoke_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Smoke job '{job_id}' not found.")
+    return job
+
+
+# =====================================================================
+# Animation generation routes
+# =====================================================================
+
+def materialize_animation_json_for_preview(payload: dict = Body(...)):
+    """Merge procedural clips (walk, swim, fly, idle, bone remap, etc.) into animation_json.
+
+    The pack build adds these in ``patch_resource_pack``, but the saved mob spec often still
+    holds only LLM clips — so the 3D preview dropdown misses ``walk``. This endpoint returns
+    the same merged ``animation.json`` the builder would write, without persisting to the DB.
+    """
+    import copy
+    from backend.build import builders as _b
+
+    data = payload or {}
+    short_name = data.get("short_name") or data.get("mob_name") or "custom_mob"
+    geo = data.get("geometry_json")
+    raw_anim = data.get("animation_json")
+    if not isinstance(raw_anim, dict):
+        raw_anim = {"format_version": "1.8.0", "animations": {}}
+    else:
+        raw_anim = copy.deepcopy(raw_anim)
+    raw_anim.setdefault("format_version", "1.8.0")
+    if not isinstance(raw_anim.get("animations"), dict):
+        raw_anim["animations"] = {}
+
+    if not geo or not isinstance(geo, dict) or not geo.get("minecraft:geometry"):
+        return {"animation_json": raw_anim}
+
+    spec = {
+        "short_name": short_name,
+        "geometry_json": geo,
+        "animation_json": raw_anim,
+    }
+    _b._normalize_spec_animation_json(spec)
+    _b._prune_fly_animations_without_wing_bones(spec)
+    _b._ensure_fly_animation(spec)
+    _b._ensure_swim_animation(spec)
+    _b._ensure_walk_animation(spec)
+    _b._ensure_idle_animation(spec)
+    _b._remap_animation_bones_to_geometry(spec["animation_json"], geo)
+    _b._augment_walk_animation_with_missing_legs(spec)
+    _b._sanitize_animations(spec["animation_json"])
+    return {"animation_json": spec["animation_json"]}
+
+
+def llm_generate_animation_endpoint(payload: dict = Body(...)):
+    """Generate animation.json for a mob via LLM.
+
+    Request body:
+      - prompt (str): Animation instruction, e.g. "walking and idle animations"
+      - mob_name (str): Short name of the mob
+      - geometry_json (dict): The mob's geometry (used to extract bone names)
+      - current_animation (dict, optional): Existing animation to iterate on
+      - provider (str, optional): LLM provider
+      - api_key (str, optional): API key for cloud providers
+    """
+    from backend.llm.animation_generation import llm_generate_animation
+
+    data = payload or {}
+    prompt = data.get("prompt", "")
+    if not prompt or not str(prompt).strip():
+        raise HTTPException(status_code=400, detail="prompt is required")
+
+    mob_name = data.get("mob_name", "custom_mob")
+    geometry_json = data.get("geometry_json") or {}
+    current_animation = data.get("current_animation")
+    provider = data.get("provider")
+    api_key = data.get("api_key")
+
+    print(f"[ANIMATION-ROUTE] generate animation for mob={mob_name} provider={provider}")
+
+    try:
+        result = llm_generate_animation(
+            prompt=prompt,
+            geometry_json=geometry_json,
+            mob_name=mob_name,
+            current_animation=current_animation,
+            provider=provider,
+            api_key=api_key,
+        )
+    except Exception as exc:
+        print(f"[ANIMATION-ROUTE] error: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    return result
+
+
+def llm_generate_animation_controller_endpoint(payload: dict = Body(...)):
+    """Generate animation_controllers.json for a mob via LLM.
+
+    Request body:
+      - animation_json (dict): The mob's animation.json
+      - mob_name (str): Short name of the mob
+      - provider (str, optional): LLM provider
+      - api_key (str, optional): API key for cloud providers
+    """
+    from backend.llm.animation_controllers_generation import llm_generate_animation_controller
+
+    data = payload or {}
+    animation_json = data.get("animation_json")
+    if not animation_json or not isinstance(animation_json, dict):
+        raise HTTPException(status_code=400, detail="animation_json is required")
+
+    mob_name = data.get("mob_name", "custom_mob")
+    provider = data.get("provider")
+    api_key = data.get("api_key")
+
+    print(f"[ANIMATION-CONTROLLER-ROUTE] generate controller for mob={mob_name} provider={provider}")
+
+    try:
+        result = llm_generate_animation_controller(
+            animation_json=animation_json,
+            mob_name=mob_name,
+            provider=provider,
+            api_key=api_key,
+        )
+    except Exception as exc:
+        print(f"[ANIMATION-CONTROLLER-ROUTE] error: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    return result
+
+
+def llm_generate_animations_full_endpoint(payload: dict = Body(...)):
+    """Generate both animation.json and animation_controllers.json for a mob.
+
+    Convenience endpoint that generates both files in one call and saves them
+    to the spec if requested.
+
+    Request body:
+      - prompt (str): Animation instruction
+      - mob_name (str): Short name of the mob
+      - geometry_json (dict): The mob's geometry
+      - provider (str, optional): LLM provider
+      - api_key (str, optional): API key for cloud providers
+      - save (bool, optional): If true, saves animations to the mob's spec file
+    """
+    from backend.llm.animation_generation import llm_generate_animation, ensure_animations_and_controller
+    from backend.llm.animation_controllers_generation import llm_generate_animation_controller
+
+    data = payload or {}
+    prompt = data.get("prompt", "")
+    if not prompt or not str(prompt).strip():
+        raise HTTPException(status_code=400, detail="prompt is required")
+
+    mob_name = data.get("mob_name", "custom_mob")
+    geometry_json = data.get("geometry_json") or {}
+    provider = data.get("provider")
+    api_key = data.get("api_key")
+
+    print(f"[ANIMATION-FULL-ROUTE] generate full animations for mob={mob_name} provider={provider}")
+
+    try:
+        anim_result = llm_generate_animation(
+            prompt=prompt,
+            geometry_json=geometry_json,
+            mob_name=mob_name,
+            provider=provider,
+            api_key=api_key,
+        )
+        animation_json = anim_result.get("animation") if anim_result else None
+        animation_controller_json = None
+
+        if animation_json:
+            ac_result = llm_generate_animation_controller(
+                animation_json=animation_json,
+                mob_name=mob_name,
+                provider=provider,
+                api_key=api_key,
+            )
+            animation_controller_json = ac_result.get("animation_controller") if ac_result else None
+
+        animation_json, animation_controller_json, messages = ensure_animations_and_controller(
+            animation_json=animation_json,
+            animation_controller_json=animation_controller_json,
+            mob_name=mob_name,
+            geometry_json=geometry_json,
+            provider=provider,
+            api_key=api_key,
+        )
+    except Exception as exc:
+        print(f"[ANIMATION-FULL-ROUTE] error: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    result = {
+        "animation_json": animation_json,
+        "animation_controller_json": animation_controller_json,
+        "messages": messages,
+        "mob_name": mob_name,
+    }
+
+    if data.get("save") and mob_name:
+        try:
+            from backend.schemas.spec_utils import read_mob_spec, write_mob_spec
+            spec = read_mob_spec(mob_name) or {}
+            if animation_json:
+                spec["animation_json"] = animation_json
+            if animation_controller_json:
+                spec["animation_controller_json"] = animation_controller_json
+                spec["animation_controller"] = f"controller.animation.{mob_name}"
+            write_mob_spec(mob_name, spec)
+            result["saved"] = True
+            print(f"[ANIMATION-FULL-ROUTE] Saved animations for mob={mob_name}")
+        except Exception as save_err:
+            print(f"[ANIMATION-FULL-ROUTE] Warning: failed to save: {save_err}")
+            result["saved"] = False
+
+    return result
 
 
 VALID_TIERS = {"free", "creator", "pro"}

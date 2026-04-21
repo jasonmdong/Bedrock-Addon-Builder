@@ -59,6 +59,9 @@ from backend.api.routes import (
     llm_generate_animation_endpoint,
     llm_generate_animation_controller_endpoint,
     llm_generate_animations_full_endpoint,
+    materialize_animation_json_for_preview,
+    start_smoke_job,
+    get_smoke_job_status,
 )
 from backend.mctools.routes import (
     mctools_health,
@@ -153,10 +156,15 @@ app.post("/api/mctools/write-image")(mctools_write_image)
 app.post("/api/mctools/write-image-svg")(mctools_write_image_svg)
 app.post("/api/mctools/write-image-pixel-art")(mctools_write_image_pixel_art)
 
+# Smoke job routes
+app.post("/api/smoke/start")(start_smoke_job)
+app.get("/api/smoke/status/{job_id}")(get_smoke_job_status)
+
 # Animation generation routes
 app.post("/api/animation/generate")(llm_generate_animation_endpoint)
 app.post("/api/animation/controller/generate")(llm_generate_animation_controller_endpoint)
 app.post("/api/animation/generate-full")(llm_generate_animations_full_endpoint)
+app.post("/api/animation/materialize-preview")(materialize_animation_json_for_preview)
 
 # User account routes (demo subscription tier sync)
 app.post("/api/users")(upsert_user)
