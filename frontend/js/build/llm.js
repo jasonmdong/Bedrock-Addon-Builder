@@ -4,6 +4,7 @@
 
 const llmPrompt = document.getElementById("llm-prompt");
 const llmButton = document.getElementById("llm-run");
+const llmMockHistoryButton = document.getElementById("llm-run-mock");
 const llmProvider = document.getElementById("llm-provider");
 const llmCategory = document.getElementById("llm-category");
 const llmKey = document.getElementById("llm-key");
@@ -443,6 +444,62 @@ async function requestLlm() {
   }
 }
 
+/** Push one LLM history entry without calling the API—same quota + AI count as Ask LLM, for testing history and daily limits. */
+function mockPushLlmHistoryEntry() {
+  if (typeof canRunAiAction === "function") {
+    const quota = canRunAiAction();
+    if (!quota.ok && quota.reason === "daily_cap") {
+      setStatus(
+        `Daily AI limit reached (${quota.used}/${quota.cap} on this demo plan). Use "Change demo plan" for Pro (unlimited in POC) or try again tomorrow.`,
+        true
+      );
+      return;
+    }
+    if (!quota.ok && quota.reason === "no_user") {
+      setStatus("Select or create a user first.", true);
+      return;
+    }
+  }
+  const user = typeof getCurrentUser === "function" ? getCurrentUser() : null;
+  if (!user) {
+    setStatus("Select or create a user first.", true);
+    return;
+  }
+  let currentSpec;
+  try {
+    currentSpec = JSON.parse(editor.value);
+  } catch (err) {
+    setStatus("Invalid JSON in editor. Fix it before adding a mock history entry.", true);
+    return;
+  }
+  const instruction =
+    llmPrompt && llmPrompt.value.trim()
+      ? llmPrompt.value.trim()
+      : `Mock entry ${new Date().toLocaleTimeString()}`;
+  const mob = currentMobName || null;
+  const entry = {
+    ts: new Date().toISOString(),
+    prompt: instruction,
+    spec: JSON.parse(JSON.stringify(currentSpec)),
+  };
+  pushLlmStack(user, mob, entry);
+  renderLlmHistory();
+  if (typeof recordAiAction === "function") recordAiAction(user);
+  const n = readLlmStack(user, mob).length;
+  const histCap = _llmHistoryMax();
+  let aiPart = "";
+  if (typeof getAiUsageCountToday === "function" && typeof canRunAiAction === "function") {
+    const used = getAiUsageCountToday(user);
+    const q = canRunAiAction();
+    const cap = q.cap;
+    if (cap === -1) aiPart = ` AI prompts today: ${used} (unlimited).`;
+    else aiPart = ` AI prompts today: ${used}/${cap}.`;
+  }
+  setStatus(
+    `Mock entry added (${n}/${histCap} history kept).${aiPart} No API call.`
+  );
+}
+
 
 // ---------------------------------------------------------------------------
 // Progress steps during LLM request
@@ -758,6 +815,11 @@ function initLlmHandlers() {
   llmButton?.addEventListener("click", async (e) => {
     e.preventDefault();
     await requestLlm();
+  });
+
+  llmMockHistoryButton?.addEventListener("click", (e) => {
+    e.preventDefault();
+    mockPushLlmHistoryEntry();
   });
 
   llmProvider?.addEventListener("change", () => {
