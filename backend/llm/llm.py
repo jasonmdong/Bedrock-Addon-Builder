@@ -630,27 +630,44 @@ def _call_gemini(prompt: str, current: dict, api_key: Optional[str],
         raise RuntimeError("Provide GEMINI_API_KEY (either in the form field or as an environment variable).")
 
     print("[LLM] calling Gemini model", GEMINI_MODEL_NAME)
-    try:
-        client = genai.Client(api_key=key)
-        
-        response = client.models.generate_content(
-            model=GEMINI_MODEL_NAME,
-            contents=f"Current spec:\n{_prepare_spec_for_llm(current)}\n\nInstruction:\n{prompt.strip()}",
-            config={
-                "system_instruction": _get_full_system_prompt(prompt, current, category, mcp_context, dynamic_ctx, intent_profile)[0],
-                "response_mime_type": "application/json"
-            }
-        )
-        content = response.text
-        candidate = json.loads(content)
-        _sanitize_geometry_json(candidate)
-        if category == "entity_logic_ai":
-            candidate = sanitize_spec(candidate)
-            return validate_spec(candidate)
-        return candidate
-    except Exception as exc:
-        print(f"[LLM] Gemini request failed: {exc}")
-        raise RuntimeError(f"Gemini request failed: {exc}") from exc
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            client = genai.Client(api_key=key)
+
+            response = client.models.generate_content(
+                model=GEMINI_MODEL_NAME,
+                contents=f"Current spec:\n{_prepare_spec_for_llm(current)}\n\nInstruction:\n{prompt.strip()}",
+                config={
+                    "system_instruction": _get_full_system_prompt(category, mcp_context, dynamic_ctx, intent_profile),
+                    "response_mime_type": "application/json"
+                }
+            )
+            content = response.text
+            candidate = json.loads(content)
+            if isinstance(candidate, list):
+                if attempt < max_retries - 1:
+                    print(f"[LLM] Gemini returned a list on attempt {attempt + 1}/{max_retries}, retrying...")
+                    continue
+                raise RuntimeError(
+                    "Gemini returned a JSON array instead of an object after all retries."
+                )
+            _sanitize_geometry_json(candidate)
+            if category == "entity_logic_ai":
+                candidate = sanitize_spec(candidate)
+                return validate_spec(candidate)
+            return candidate
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            exc_str = str(exc)
+            if ("503" in exc_str or "UNAVAILABLE" in exc_str) and attempt < max_retries - 1:
+                wait = 2 ** attempt
+                print(f"[LLM] Gemini 503 on attempt {attempt + 1}/{max_retries}, retrying in {wait}s...")
+                time.sleep(wait)
+                continue
+            print(f"[LLM] Gemini request failed: {exc}")
+            raise RuntimeError(f"Gemini request failed: {exc}") from exc
 
 
 def _call_ollama(prompt: str, current: dict, api_key: Optional[str] = None,
@@ -1422,16 +1439,37 @@ def _call_geometry_gemini(user_content: str, api_key: str | None,
     key = api_key or os.environ.get("GEMINI_API_KEY")
     if not key:
         raise RuntimeError("Provide GEMINI_API_KEY")
-    client = genai.Client(api_key=key)
-    response = client.models.generate_content(
-        model=GEMINI_MODEL_NAME,
-        contents=user_content,
-        config={
-            "system_instruction": _get_geometry_system_prompt(mcp_template_text),
-            "response_mime_type": "application/json"
-        }
-    )
-    return json.loads(response.text)
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            client = genai.Client(api_key=key)
+            response = client.models.generate_content(
+                model=GEMINI_MODEL_NAME,
+                contents=user_content,
+                config={
+                    "system_instruction": _get_geometry_system_prompt(mcp_template_text),
+                    "response_mime_type": "application/json"
+                }
+            )
+            result = json.loads(response.text)
+            if isinstance(result, list):
+                if attempt < max_retries - 1:
+                    print(f"[LLM] Gemini geometry returned a list on attempt {attempt + 1}/{max_retries}, retrying...")
+                    continue
+                raise RuntimeError(
+                    "Gemini returned a JSON array instead of an object after all retries."
+                )
+            return result
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            exc_str = str(exc)
+            if ("503" in exc_str or "UNAVAILABLE" in exc_str) and attempt < max_retries - 1:
+                wait = 2 ** attempt
+                print(f"[LLM] Gemini geometry 503 on attempt {attempt + 1}/{max_retries}, retrying in {wait}s...")
+                time.sleep(wait)
+                continue
+            raise RuntimeError(f"Gemini geometry request failed: {exc}") from exc
 
 
 def _call_geometry_claude(user_content: str, api_key: str | None,

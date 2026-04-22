@@ -1897,6 +1897,40 @@ async def publish_mob_to_database(payload: dict = Body(...)):
         conn.close()
 
 
+async def get_published_mob_texture(mob_name: str):
+    """
+    GET /api/market/{mob_name}/texture — Serve the stored texture PNG for a published mob.
+    Returns the raw PNG bytes, or a 1x1 transparent PNG if no texture is stored.
+    """
+    import os, base64
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+
+    connection_string = os.environ.get(
+        "DATABASE_URL",
+        "postgresql://neondb_owner:npg_gyK7U5GZOhDS@ep-restless-scene-a876hfcf-pooler.eastus2.azure.neon.tech/neondb?sslmode=require&channel_binding=require",
+    )
+    conn = psycopg2.connect(connection_string)
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            "SELECT texture_png FROM published_mobs WHERE short_name = %s ORDER BY published_at DESC LIMIT 1",
+            (mob_name,),
+        )
+        row = cur.fetchone()
+    finally:
+        conn.close()
+
+    if row and row["texture_png"]:
+        return Response(content=bytes(row["texture_png"]), media_type="image/png")
+
+    # Fallback: 1×1 transparent PNG
+    TRANSPARENT_1X1 = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+    )
+    return Response(content=TRANSPARENT_1X1, media_type="image/png")
+
+
 async def check_published_mob(mob_name: str, username: str):
     """
     GET /api/publish/check/{mob_name}/{username} — Check if a mob is already published.
