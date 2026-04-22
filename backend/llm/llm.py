@@ -7,7 +7,7 @@ from typing import Optional
 
 from backend.core.core import LLM_MODEL_NAME, DEEPSEEK_MODEL_NAME, GEMINI_MODEL_NAME, CLAUDE_MODEL_NAME, OLLAMA_MODEL_NAME, OLLAMA_BASE_URL, DEFAULT_LLM_PROVIDER, LLM_SYSTEM_PROMPT, BACKEND_DIR
 from backend.schemas.schemas_loader import SPEC_SCHEMA
-from backend.schemas.spec_utils import validate_spec, SpecValidationError
+from backend.schemas.spec_utils import validate_spec, sanitize_spec, SpecValidationError
 from backend.llm.category_context import (
     CATEGORY_CONTEXT, CATEGORY_SCHEMAS, VANILLA_REF, detect_category,
 )
@@ -154,10 +154,16 @@ _VANILLA_GEOMETRY_NAMES = {
 
 
 def _is_vanilla_mob(display_name: str, geometry_ref: str) -> bool:
-    """Check if the mob can be resolved from vanilla Bedrock geometry."""
+    """Check if the mob can be resolved from vanilla Bedrock geometry.
+    
+    Only return True if the display_name matches the geometry_ref (same vanilla animal).
+    This prevents skipping auto-fetch for renamed mobs like "Elephant" with "geometry.cow".
+    """
     name = display_name.lower().replace(" ", "_")
     geo_name = geometry_ref.replace("geometry.", "").lower()
-    return name in _VANILLA_GEOMETRY_NAMES or geo_name in _VANILLA_GEOMETRY_NAMES
+    # Only skip auto-fetch if display_name and geometry match AND both are vanilla
+    # (e.g., "Cow" + "geometry.cow" is vanilla, but "Elephant" + "geometry.cow" is not)
+    return name == geo_name and name in _VANILLA_GEOMETRY_NAMES
 
 
 
@@ -187,6 +193,9 @@ def _auto_fetch_geometry(
 
     print(f"[LLM-GEOFETCH] Non-vanilla mob '{display_name}' (geometry={geometry_ref}) has no geometry, generating via LLM...")
     try:
+        from backend.llm.animation_generation import llm_generate_animation
+        from backend.llm.animation_controllers_generation import llm_generate_animation_controller
+        
         short_name = output_spec.get("short_name", "custom_mob")
         geo_prompt = f"Create a {display_name} mob geometry"
         geo_result = llm_generate_geometry(
@@ -210,6 +219,48 @@ def _auto_fetch_geometry(
                 if geo_id:
                     output_spec["geometry"] = geo_id
             print(f"[LLM] Auto-generated geometry for '{display_name}'")
+            
+            # Auto-generate animations for the geometry
+            try:
+                anim_result = llm_generate_animation(
+                    prompt=f"Create animations for: {geo_prompt}",
+                    geometry_json=clean_geo,
+                    mob_name=short_name,
+                    provider=provider_key,
+                    api_key=api_key,
+                )
+                animation = anim_result.get("animation")
+                if animation:
+                    output_spec["animation_json"] = animation
+                    print(f"[LLM-GEOFETCH] Auto-generated animations with {anim_result.get('bone_count', '?')} bones")
+                    print(f"[LLM-GEOFETCH] animation_json saved to spec: {json.dumps(animation, indent=2)[:500]}...")
+                    
+                    # Auto-generate animation controller
+                    try:
+                        ac_result = llm_generate_animation_controller(
+                            animation_json=animation,
+                            mob_name=short_name,
+                            provider=provider_key,
+                            api_key=api_key,
+                        )
+                        animation_controller = ac_result.get("animation_controller")
+                        if animation_controller:
+                            output_spec["animation_controller_json"] = animation_controller
+                            output_spec["animation_controller"] = f"controller.animation.{short_name}"
+                            print(f"[LLM-GEOFETCH] Auto-generated animation controller")
+                            print(f"[LLM-GEOFETCH] animation_controller_json saved to spec: {json.dumps(animation_controller, indent=2)[:500]}...")
+                            print(f"[LLM-GEOFETCH] animation_controller (id) saved to spec: {output_spec['animation_controller']}")
+                        else:
+                            print(f"[LLM-GEOFETCH] Warning: animation_controller is None or empty")
+                    except Exception as ac_err:
+                        print(f"[LLM-GEOFETCH] Warning: failed to generate controller: {ac_err}")
+                else:
+                    print(f"[LLM-GEOFETCH] Warning: animation generation returned None or empty")
+                    print(f"[LLM-GEOFETCH] anim_result keys: {list(anim_result.keys()) if anim_result else 'None'}")
+            except Exception as anim_err:
+                print(f"[LLM-GEOFETCH] Warning: animation generation failed: {anim_err}")
+                import traceback
+                traceback.print_exc()
     except Exception as e:
         log.warning("[LLM] Auto geometry generation failed: %s", e)
         print(f"[LLM] Auto geometry generation failed for '{display_name}': {e}")
@@ -351,6 +402,7 @@ def _call_openai(prompt: str, current: dict, api_key: Optional[str],
         raise RuntimeError(f"LLM returned invalid JSON: {exc}") from exc
     _sanitize_geometry_json(candidate)
     if category == "entity_logic_ai":
+        candidate = sanitize_spec(candidate)
         return validate_spec(candidate)
     return candidate
 
@@ -423,6 +475,7 @@ def _call_gemini(prompt: str, current: dict, api_key: Optional[str],
         candidate = json.loads(content)
         _sanitize_geometry_json(candidate)
         if category == "entity_logic_ai":
+            candidate = sanitize_spec(candidate)
             return validate_spec(candidate)
         return candidate
     except Exception as exc:
@@ -488,7 +541,8 @@ def _call_claude(prompt: str, current: dict, api_key: Optional[str],
                  category: str = "entity_logic_ai",
                  mcp_context: Optional[MCPContext] = None,
                  dynamic_ctx: Optional[DynamicContext] = None,
-                 intent_profile: Optional[PromptIntentProfile] = None) -> dict:
+                 intent_profile: Optional[PromptIntentProfile] = None,
+                 model_name: Optional[str] = None) -> dict:
     """Call Anthropic Claude to rewrite a spec based on a user prompt."""
     if anthropic is None:
         raise RuntimeError("anthropic package is not installed.")
@@ -496,12 +550,13 @@ def _call_claude(prompt: str, current: dict, api_key: Optional[str],
     if not key:
         raise RuntimeError("Provide ANTHROPIC_API_KEY (either in the form field or as an environment variable).")
 
-    print("[LLM] calling Claude model", CLAUDE_MODEL_NAME)
+    model_to_use = model_name or CLAUDE_MODEL_NAME
+    print("[LLM] calling Claude model", model_to_use)
     try:
         client = anthropic.Anthropic(api_key=key)
         
         response = client.messages.create(
-            model=CLAUDE_MODEL_NAME,
+            model=model_to_use,
             max_tokens=2048,
             system=_get_full_system_prompt(category, mcp_context, dynamic_ctx, intent_profile),
             messages=[
@@ -519,6 +574,10 @@ def _call_claude(prompt: str, current: dict, api_key: Optional[str],
             
         candidate = json.loads(content)
         _sanitize_geometry_json(candidate)
+        candidate = sanitize_spec(candidate)
+        candidate = sanitize_spec(candidate)
+        candidate = sanitize_spec(candidate)
+        candidate = sanitize_spec(candidate)
         if category == "entity_logic_ai":
             return validate_spec(candidate)
         return candidate
@@ -539,8 +598,10 @@ def _call_provider(
         return _call_deepseek(prompt, current, api_key, category, mcp_context, dynamic_ctx, intent_profile)
     elif provider_key == "gemini":
         return _call_gemini(prompt, current, api_key, category, mcp_context, dynamic_ctx, intent_profile)
-    elif provider_key == "claude":
-        return _call_claude(prompt, current, api_key, category, mcp_context, dynamic_ctx, intent_profile)
+    elif provider_key == "claude" or provider_key == "claude-sonnet":
+        return _call_claude(prompt, current, api_key, category, mcp_context, dynamic_ctx, intent_profile, model_name="claude-sonnet-4-20250514")
+    elif provider_key == "claude-opus":
+        return _call_claude(prompt, current, api_key, category, mcp_context, dynamic_ctx, intent_profile, model_name="claude-opus-4-20250514")
     elif provider_key == "ollama":
         return _call_ollama(prompt, current, api_key, category, mcp_context, dynamic_ctx, intent_profile)
     else:
@@ -705,6 +766,7 @@ def llm_rewrite_spec(prompt: str, current: dict, provider: str,
                 try:
                     output_spec = apply_plan(plan, current)
                     if category == "entity_logic_ai":
+                        output_spec = sanitize_spec(output_spec)
                         output_spec = validate_spec(output_spec)
                     orchestrator_meta = {
                         "plan": plan.to_dict(),
@@ -977,9 +1039,9 @@ Output format is a valid minecraft:geometry JSON object. The structure must be:
         "identifier": "geometry.custom_mob",
         "texture_width": 64,
         "texture_height": 64,
-        "visible_bounds_width": 2,
-        "visible_bounds_height": 2,
-        "visible_bounds_offset": [0, 1, 0]
+        "visible_bounds_width": 6,
+        "visible_bounds_height": 6,
+        "visible_bounds_offset": [0, 2, 0]
       },
       "bones": [
         {
@@ -1086,8 +1148,10 @@ def llm_generate_geometry(
             output = _call_geometry_deepseek(user_content, api_key, mcp_template_text)
         elif provider_key == "gemini":
             output = _call_geometry_gemini(user_content, api_key, mcp_template_text)
-        elif provider_key == "claude":
-            output = _call_geometry_claude(user_content, api_key, mcp_template_text)
+        elif provider_key == "claude" or provider_key == "claude-sonnet":
+            output = _call_geometry_claude(user_content, api_key, mcp_template_text, model_name="claude-sonnet-4-20250514")
+        elif provider_key == "claude-opus":
+            output = _call_geometry_claude(user_content, api_key, mcp_template_text, model_name="claude-opus-4-20250514")
         elif provider_key == "ollama":
             output = _call_geometry_ollama(user_content, api_key, mcp_template_text)
         else:
@@ -1194,7 +1258,8 @@ def _call_geometry_gemini(user_content: str, api_key: str | None,
 
 
 def _call_geometry_claude(user_content: str, api_key: str | None,
-                          mcp_template_text: str = "") -> dict:
+                          mcp_template_text: str = "",
+                          model_name: Optional[str] = None) -> dict:
     """Call Claude to generate geometry."""
     if anthropic is None:
         raise RuntimeError("anthropic package not installed")
@@ -1202,8 +1267,10 @@ def _call_geometry_claude(user_content: str, api_key: str | None,
     if not key:
         raise RuntimeError("Provide ANTHROPIC_API_KEY")
     client = anthropic.Anthropic(api_key=key)
+    model_to_use = model_name or CLAUDE_MODEL_NAME
+    print("[LLM] calling Claude model for geometry", model_to_use)
     response = client.messages.create(
-        model=CLAUDE_MODEL_NAME,
+        model=model_to_use,
         max_tokens=4096,
         system=_get_geometry_system_prompt(mcp_template_text),
         messages=[{"role": "user", "content": user_content}]

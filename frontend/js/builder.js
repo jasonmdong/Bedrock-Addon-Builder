@@ -187,9 +187,9 @@ async function fetchAndDisplayGeometry(geometryMobName, textureMobName = null) {
       geometryUrl.href = "#";
       geometryUrl.textContent = "No source available";
       geometryContainer.style.display = "block";
-      if (viewer3D && viewer3D.mesh) {
-        viewer3D.scene.remove(viewer3D.mesh);
-        viewer3D.mesh = null;
+      if (window.viewer3D && window.viewer3D.mesh) {
+        window.viewer3D.scene.remove(window.viewer3D.mesh);
+        window.viewer3D.mesh = null;
       }
       return;
     }
@@ -235,9 +235,9 @@ async function fetchAndDisplayGeometry(geometryMobName, textureMobName = null) {
     geometryUrl.textContent = "No source available";
     geometryContainer.style.display = "block";
     // Clear any previous 3D model
-    if (viewer3D && viewer3D.mesh) {
-      viewer3D.scene.remove(viewer3D.mesh);
-      viewer3D.mesh = null;
+    if (window.viewer3D && window.viewer3D.mesh) {
+      window.viewer3D.scene.remove(window.viewer3D.mesh);
+      window.viewer3D.mesh = null;
     }
   }
 }
@@ -344,6 +344,8 @@ function initFileUploadLabels() {
       resourceFileName.style.color = 'var(--primary)';
       resourceFileName.style.fontWeight = 'bold';
     }
+    const clearBtn = document.getElementById('resource-clear');
+    if (clearBtn) clearBtn.style.display = file ? '' : 'none';
   });
 
   behaviorInput?.addEventListener('change', (e) => {
@@ -353,7 +355,23 @@ function initFileUploadLabels() {
       behaviorFileName.style.color = 'var(--primary)';
       behaviorFileName.style.fontWeight = 'bold';
     }
+    const clearBtn = document.getElementById('behavior-clear');
+    if (clearBtn) clearBtn.style.display = file ? '' : 'none';
   });
+}
+
+// Clear an uploaded resource or behavior pack
+function clearPackUpload(id) {
+  const input = document.getElementById(id);
+  const label = document.getElementById(id + '-file-name');
+  const clearBtn = document.getElementById(id + '-clear');
+  if (input) input.value = '';
+  if (label) {
+    label.textContent = 'Choose file...';
+    label.style.color = '';
+    label.style.fontWeight = '';
+  }
+  if (clearBtn) clearBtn.style.display = 'none';
 }
 
 function initTemplateSelect() {

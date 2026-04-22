@@ -1,0 +1,26 @@
+{
+  "prompt": "make a giraffe with a tall body and long neck",
+  "current_spec": {
+    "identifier": "test:giraffe",
+    "display_name": "Giraffe",
+    "short_name": "giraffe",
+    "hp": 20,
+    "damage": 4,
+    "speed": 0.3,
+    "collision_box": {"width": 0.9, "height": 1.4},
+    "geometry": "geometry.giraffe",
+    "render_controller": "controller.render.default",
+    "texture_hint": "yellow and brown stripes",
+    "egg_base": "#FFD700",
+    "egg_overlay": "#FFA500",
+    "scale": 1.0,
+    "color_rgb": [255, 215, 0],
+    "geometry_json": {},
+    "animation_json": {},
+    "animation_controller_json": {},
+    "animation_controller": "",
+    "texture_instructions": [],
+    "loot_drops": []
+  },
+  "provider": "ollama"
+}

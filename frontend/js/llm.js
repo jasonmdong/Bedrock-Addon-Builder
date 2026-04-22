@@ -379,6 +379,11 @@ async function requestLlm() {
       }
     }
   }
+
+  // Refresh animation buttons if animation_json changed
+  if (typeof loadAnimationsFromSpec === "function") {
+    loadAnimationsFromSpec(payload.spec.animation_json || null);
+  }
   
   // Build status message with MCP + orchestrator info
   let statusMsg = `${provider} updated the spec at ${new Date().toLocaleTimeString()}.`;

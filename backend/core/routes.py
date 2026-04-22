@@ -955,6 +955,162 @@ def llm_spec_editor(payload: dict = Body(...)):
     texture_b64 = updated.pop("_texture_b64", "") if updated else ""
     orchestrator_meta = updated.pop("_orchestrator_meta", None) if updated else None
     pipeline_meta = updated.pop("_pipeline_meta", None) if updated else None
+    
+    # Auto-generate animations for the spec
+    mob_name = updated.get("short_name", "custom_mob") if updated else "custom_mob"
+    geometry_json = updated.get("geometry_json", {}) if updated else {}
+    
+    # Normalize geometry to modern format if needed (converts geometry.X keys to minecraft:geometry array)
+    if geometry_json and isinstance(geometry_json, dict):
+        geometry_json = _normalize_geometry(geometry_json)
+        updated["geometry_json"] = geometry_json  # Update with normalized version
+        print(f"[LLM-SPEC-EDITOR] Normalized geometry, keys now: {list(geometry_json.keys())}")
+    
+    # Check if geometry has actual content (minecraft:geometry key exists)
+    has_geometry = geometry_json and isinstance(geometry_json, dict) and "minecraft:geometry" in geometry_json
+    
+    if has_geometry:
+        print(f"[LLM-SPEC-EDITOR] Auto-generating animations for {mob_name}")
+        from backend.llm.animation_generation import llm_generate_animation, ensure_animations_and_controller
+        from backend.llm.animation_controllers_generation import llm_generate_animation_controller
+        
+        try:
+            anim_result = llm_generate_animation(
+                prompt=f"Create animations for: {prompt}",
+                geometry_json=geometry_json,
+                mob_name=mob_name,
+                provider=provider,
+                api_key=api_key,
+            )
+            animation_json = anim_result.get("animation")
+            animation_controller_json = None
+            
+            if animation_json:
+                # Auto-generate animation controller
+                print(f"[LLM-SPEC-EDITOR] Auto-generating animation controller for {mob_name}")
+                try:
+                    ac_result = llm_generate_animation_controller(
+                        animation_json=animation_json,
+                        mob_name=mob_name,
+                        provider=provider,
+                        api_key=api_key,
+                    )
+                    animation_controller_json = ac_result.get("animation_controller")
+                except Exception as ac_err:
+                    print(f"[LLM-SPEC-EDITOR] Warning: failed to generate controller: {ac_err}")
+            
+            # Validate both and auto-generate any missing ones
+            animation_json, animation_controller_json, val_messages = ensure_animations_and_controller(
+                animation_json=animation_json,
+                animation_controller_json=animation_controller_json,
+                mob_name=mob_name,
+                geometry_json=geometry_json,
+                provider=provider,
+                api_key=api_key,
+            )
+            
+            for msg in val_messages:
+                print(msg)
+            
+            if animation_json:
+                updated["animation_json"] = animation_json
+                print(f"[LLM-SPEC-EDITOR] Generated animations with {anim_result.get('bone_count', 0)} bones")
+            
+            if animation_controller_json:
+                updated["animation_controller_json"] = animation_controller_json
+                # Explicitly set the animation_controller ID so builders.py uses it
+                updated["animation_controller"] = f"controller.animation.{mob_name}"
+                print(f"[LLM-SPEC-EDITOR] Generated animation controller: {updated['animation_controller']}")
+            
+            if not animation_json and not animation_controller_json:
+                print(f"[LLM-SPEC-EDITOR] Warning: animation generation returned None")
+        except Exception as anim_err:
+            print(f"[LLM-SPEC-EDITOR] Warning: animation generation failed: {anim_err}")
+    
+    # Log animation fields
+    print(f"[LLM-SPEC-EDITOR] Updated spec keys: {list(updated.keys())}")
+    print(f"[LLM-SPEC-EDITOR] animation_json present: {bool(updated.get('animation_json'))}")
+    print(f"[LLM-SPEC-EDITOR] animation_controller_json present: {bool(updated.get('animation_controller_json'))}")
+    print(f"[LLM-SPEC-EDITOR] animation_controller present: {bool(updated.get('animation_controller'))}")
+    if updated.get('animation_json'):
+        print(f"[LLM-SPEC-EDITOR] animation_json type: {type(updated['animation_json'])}")
+        print(f"[LLM-SPEC-EDITOR] animation_json keys: {list(updated['animation_json'].keys()) if isinstance(updated['animation_json'], dict) else 'N/A'}")
+    if updated.get('animation_controller_json'):
+        print(f"[LLM-SPEC-EDITOR] animation_controller_json type: {type(updated['animation_controller_json'])}")
+        print(f"[LLM-SPEC-EDITOR] animation_controller_json keys: {list(updated['animation_controller_json'].keys()) if isinstance(updated['animation_controller_json'], dict) else 'N/A'}")
+
+    # --- Validation: Retry if both animation files failed to generate ---
+    has_animation_json = bool(updated.get('animation_json'))
+    has_animation_controller_json = bool(updated.get('animation_controller_json'))
+    
+    if not has_animation_json and not has_animation_controller_json:
+        # Both missing — check if we have geometry to work from
+        geometry_json = updated.get("geometry_json", {})
+        has_geometry = geometry_json and isinstance(geometry_json, dict) and "minecraft:geometry" in geometry_json
+        
+        if has_geometry:
+            print(f"[LLM-SPEC-EDITOR] VALIDATION: Both animation files missing, retrying generation...")
+            mob_name = updated.get("short_name", "custom_mob")
+            from backend.llm.animation_generation import llm_generate_animation, ensure_animations_and_controller
+            from backend.llm.animation_controllers_generation import llm_generate_animation_controller
+            
+            try:
+                # Retry animation generation
+                anim_result = llm_generate_animation(
+                    prompt=f"Create animations for: {prompt}",
+                    geometry_json=geometry_json,
+                    mob_name=mob_name,
+                    provider=provider,
+                    api_key=api_key,
+                )
+                animation_json = anim_result.get("animation") if anim_result else None
+                animation_controller_json = None
+                
+                if animation_json:
+                    # Generate animation controller
+                    print(f"[LLM-SPEC-EDITOR] RETRY: Auto-generating animation controller")
+                    try:
+                        ac_result = llm_generate_animation_controller(
+                            animation_json=animation_json,
+                            mob_name=mob_name,
+                            provider=provider,
+                            api_key=api_key,
+                        )
+                        animation_controller_json = ac_result.get("animation_controller") if ac_result else None
+                    except Exception as ac_err:
+                        print(f"[LLM-SPEC-EDITOR] RETRY: Warning: failed to generate controller: {ac_err}")
+                
+                # Validate and auto-generate any missing pieces
+                animation_json, animation_controller_json, val_messages = ensure_animations_and_controller(
+                    animation_json=animation_json,
+                    animation_controller_json=animation_controller_json,
+                    mob_name=mob_name,
+                    geometry_json=geometry_json,
+                    provider=provider,
+                    api_key=api_key,
+                )
+                
+                for msg in val_messages:
+                    print(f"[LLM-SPEC-EDITOR] RETRY: {msg}")
+                
+                # Update spec with regenerated files
+                if animation_json:
+                    updated["animation_json"] = animation_json
+                    print(f"[LLM-SPEC-EDITOR] RETRY: Animation regenerated and added to spec")
+                
+                if animation_controller_json:
+                    updated["animation_controller_json"] = animation_controller_json
+                    # Explicitly set the animation_controller ID
+                    updated["animation_controller"] = f"controller.animation.{mob_name}"
+                    print(f"[LLM-SPEC-EDITOR] RETRY: Animation controller regenerated: {updated['animation_controller']}")
+                
+                if not animation_json and not animation_controller_json:
+                    print(f"[LLM-SPEC-EDITOR] RETRY: Warning: retry also failed to generate animations")
+            except Exception as retry_err:
+                err_msg = str(retry_err).replace("{", "{{").replace("}", "}}")
+                print(f"[LLM-SPEC-EDITOR] RETRY: Warning: animation retry failed: {err_msg}")
+        else:
+            print(f"[LLM-SPEC-EDITOR] VALIDATION: Both animation files missing but no geometry to generate from")
 
     if data.get("save"):
         try:
@@ -986,7 +1142,14 @@ def llm_spec_editor(payload: dict = Body(...)):
 
 
 def llm_geometry_generate(payload: dict = Body(...)):
-    """Use LLM to generate or modify Bedrock geometry JSON."""
+    """Use LLM to generate or modify Bedrock geometry JSON.
+    
+    Also auto-generates animations and animation controllers.
+    Returns geometry + animations + animation_controller all together.
+    """
+    from backend.llm.animation_generation import llm_generate_animation
+    from backend.llm.animation_controllers_generation import llm_generate_animation_controller
+    
     data = payload or {}
     prompt = data.get("prompt") or ""
     if not prompt or not str(prompt).strip():
@@ -1008,6 +1171,9 @@ def llm_geometry_generate(payload: dict = Body(...)):
         print(f"[LLM-GEOMETRY] unexpected error: {exc}")
         raise HTTPException(status_code=500, detail=str(exc))
 
+    if not geometry:
+        raise HTTPException(status_code=500, detail="Geometry generation returned empty result")
+
     texture_b64 = geometry.pop("_texture_b64", "") if geometry else ""
     mcp_design = geometry.pop("_mcp_design", False) if geometry else False
 
@@ -1015,7 +1181,126 @@ def llm_geometry_generate(payload: dict = Body(...)):
     if texture_b64:
         result["texture_b64"] = texture_b64
         result["mcp_texture"] = True
+    
+    # Auto-generate animations for the geometry
+    print(f"[LLM-ANIMATION] Auto-generating animations for {mob_name}")
+    try:
+        anim_result = llm_generate_animation(
+            prompt=f"Create animations for: {prompt}",
+            geometry_json=geometry,
+            mob_name=mob_name,
+            provider=provider,
+            api_key=api_key,
+        )
+        animation = anim_result.get("animation")
+        if animation:
+            result["animation"] = animation
+            result["animation_mcp_verified"] = anim_result.get("mcp_verified", False)
+            result["animation_bone_count"] = anim_result.get("bone_count", 0)
+            print(f"[LLM-ANIMATION] Generated animations with {result['animation_bone_count']} bones")
+            
+            # Auto-generate animation controller
+            print(f"[LLM-ANIMATION-CONTROLLER] Auto-generating animation controller for {mob_name}")
+            try:
+                ac_result = llm_generate_animation_controller(
+                    animation_json=animation,
+                    mob_name=mob_name,
+                    provider=provider,
+                    api_key=api_key,
+                )
+                animation_controller = ac_result.get("animation_controller")
+                if animation_controller:
+                    result["animation_controller"] = animation_controller
+                    result["animation_controller_mcp_verified"] = ac_result.get("mcp_verified", False)
+                    result["animation_controller_id"] = f"controller.animation.{mob_name}"
+                    print(f"[LLM-ANIMATION-CONTROLLER] Generated animation controller")
+            except Exception as ac_err:
+                print(f"[LLM-ANIMATION-CONTROLLER] Warning: failed to generate controller: {ac_err}")
+        else:
+            print(f"[LLM-ANIMATION] Warning: animation generation returned None")
+    except Exception as anim_err:
+        print(f"[LLM-ANIMATION] Warning: animation generation failed: {anim_err}")
+    
     return result
+
+
+def llm_animation_generate(payload: dict = Body(...)):
+    """Use LLM to generate Bedrock animation.json."""
+    from backend.llm.animation_generation import llm_generate_animation
+    
+    data = payload or {}
+    prompt = data.get("prompt") or ""
+    if not prompt or not str(prompt).strip():
+        raise HTTPException(status_code=400, detail="prompt is required")
+
+    provider = data.get("provider")
+    api_key = data.get("api_key")
+    geometry_json = data.get("geometry_json")
+    mob_name = data.get("mob_name", "custom_mob")
+
+    print(f"[LLM-ANIMATION] provider={provider} prompt_len={len(str(prompt).strip())} mob={mob_name}")
+
+    try:
+        result = llm_generate_animation(
+            prompt=prompt,
+            geometry_json=geometry_json or {},
+            mob_name=mob_name,
+            provider=provider,
+            api_key=api_key,
+        )
+    except Exception as exc:
+        print(f"[LLM-ANIMATION] error: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    animation = result.pop("animation", None)
+    if not animation:
+        raise HTTPException(status_code=500, detail=result.get("error", "Animation generation failed"))
+
+    return {
+        "animation": animation,
+        "mcp_verified": result.get("mcp_verified", False),
+        "bone_count": result.get("bone_count", 0),
+        "provider": result.get("provider"),
+        "elapsed_ms": result.get("elapsed_ms", 0),
+    }
+
+
+def llm_animation_controller_generate(payload: dict = Body(...)):
+    """Use LLM to generate Bedrock animation_controllers.json."""
+    from backend.llm.animation_controllers_generation import llm_generate_animation_controller
+    
+    data = payload or {}
+    animation_json = data.get("animation_json")
+    if not animation_json:
+        raise HTTPException(status_code=400, detail="animation_json is required")
+
+    provider = data.get("provider")
+    api_key = data.get("api_key")
+    mob_name = data.get("mob_name", "custom_mob")
+
+    print(f"[LLM-ANIMATION-CONTROLLER] provider={provider} mob={mob_name}")
+
+    try:
+        result = llm_generate_animation_controller(
+            animation_json=animation_json,
+            mob_name=mob_name,
+            provider=provider,
+            api_key=api_key,
+        )
+    except Exception as exc:
+        print(f"[LLM-ANIMATION-CONTROLLER] error: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    controller = result.pop("animation_controller", None)
+    if not controller:
+        raise HTTPException(status_code=500, detail=result.get("error", "Animation controller generation failed"))
+
+    return {
+        "animation_controller": controller,
+        "mcp_verified": result.get("mcp_verified", False),
+        "provider": result.get("provider"),
+        "elapsed_ms": result.get("elapsed_ms", 0),
+    }
 
 def llm_spec_mock(payload: dict = Body(...)):
     data = payload or {}
@@ -1239,7 +1524,15 @@ _server_session = {
 
 def _run_server_session_thread(pack_dir: str, resource_pack_dir: str | None, category: str):
     """Background thread that runs the full BDS lifecycle."""
-    from launch_server_session import (
+    import sys
+    from pathlib import Path
+    
+    # Add scripts directory to path for launch_server_session import
+    scripts_dir = Path(__file__).parent.parent.parent / "scripts"
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    
+    from launch_server_session import (  # type: ignore
         setup_server, _read_server_output, _launch_client,
         _kill_minecraft_client,
         _detect_identifiers, _build_command, BDS_EXE, BDS_DIR,
@@ -1498,7 +1791,7 @@ async def publish_mob_to_database(payload: dict = Body(...)):
     if str(db_insertion_path) not in sys.path:
         sys.path.insert(0, str(db_insertion_path))
     
-    from publish_mob import publish_or_update_mob
+    from publish_mob import publish_or_update_mob  # type: ignore
     
     mob_name = payload.get("mob_name")
     username = payload.get("username")
@@ -1543,7 +1836,7 @@ async def check_published_mob(mob_name: str, username: str):
     if str(db_insertion_path) not in sys.path:
         sys.path.insert(0, str(db_insertion_path))
     
-    from publish_mob import check_mob_exists
+    from publish_mob import check_mob_exists  # type: ignore
     
     exists = check_mob_exists(mob_name, username)
     return {

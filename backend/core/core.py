@@ -21,6 +21,9 @@ DEFAULTS = {
     "scale": 1.0,
     "color_rgb": [255, 0, 0],
     "geometry_json": {},
+    "animation_json": {},
+    "animation_controller_json": {},
+    "animation_controller": "",
     "texture_instructions": [],
     "loot_drops": []
 }
@@ -59,10 +62,22 @@ HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 LLM_MODEL_NAME = os.environ.get("LLM_MODEL", "openai/gpt-4.1")
 DEEPSEEK_MODEL_NAME = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
 GEMINI_MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview")
-CLAUDE_MODEL_NAME = os.environ.get("CLAUDE_MODEL", "claude-3-5-sonnet-20240620")
+CLAUDE_MODEL_NAME = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-20250514")
 OLLAMA_MODEL_NAME = os.environ.get("OLLAMA_MODEL", "llama3")
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 DEFAULT_LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "openai")
+
+# Log LLM configuration on startup
+import sys
+if not getattr(sys, '_llm_config_logged', False):
+    print(f"[LLM-CONFIG] LLM_MODEL_NAME: {LLM_MODEL_NAME}")
+    print(f"[LLM-CONFIG] DEEPSEEK_MODEL_NAME: {DEEPSEEK_MODEL_NAME}")
+    print(f"[LLM-CONFIG] GEMINI_MODEL_NAME: {GEMINI_MODEL_NAME}")
+    print(f"[LLM-CONFIG] CLAUDE_MODEL_NAME: {CLAUDE_MODEL_NAME}")
+    print(f"[LLM-CONFIG] OLLAMA_MODEL_NAME: {OLLAMA_MODEL_NAME}")
+    print(f"[LLM-CONFIG] DEFAULT_LLM_PROVIDER: {DEFAULT_LLM_PROVIDER}")
+    sys._llm_config_logged = True
+
 # local dev flag toggle (need to fix server side sync still)
 LOCAL_LLM_DEV = True
 

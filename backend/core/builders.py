@@ -135,6 +135,64 @@ def make_uuid() -> str:
     return str(uuid.uuid4())
 
 
+def validate_animation_references(specs: list[dict], animations_dir: Path) -> list[str]:
+    """Pre-validate all animation and animation controller references.
+    
+    Checks that:
+    1. All geometry IDs referenced in specs exist or can be resolved
+    2. All animation controller IDs are defined  
+    3. All animations referenced in controllers exist
+    
+    Returns list of validation errors (empty if all valid).
+    """
+    errors = []
+    
+    for spec in specs:
+        short_name = spec.get("short_name", "unknown")
+        
+        # Check geometry reference
+        geometry = spec.get("geometry", "")
+        if geometry and geometry.startswith("geometry."):
+            # Only validate if not vanilla (vanilla will be fetched from Mojang)
+            if "custom" in geometry:
+                geo_file = animations_dir / f"{short_name}.geo.json"
+                if not geo_file.exists():
+                    custom_geo = spec.get("geometry_json")
+                    if not (custom_geo and isinstance(custom_geo, dict) and "minecraft:geometry" in custom_geo):
+                        errors.append(f"{short_name}: geometry '{geometry}' not found and no custom geometry_json")
+        
+        # Check animation controller
+        ac_id = spec.get("animation_controller")
+        if ac_id:
+            ac_file = animations_dir / f"{short_name}.animation_controllers.json"
+            if ac_file.exists():
+                try:
+                    ac_data = json.loads(ac_file.read_text())
+                    # Verify controller exists
+                    controllers = ac_data.get("animation_controllers", {})
+                    if ac_id not in controllers:
+                        errors.append(f"{short_name}: animation controller '{ac_id}' not defined in file")
+                    
+                    # Verify all states reference existing animations
+                    anim_file = animations_dir / f"{short_name}.animation.json"
+                    if anim_file.exists():
+                        anim_data = json.loads(anim_file.read_text())
+                        animations = anim_data.get("animations", {})
+                        
+                        for state_name, state_def in controllers[ac_id].get("states", {}).items():
+                            for anim in state_def.get("animations", []):
+                                if anim not in animations:
+                                    errors.append(
+                                        f"{short_name}: animation '{anim}' referenced in state "
+                                        f"'{state_name}' but not defined"
+                                    )
+                except (json.JSONDecodeError, KeyError) as e:
+                    errors.append(f"{short_name}: failed to validate animation_controllers.json: {e}")
+    
+    return errors
+
+
+
 def make_png_rgba(width, height, r, g, b, a=255) -> bytes:
     """Generate a simple solid-color PNG image."""
     import struct
@@ -206,9 +264,11 @@ def patch_resource_pack(res_root: Path, specs: list[dict], textures_dir: Path = 
         "texture_data": {}
     }
 
-    # Use the vanilla built-in controller.render.default — it already maps
-    # Geometry.default, Material.default, and Texture.default which is all we need.
-    # Writing a custom render controller file was unreliable (pack load order issues).
+    # Use built-in render controllers (controller.render.default, etc.) to avoid pack load order issues.
+    # We DO NOT create custom render_controllers.json files—that would cause race conditions.
+    # Animation controllers are wired in the RESOURCE PACK entity's scripts block.
+    # The scripts block activates animation_controllers.json which drives bone animations client-side.
+    # The behavior pack entity has NO animation.controller component—it's for server-side logic only.
 
     first_png = None
 
@@ -231,7 +291,7 @@ def patch_resource_pack(res_root: Path, specs: list[dict], textures_dir: Path = 
             # Ensure the geometry has a unique identifier based on the mob name.
             # Keep only the first geometry entry to avoid identifier conflicts
             # (some Mojang files contain multiple versions of the same geometry).
-            unique_geo_id = f"geometry.{spec['short_name']}.custom"
+            unique_geo_id = f"geometry.{spec['short_name']}"
             try:
                 custom_geo["minecraft:geometry"] = [custom_geo["minecraft:geometry"][0]]
                 geo_desc = custom_geo["minecraft:geometry"][0]["description"]
@@ -242,12 +302,12 @@ def patch_resource_pack(res_root: Path, specs: list[dict], textures_dir: Path = 
                 cbox_w = float(cbox.get("width", 1))
                 cbox_h = float(cbox.get("height", 1))
                 scale = float(spec.get("scale", 1.0))
-                if "visible_bounds_width" not in geo_desc:
-                    geo_desc["visible_bounds_width"] = max(cbox_w * scale + 1, 4)
-                if "visible_bounds_height" not in geo_desc:
-                    geo_desc["visible_bounds_height"] = max(cbox_h * scale + 1, 4)
-                if "visible_bounds_offset" not in geo_desc:
-                    geo_desc["visible_bounds_offset"] = [0, cbox_h * scale / 2, 0]
+                # Always override visible_bounds — LLMs often copy the template default
+                # (width=2, height=2) which is too small for large custom mobs and causes
+                # Minecraft to cull the entity as invisible at normal viewing distances.
+                geo_desc["visible_bounds_width"] = max(cbox_w * scale + 2, 6)
+                geo_desc["visible_bounds_height"] = max(cbox_h * scale + 2, 6)
+                geo_desc["visible_bounds_offset"] = [0, cbox_h * scale / 2, 0]
                 actual_geometry = unique_geo_id
                 actual_rc = "controller.render.default"
             except (KeyError, IndexError):
@@ -265,7 +325,7 @@ def patch_resource_pack(res_root: Path, specs: list[dict], textures_dir: Path = 
             if vanilla_geo:
                 import copy
                 vanilla_geo = copy.deepcopy(vanilla_geo)
-                unique_geo_id = f"geometry.{spec['short_name']}.custom"
+                unique_geo_id = f"geometry.{spec['short_name']}"
                 try:
                     # Use only the first geometry entry and rename its identifier
                     vanilla_geo["minecraft:geometry"] = [vanilla_geo["minecraft:geometry"][0]]
@@ -355,8 +415,16 @@ def patch_resource_pack(res_root: Path, specs: list[dict], textures_dir: Path = 
 
 
         scale = float(spec.get("scale", 1.0))
+        mob_short = spec['short_name']
+        
+        # Get animation controller ID from spec (set by routes.py when generating)
+        # Fall back to deriving it from mob_short if not explicitly set
+        animation_controller = spec.get("animation_controller") or f"controller.animation.{mob_short}"
+        print(f"[BUILD] Using animation_controller for {mob_short}: {animation_controller}")
+        print(f"[BUILD]   (from spec: {spec.get('animation_controller')}, or derived: controller.animation.{mob_short})")
+        
         client = {
-            "format_version": "1.10.0",
+            "format_version": "1.20.0",
             "minecraft:client_entity": {
                 "description": {
                     "identifier": spec["identifier"],
@@ -371,9 +439,99 @@ def patch_resource_pack(res_root: Path, specs: list[dict], textures_dir: Path = 
                 }
             }
         }
-        if abs(scale - 1.0) > 1e-6:
-            client["minecraft:client_entity"]["description"]["scale"] = scale
+        
+        # NOTE: Do NOT add scale to entity.json - it causes rendering issues in Minecraft
+        # Scale should only be in the geometry description, not the entity description
+        
+        # VANILLA BLEND-WEIGHT PATTERN (matches Mojang bedrock-samples)
+        # Instead of animation controller state machine, use direct blend weights
+        # in scripts.animate. This is how vanilla cow/pig/sheep work:
+        #   "animate": ["idle", {"walk": "query.modified_move_speed"}]
+        # The walk animation plays at a blend weight proportional to move speed.
+        animation_json = spec.get("animation_json")
+        animations_block = {}
+        animate_list = []
+        
+        # Build animation short name mappings from animation_json
+        if animation_json and isinstance(animation_json, dict) and "animations" in animation_json:
+            for full_id in animation_json["animations"].keys():
+                if full_id.startswith("animation."):
+                    parts = full_id.split(".")
+                    if len(parts) >= 3:
+                        short_name = ".".join(parts[2:])
+                        animations_block[short_name] = full_id
+        
+        # Build scripts.animate list using vanilla blend-weight pattern
+        if "idle" in animations_block:
+            animate_list.append("idle")  # idle always plays (body sway)
+        if "walk" in animations_block:
+            # Walk blended by move speed (vanilla pattern from cow/pig/sheep)
+            animate_list.append({"walk": "query.modified_move_speed"})
+        
+        # Also include animation controller mapping (as fallback / for users who want it)
+        animation_controller = spec.get("animation_controller") or f"controller.animation.{mob_short}"
+        shortname_controller = f"{mob_short}_controller"
+        animation_controller_json = spec.get("animation_controller_json")
+        if animation_controller_json:
+            animations_block[shortname_controller] = animation_controller
+        
+        if animate_list:
+            client["minecraft:client_entity"]["description"]["scripts"] = {
+                "animate": animate_list
+            }
+        elif animation_controller_json:
+            # Fallback: use animation controller if no walk/idle animations found
+            client["minecraft:client_entity"]["description"]["scripts"] = {
+                "animate": [shortname_controller]
+            }
+        
+        if animations_block:
+            client["minecraft:client_entity"]["description"]["animations"] = animations_block
+            print(f"[BUILD] ✓ Added animations block for {mob_short} with {len(animations_block)} entries")
+            print(f"[BUILD]   scripts.animate = {animate_list or [shortname_controller]}")
+        else:
+            print(f"[BUILD] ⚠ Empty animations block for {mob_short}")
+        
+        # Write entity file
         _write_text(client_file, json.dumps(client, indent=2))
+        
+        # Verify entity file was written correctly
+        written_content = client_file.read_text()
+        if "animations" in written_content:
+            print(f"[BUILD] ✓✓ VERIFIED: animations block present in {client_file.name}")
+        else:
+            print(f"[BUILD] ✗✗ ERROR: animations block NOT in {client_file.name}!")
+
+        # Write animation files if they exist in spec
+        animation_json = spec.get("animation_json")
+        print(f"[BUILD] Checking animation_json for {spec['short_name']}: {bool(animation_json)}")
+        if animation_json:
+            print(f"[BUILD] animation_json type: {type(animation_json)}, is dict: {isinstance(animation_json, dict)}")
+            if isinstance(animation_json, dict):
+                print(f"[BUILD] animation_json keys: {list(animation_json.keys())}")
+                print(f"[BUILD] animation_json preview: {json.dumps(animation_json, indent=2)[:500]}...")
+        if animation_json and isinstance(animation_json, dict):
+            anim_dir = res_root / "animations"
+            anim_dir.mkdir(parents=True, exist_ok=True)
+            anim_file = anim_dir / f"{spec['short_name']}.animation.json"
+            _write_text(anim_file, json.dumps(animation_json, indent=2))
+            print(f"[BUILD] Wrote animation file: {anim_file.name}")
+            print(f"[BUILD] Animation file size: {anim_file.stat().st_size} bytes")
+
+        animation_controller_json = spec.get("animation_controller_json")
+        print(f"[BUILD] Checking animation_controller_json for {spec['short_name']}: {bool(animation_controller_json)}")
+        if animation_controller_json:
+            print(f"[BUILD] animation_controller_json type: {type(animation_controller_json)}, is dict: {isinstance(animation_controller_json, dict)}")
+            if isinstance(animation_controller_json, dict):
+                print(f"[BUILD] animation_controller_json keys: {list(animation_controller_json.keys())}")
+                print(f"[BUILD] animation_controller_json preview: {json.dumps(animation_controller_json, indent=2)[:500]}...")
+        if animation_controller_json and isinstance(animation_controller_json, dict):
+            ac_dir = res_root / "animation_controllers"
+            ac_dir.mkdir(parents=True, exist_ok=True)
+            ac_file = ac_dir / f"{spec['short_name']}.animation_controllers.json"
+            _write_text(ac_file, json.dumps(animation_controller_json, indent=2))
+            print(f"[BUILD] Wrote animation controller file: {ac_file.name}")
+            print(f"[BUILD] Animation controller file size: {ac_file.stat().st_size} bytes")
 
         # Add names to lang file
         display_name = spec.get("display_name", spec["short_name"].capitalize())
@@ -568,6 +726,16 @@ def patch_behavior_pack(beh_root: Path, specs: list[dict]):
 
         comps = entity["minecraft:entity"]["components"]
 
+        # Animation controllers for bone rendering belong in the RESOURCE PACK entity's scripts block,
+        # not the behavior pack. The BP entity does not control visual animations.
+        # Visual animation state is driven by the RP's "scripts" block which references
+        # the animation controller from animation_controllers.json in the resource pack.
+
+        # Animation controllers should ONLY be in the resource pack, not the behavior pack.
+        # Animation controllers are used for rendering bone animations, which is a client-side concern.
+        # Writing them to the behavior pack causes unnecessary duplication and potential conflicts.
+        # The resource pack handles all animation controller logic via the RP entity's "scripts" block.
+
         # If mob has ranged attack (shooter), remove melee_attack so it
         # actually fires projectiles instead of always running up to melee.
         if "minecraft:shooter" in comps and "minecraft:behavior.ranged_attack" in comps:
@@ -608,7 +776,6 @@ def patch_behavior_pack(beh_root: Path, specs: list[dict]):
 
         # Loot table pipeline: ensure minecraft:loot is wired AND the
         # actual loot table JSON file is created when loot_drops exists.
-        mob_name = spec["identifier"].split(":")[-1]
         loot_drops = spec.get("loot_drops", [])
 
         # Auto-wire minecraft:loot if loot_drops exists but component missing

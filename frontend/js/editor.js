@@ -169,6 +169,11 @@ async function selectMob(name) {
   // Update file tree preview
   updateFileTree(spec);
 
+  // Load animations into the 3D viewer panel
+  if (typeof loadAnimationsFromSpec === "function") {
+    loadAnimationsFromSpec(spec.animation_json || null);
+  }
+
   // check if a og snapshot exists
   try {
     const user = getCurrentUser();
