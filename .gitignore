@@ -27,3 +27,6 @@ test_mctools.py
 # API Keys
 API_KEY.py
 **/API_KEY.py
+
+# Sample/temp folders
+SampleElephant/
