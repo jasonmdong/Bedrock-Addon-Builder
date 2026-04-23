@@ -69,6 +69,12 @@ if _ref_path.exists():
 
 _vanilla_ref_json = json.dumps(VANILLA_REF, indent=2) if VANILLA_REF else ""
 
+# The vanilla reference can be extremely large. Keep it as a separate block so
+# the prompt builder can include it only when needed.
+ENTITY_COMPONENT_REFERENCE_TEXT = (
+    f"\nCOMPONENT REFERENCE:\n{_vanilla_ref_json}" if _vanilla_ref_json else ""
+)
+
 CATEGORY_CONTEXT: dict[str, str] = {
     "entity_logic_ai": """
 CATEGORY: Entity Logic & AI (minecraft:entity)
@@ -108,8 +114,7 @@ KEY RULES:
 - minecraft:behavior.panic has "speed_multiplier" (float, e.g. 1.5 for 50% faster).
 - minecraft:knockback_resistance has "value" (float 0.0-1.0).
 - NEVER add item-only components (minecraft:damage, minecraft:durability, minecraft:shooter) to entities.
-"""
-+ (f"\nCOMPONENT REFERENCE:\n{_vanilla_ref_json}" if _vanilla_ref_json else ""),
+""",
 
     "items_weaponry": """
 CATEGORY: Items & Weaponry (minecraft:item)
