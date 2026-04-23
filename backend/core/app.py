@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 Bedrock Add-on Builder - FastAPI web server
 Main entry point orchestrating all modules.
@@ -20,7 +20,9 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
 # Import route handlers
-from backend.core.routes import (
+from backend.api.routes import (
+    upsert_user,
+    get_user,
     get_mobs,
     get_mob,
     get_mob_texture,
@@ -29,12 +31,9 @@ from backend.core.routes import (
     delete_mob,
     duplicate_mob,
     get_spec,
-    get_default_spec,
     replace_spec,
     patch_spec,
     llm_spec_editor,
-    llm_animation_generate,
-    llm_animation_controller_generate,
     validate_spec_endpoint,
     llm_spec_mock,
     llm_geometry_generate,
@@ -57,6 +56,9 @@ from backend.core.routes import (
     launch_test_stop,
     publish_mob_to_database,
     check_published_mob,
+    llm_generate_animation_endpoint,
+    llm_generate_animation_controller_endpoint,
+    llm_generate_animations_full_endpoint,
 )
 from backend.mctools.routes import (
     mctools_health,
@@ -110,16 +112,11 @@ app.post("/api/mobs/{name}/duplicate")(duplicate_mob)
 
 # Spec routes
 app.get("/api/spec")(get_spec)
-app.get("/api/spec/default")(get_default_spec)
 app.put("/api/spec")(replace_spec)
 app.post("/api/spec/patch")(patch_spec)
 app.post("/api/spec/llm")(llm_spec_editor)
 app.post("/api/spec/validate")(validate_spec_endpoint)
 app.get("/api/llm/categories")(get_llm_categories)
-
-# Animation generation routes
-app.post("/api/animation/generate")(llm_animation_generate)
-app.post("/api/animation/controller/generate")(llm_animation_controller_generate)
 
 # Build routes
 app.post("/build")(build_form)
@@ -156,6 +153,15 @@ app.post("/api/mctools/write-image")(mctools_write_image)
 app.post("/api/mctools/write-image-svg")(mctools_write_image_svg)
 app.post("/api/mctools/write-image-pixel-art")(mctools_write_image_pixel_art)
 
+# Animation generation routes
+app.post("/api/animation/generate")(llm_generate_animation_endpoint)
+app.post("/api/animation/controller/generate")(llm_generate_animation_controller_endpoint)
+app.post("/api/animation/generate-full")(llm_generate_animations_full_endpoint)
+
+# User account routes (demo subscription tier sync)
+app.post("/api/users")(upsert_user)
+app.get("/api/users/{username}")(get_user)
+
 # Publish routes (save user mobs to database for RAG)
 app.post("/api/publish")(publish_mob_to_database)
 app.get("/api/publish/check/{mob_name}/{username}")(check_published_mob)
@@ -163,7 +169,7 @@ app.get("/api/publish/check/{mob_name}/{username}")(check_published_mob)
 # Static routes
 app.get("/")(index)
 app.get("/styles.css")(styles_css)
-app.get("/js/{filename}")(serve_js)
+app.get("/js/{filename:path}")(serve_js)
 app.get("/healthz")(healthz)
 
 # =========================

@@ -13,6 +13,7 @@ __pycache__/
 
 # Bedrock Dedicated Server (too large for GitHub)
 bedrock_server/
+bedrock-server-*/
 
 # Local documentation (not for git)
 USER_MANAGEMENT_DOCS.md
@@ -30,9 +31,3 @@ test_mctools.py
 # API Keys
 API_KEY.py
 **/API_KEY.py
-
-# Sample/temp folders
-SampleElephant/
-
-# Claude / Cursor IDE (local)
-.claude/

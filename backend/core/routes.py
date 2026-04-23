@@ -1,4 +1,4 @@
-"""FastAPI route handlers for the web API."""
+﻿"""FastAPI route handlers for the web API."""
 import tempfile
 import uuid
 import threading
@@ -741,7 +741,7 @@ async def fetch_mob_geometry(mob_name: str):
         print(f"[GEOMETRY] Cache hit for '{mob_name}'")
         return _geometry_cache[safe_name_lower]
     
-    # Use raw.githubusercontent.com directly — NO API rate limit!
+    # Use raw.githubusercontent.com directly ΓÇö NO API rate limit!
     # Try common filename patterns for Bedrock geometry files
     base_url = "https://raw.githubusercontent.com/Mojang/bedrock-samples/main/resource_pack/models/entity"
     candidates = [
@@ -772,7 +772,7 @@ async def fetch_mob_geometry(mob_name: str):
                     print(f"[GEOMETRY] Fetched and cached '{filename}' for '{mob_name}'")
                     return result
 
-            # None of the direct URLs worked — fall back to GitHub API for directory listing
+            # None of the direct URLs worked ΓÇö fall back to GitHub API for directory listing
             # (only costs 1 API call, and the listing is cached for future lookups)
             global _github_file_list_cache
             if _github_file_list_cache is not None:
@@ -1044,7 +1044,7 @@ def llm_spec_editor(payload: dict = Body(...)):
     has_animation_controller_json = bool(updated.get('animation_controller_json'))
     
     if not has_animation_json and not has_animation_controller_json:
-        # Both missing — check if we have geometry to work from
+        # Both missing ΓÇö check if we have geometry to work from
         geometry_json = updated.get("geometry_json", {})
         has_geometry = geometry_json and isinstance(geometry_json, dict) and "minecraft:geometry" in geometry_json
         
@@ -1763,7 +1763,7 @@ async def launch_test_stop():
 
 async def publish_mob_to_database(payload: dict = Body(...)):
     """
-    POST /api/publish — Publish a user-created mob to the database.
+    POST /api/publish ΓÇö Publish a user-created mob to the database.
     
     Request body:
     {
@@ -1820,7 +1820,7 @@ async def publish_mob_to_database(payload: dict = Body(...)):
 
 async def check_published_mob(mob_name: str, username: str):
     """
-    GET /api/publish/check/{mob_name}/{username} — Check if a mob is already published.
+    GET /api/publish/check/{mob_name}/{username} ΓÇö Check if a mob is already published.
     
     Returns:
     {
@@ -1843,3 +1843,36 @@ async def check_published_mob(mob_name: str, username: str):
         "exists": exists,
         "full_name": f"{mob_name}_{username}"
     }
+
+
+VALID_TIERS = {"free", "creator", "pro"}
+
+
+def upsert_user(payload: dict = Body(...)):
+    """POST /api/users ΓÇö Create or update a user with their subscription tier."""
+    from backend.database.db import execute_query, fetch_one
+    username = (payload.get("username") or "").strip()
+    tier = payload.get("subscription_tier", "free")
+    if not username:
+        raise HTTPException(status_code=400, detail="username is required")
+    if tier not in VALID_TIERS:
+        tier = "free"
+    execute_query(
+        """
+        INSERT INTO users (username, subscription_tier)
+        VALUES (%s, %s)
+        ON CONFLICT (username) DO UPDATE SET subscription_tier = EXCLUDED.subscription_tier
+        """,
+        (username, tier),
+    )
+    row = fetch_one("SELECT username, subscription_tier FROM users WHERE username = %s", (username,))
+    return {"username": row["username"], "subscription_tier": row["subscription_tier"]}
+
+
+def get_user(username: str):
+    """GET /api/users/{username} ΓÇö Fetch a user's subscription tier."""
+    from backend.database.db import fetch_one
+    row = fetch_one("SELECT username, subscription_tier FROM users WHERE username = %s", (username,))
+    if not row:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"username": row["username"], "subscription_tier": row["subscription_tier"]}
