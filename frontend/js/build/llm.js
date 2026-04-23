@@ -43,14 +43,14 @@ function llmStackKey(user, mob) {
 const LLM_STACK_MAX = 50;
 
 /** Fire-and-forget: persist an LLM version to the DB (mob_versions table). */
-async function _pushVersionToDb(mobName, prompt, spec) {
+async function _pushVersionToDb(mobName, prompt, spec, llm_provider, llm_model) {
   const token = typeof getSessionToken === 'function' ? getSessionToken() : null;
   if (!token) return;
   try {
     await fetch(`/api/user/mobs/${encodeURIComponent(mobName || 'global')}/versions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-      body: JSON.stringify({ prompt, spec }),
+      body: JSON.stringify({ prompt, spec, llm_provider: llm_provider || null, llm_model: llm_model || null }),
     });
   } catch (e) {
     console.warn('[DB] pushVersionToDb failed:', e);
@@ -420,7 +420,7 @@ async function requestLlm() {
     if (user) {
       const entry = { ts: new Date().toISOString(), prompt: instruction, spec: payload.spec };
       pushLlmStack(user, mob, entry);
-      _pushVersionToDb(mob, instruction, payload.spec).catch(() => {});
+      _pushVersionToDb(mob, instruction, payload.spec, provider, payload.model || null).catch(() => {});
       renderLlmHistory();
     }
   } catch (e) {
@@ -467,7 +467,7 @@ function mockPushLlmHistoryEntry() {
     spec: JSON.parse(JSON.stringify(currentSpec)),
   };
   pushLlmStack(user, mob, entry);
-  _pushVersionToDb(mob, instruction, JSON.parse(JSON.stringify(currentSpec))).catch(() => {});
+  _pushVersionToDb(mob, instruction, JSON.parse(JSON.stringify(currentSpec)), 'mock', null).catch(() => {});
   renderLlmHistory();
   if (typeof recordAiAction === "function") recordAiAction(user);
   const n = readLlmStack(user, mob).length;

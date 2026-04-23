@@ -150,11 +150,15 @@ def run_migrations():
                 # mob_versions: one row per LLM prompt result
                 """
                 CREATE TABLE IF NOT EXISTS mob_versions (
-                    id          SERIAL PRIMARY KEY,
-                    mob_id      INTEGER NOT NULL REFERENCES mob_creations(id) ON DELETE CASCADE,
-                    prompt      TEXT NOT NULL DEFAULT '',
-                    spec        JSONB NOT NULL DEFAULT '{}',
-                    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    id              SERIAL PRIMARY KEY,
+                    mob_id          INTEGER NOT NULL REFERENCES mob_creations(id) ON DELETE CASCADE,
+                    version_number  INTEGER NOT NULL,
+                    prompt          TEXT,
+                    spec_json       JSONB NOT NULL DEFAULT '{}',
+                    llm_provider    VARCHAR(50),
+                    llm_model       VARCHAR(100),
+                    created_at      TIMESTAMP DEFAULT NOW(),
+                    UNIQUE (mob_id, version_number)
                 )
                 """,
                 "CREATE INDEX IF NOT EXISTS mob_versions_mob_id_idx ON mob_versions (mob_id)",

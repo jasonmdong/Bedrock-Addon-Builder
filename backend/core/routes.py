@@ -2112,18 +2112,26 @@ async def get_mob_versions(mob_name: str, request: Request):
     if not mob:
         return {"versions": []}
     rows = fetch_all(
-        "SELECT id, prompt, spec, created_at FROM mob_versions WHERE mob_id = %s ORDER BY created_at DESC",
+        "SELECT id, version_number, prompt, spec_json, llm_provider, llm_model, created_at FROM mob_versions WHERE mob_id = %s ORDER BY version_number DESC",
         (mob["id"],),
     )
     versions = []
     for r in rows:
-        spec = r["spec"]
+        spec = r["spec_json"]
         if isinstance(spec, str):
             try:
                 spec = _json.loads(spec)
             except Exception:
                 spec = {}
-        versions.append({"id": r["id"], "prompt": r["prompt"], "spec": spec, "ts": str(r["created_at"])})
+        versions.append({
+            "id": r["id"],
+            "version_number": r["version_number"],
+            "prompt": r["prompt"],
+            "spec": spec,
+            "llm_provider": r["llm_provider"],
+            "llm_model": r["llm_model"],
+            "ts": str(r["created_at"]),
+        })
     return {"versions": versions}
 
 
@@ -2132,8 +2140,10 @@ async def push_mob_version(mob_name: str, request: Request, payload: dict = Body
     import json as _json
     from backend.database.db import execute_query, fetch_one
     user = _auth_user(request)
-    prompt = payload.get("prompt") or ""
+    prompt = payload.get("prompt") or None
     spec = payload.get("spec") or {}
+    llm_provider = payload.get("llm_provider") or None
+    llm_model = payload.get("llm_model") or None
     # Ensure mob_creation exists (upsert with current spec)
     execute_query(
         """
@@ -2148,8 +2158,16 @@ async def push_mob_version(mob_name: str, request: Request, payload: dict = Body
         "SELECT id FROM mob_creations WHERE user_id = %s AND name = %s",
         (user["id"], mob_name),
     )
-    execute_query(
-        "INSERT INTO mob_versions (mob_id, prompt, spec) VALUES (%s, %s, %s::jsonb)",
-        (mob["id"], prompt, _json.dumps(spec)),
+    # Auto-increment version_number per mob
+    next_version = fetch_one(
+        "SELECT COALESCE(MAX(version_number), 0) + 1 AS next_ver FROM mob_versions WHERE mob_id = %s",
+        (mob["id"],),
     )
-    return {"ok": True}
+    execute_query(
+        """
+        INSERT INTO mob_versions (mob_id, version_number, prompt, spec_json, llm_provider, llm_model)
+        VALUES (%s, %s, %s, %s::jsonb, %s, %s)
+        """,
+        (mob["id"], next_version["next_ver"], prompt, _json.dumps(spec), llm_provider, llm_model),
+    )
+    return {"ok": True, "version_number": next_version["next_ver"]}
