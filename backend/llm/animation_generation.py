@@ -853,13 +853,13 @@ def _call_animation_openai(
     system_prompt: str,
     api_key: str,
 ) -> Optional[dict]:
-    """Call OpenAI GPT-4 to generate animation."""
+    """Call OpenAI model via GitHub Models inference endpoint to generate animation."""
     try:
         import httpx
         
-        client = httpx.Client(timeout=30)
+        client = httpx.Client(timeout=60)
         response = client.post(
-            "https://api.openai.com/v1/chat/completions",
+            "https://models.github.ai/inference/chat/completions",
             headers={"Authorization": f"Bearer {api_key}"},
             json={
                 "model": LLM_MODEL_NAME,
@@ -868,7 +868,7 @@ def _call_animation_openai(
                     {"role": "user", "content": prompt},
                 ],
                 "temperature": 0.7,
-                "max_tokens": 2000,
+                "max_tokens": 4000,
             },
         )
         response.raise_for_status()
@@ -1092,13 +1092,13 @@ def _call_animation_provider(
     print(f"[ANIMATION-PROVIDER] Called with provider: {provider_lower}, api_key present: {bool(api_key)}")
     
     if provider_lower.startswith("openai"):
-        api_key = api_key or os.getenv("OPENAI_API_KEY")
+        api_key = api_key or os.getenv("GITHUB_TOKEN") or os.getenv("OPENAI_API_KEY")
         if api_key:
-            print(f"[ANIMATION-PROVIDER] Routing to OpenAI")
+            print(f"[ANIMATION-PROVIDER] Routing to OpenAI (GitHub Models)")
             return _call_animation_openai(prompt, system_prompt, api_key)
         else:
-            log.error(f"[ANIMATION-PROVIDER] OpenAI selected but no API key in args or OPENAI_API_KEY env")
-            print(f"[ANIMATION-PROVIDER] ERROR: OpenAI selected but no OPENAI_API_KEY")
+            log.error(f"[ANIMATION-PROVIDER] OpenAI selected but no API key in args, GITHUB_TOKEN, or OPENAI_API_KEY env")
+            print(f"[ANIMATION-PROVIDER] ERROR: OpenAI selected but no GITHUB_TOKEN or OPENAI_API_KEY")
             return None
     
     elif provider_lower.startswith("deepseek"):
