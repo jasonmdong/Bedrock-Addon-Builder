@@ -475,6 +475,10 @@ function _formatPipelineStatus(pipeline) {
   if (repair?.attempted) {
     parts.push(repair.succeeded ? "repair pass fixed validation issues" : "repair pass attempted");
   }
+  if (pipeline.prompt_tokens) {
+    const sections = (pipeline.prompt_sections || []).join(", ") || "base";
+    parts.push(`${pipeline.prompt_tokens.toLocaleString()} tokens [${sections}]`);
+  }
   return parts.length ? `[${parts.join(" | ")}]` : "";
 }
 
