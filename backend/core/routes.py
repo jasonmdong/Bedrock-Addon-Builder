@@ -1923,24 +1923,30 @@ async def auth_signup(payload: dict = Body(...)):
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
     if tier not in VALID_TIERS:
         tier = "free"
-    existing = fetch_one("SELECT password_hash FROM users WHERE username = %s", (username,))
-    if existing and existing.get("password_hash"):
-        raise HTTPException(status_code=409, detail="Username already taken")
-    pw_hash = _hash_pw(password)
-    token = _new_token()
-    expires = _token_expiry()
-    execute_query(
-        """
-        INSERT INTO users (username, subscription_tier, password_hash, session_token, session_expires)
-        VALUES (%s, %s, %s, %s, %s)
-        ON CONFLICT (username) DO UPDATE SET
-            subscription_tier = EXCLUDED.subscription_tier,
-            password_hash = EXCLUDED.password_hash,
-            session_token = EXCLUDED.session_token,
-            session_expires = EXCLUDED.session_expires
-        """,
-        (username, tier, pw_hash, token, expires),
-    )
+    try:
+        existing = fetch_one("SELECT password_hash FROM users WHERE username = %s", (username,))
+        if existing and existing.get("password_hash"):
+            raise HTTPException(status_code=409, detail="Username already taken")
+        pw_hash = _hash_pw(password)
+        token = _new_token()
+        expires = _token_expiry()
+        execute_query(
+            """
+            INSERT INTO users (username, subscription_tier, password_hash, session_token, session_expires)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (username) DO UPDATE SET
+                subscription_tier = EXCLUDED.subscription_tier,
+                password_hash = EXCLUDED.password_hash,
+                session_token = EXCLUDED.session_token,
+                session_expires = EXCLUDED.session_expires
+            """,
+            (username, tier, pw_hash, token, expires),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[auth_signup] DB error: {e}")
+        raise HTTPException(status_code=500, detail="Account creation failed. Please try again.")
     return {"username": username, "subscription_tier": tier, "session_token": token}
 
 
@@ -1951,20 +1957,26 @@ async def auth_login(payload: dict = Body(...)):
     password = payload.get("password") or ""
     if not username or not password:
         raise HTTPException(status_code=400, detail="Username and password are required")
-    row = fetch_one(
-        "SELECT username, subscription_tier, password_hash FROM users WHERE username = %s",
-        (username,),
-    )
-    if not row or not row.get("password_hash"):
-        raise HTTPException(status_code=401, detail="Invalid username or password")
-    if not _verify_pw(password, row["password_hash"]):
-        raise HTTPException(status_code=401, detail="Invalid username or password")
-    token = _new_token()
-    expires = _token_expiry()
-    execute_query(
-        "UPDATE users SET session_token = %s, session_expires = %s WHERE username = %s",
-        (token, expires, username),
-    )
+    try:
+        row = fetch_one(
+            "SELECT username, subscription_tier, password_hash FROM users WHERE username = %s",
+            (username,),
+        )
+        if not row or not row.get("password_hash"):
+            raise HTTPException(status_code=401, detail="Invalid username or password")
+        if not _verify_pw(password, row["password_hash"]):
+            raise HTTPException(status_code=401, detail="Invalid username or password")
+        token = _new_token()
+        expires = _token_expiry()
+        execute_query(
+            "UPDATE users SET session_token = %s, session_expires = %s WHERE username = %s",
+            (token, expires, username),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[auth_login] DB error: {e}")
+        raise HTTPException(status_code=500, detail="Sign in failed. Please try again.")
     return {"username": username, "subscription_tier": row["subscription_tier"], "session_token": token}
 
 
@@ -1974,10 +1986,13 @@ async def auth_logout(request: Request):
     auth = request.headers.get("Authorization", "")
     if auth.startswith("Bearer "):
         token = auth[7:]
-        execute_query(
-            "UPDATE users SET session_token = NULL, session_expires = NULL WHERE session_token = %s",
-            (token,),
-        )
+        try:
+            execute_query(
+                "UPDATE users SET session_token = NULL, session_expires = NULL WHERE session_token = %s",
+                (token,),
+            )
+        except Exception as e:
+            print(f"[auth_logout] DB error: {e}")
     return {"ok": True}
 
 
@@ -1988,10 +2003,153 @@ async def auth_me(request: Request):
     if not auth.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="No token")
     token = auth[7:]
+    try:
+        row = fetch_one(
+            "SELECT username, subscription_tier FROM users WHERE session_token = %s AND session_expires > NOW()",
+            (token,),
+        )
+    except Exception as e:
+        print(f"[auth_me] DB error: {e}")
+        raise HTTPException(status_code=401, detail="Session check failed")
+    if not row:
+        raise HTTPException(status_code=401, detail="Session expired or invalid")
+    return {"username": row["username"], "subscription_tier": row["subscription_tier"]}
+
+
+# =================================
+# ====== MOB CREATIONS ROUTES =====
+# =================================
+
+def _auth_user(request: Request) -> dict:
+    """Validate Bearer token and return {id, username}, raises 401 if invalid."""
+    from backend.database.db import fetch_one
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    token = auth[7:]
     row = fetch_one(
-        "SELECT username, subscription_tier FROM users WHERE session_token = %s AND session_expires > NOW()",
+        "SELECT id, username FROM users WHERE session_token = %s AND session_expires > NOW()",
         (token,),
     )
     if not row:
         raise HTTPException(status_code=401, detail="Session expired or invalid")
-    return {"username": row["username"], "subscription_tier": row["subscription_tier"]}
+    return {"id": row["id"], "username": row["username"]}
+
+
+async def get_user_mobs(request: Request):
+    """GET /api/user/mobs — List all mob creations for the authenticated user."""
+    import json as _json
+    from backend.database.db import fetch_all
+    user = _auth_user(request)
+    rows = fetch_all(
+        "SELECT name, identifier, current_spec, texture_base64, template_base, updated_at FROM mob_creations WHERE user_id = %s ORDER BY updated_at DESC",
+        (user["id"],),
+    )
+    mobs = []
+    for r in rows:
+        spec = r["current_spec"]
+        if isinstance(spec, str):
+            try:
+                spec = _json.loads(spec)
+            except Exception:
+                spec = {}
+        mobs.append({
+            "mob_name": r["name"],
+            "identifier": r["identifier"],
+            "spec": spec,
+            "texture_base64": r["texture_base64"],
+            "template_base": r["template_base"],
+            "updated_at": str(r["updated_at"]),
+        })
+    return {"mobs": mobs}
+
+
+async def upsert_user_mob(mob_name: str, request: Request, payload: dict = Body(...)):
+    """POST /api/user/mobs/{mob_name} — Create or update a mob creation."""
+    import json as _json
+    from backend.database.db import execute_query
+    user = _auth_user(request)
+    spec = payload.get("spec") or {}
+    identifier = payload.get("identifier") or None
+    texture_base64 = payload.get("texture_base64") or None
+    template_base = payload.get("template_base") or None
+    execute_query(
+        """
+        INSERT INTO mob_creations (user_id, name, identifier, current_spec, texture_base64, template_base, updated_at)
+        VALUES (%s, %s, %s, %s::jsonb, %s, %s, NOW())
+        ON CONFLICT (user_id, name) DO UPDATE
+            SET identifier = COALESCE(EXCLUDED.identifier, mob_creations.identifier),
+                current_spec = EXCLUDED.current_spec,
+                texture_base64 = COALESCE(EXCLUDED.texture_base64, mob_creations.texture_base64),
+                template_base = COALESCE(EXCLUDED.template_base, mob_creations.template_base),
+                updated_at = NOW()
+        """,
+        (user["id"], mob_name, identifier, _json.dumps(spec), texture_base64, template_base),
+    )
+    return {"ok": True}
+
+
+async def delete_user_mob_db(mob_name: str, request: Request):
+    """DELETE /api/user/mobs/{mob_name} — Delete a mob creation and its versions."""
+    from backend.database.db import execute_query
+    user = _auth_user(request)
+    execute_query(
+        "DELETE FROM mob_creations WHERE user_id = %s AND name = %s",
+        (user["id"], mob_name),
+    )
+    return {"ok": True}
+
+
+async def get_mob_versions(mob_name: str, request: Request):
+    """GET /api/user/mobs/{mob_name}/versions — Get all LLM versions for a mob, newest first."""
+    import json as _json
+    from backend.database.db import fetch_one, fetch_all
+    user = _auth_user(request)
+    mob = fetch_one(
+        "SELECT id FROM mob_creations WHERE user_id = %s AND name = %s",
+        (user["id"], mob_name),
+    )
+    if not mob:
+        return {"versions": []}
+    rows = fetch_all(
+        "SELECT id, prompt, spec, created_at FROM mob_versions WHERE mob_id = %s ORDER BY created_at DESC",
+        (mob["id"],),
+    )
+    versions = []
+    for r in rows:
+        spec = r["spec"]
+        if isinstance(spec, str):
+            try:
+                spec = _json.loads(spec)
+            except Exception:
+                spec = {}
+        versions.append({"id": r["id"], "prompt": r["prompt"], "spec": spec, "ts": str(r["created_at"])})
+    return {"versions": versions}
+
+
+async def push_mob_version(mob_name: str, request: Request, payload: dict = Body(...)):
+    """POST /api/user/mobs/{mob_name}/versions — Record a new LLM-generated version."""
+    import json as _json
+    from backend.database.db import execute_query, fetch_one
+    user = _auth_user(request)
+    prompt = payload.get("prompt") or ""
+    spec = payload.get("spec") or {}
+    # Ensure mob_creation exists (upsert with current spec)
+    execute_query(
+        """
+        INSERT INTO mob_creations (user_id, name, current_spec, updated_at)
+        VALUES (%s, %s, %s::jsonb, NOW())
+        ON CONFLICT (user_id, name) DO UPDATE
+            SET current_spec = EXCLUDED.current_spec, updated_at = NOW()
+        """,
+        (user["id"], mob_name, _json.dumps(spec)),
+    )
+    mob = fetch_one(
+        "SELECT id FROM mob_creations WHERE user_id = %s AND name = %s",
+        (user["id"], mob_name),
+    )
+    execute_query(
+        "INSERT INTO mob_versions (mob_id, prompt, spec) VALUES (%s, %s, %s::jsonb)",
+        (mob["id"], prompt, _json.dumps(spec)),
+    )
+    return {"ok": True}

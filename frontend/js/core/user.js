@@ -180,8 +180,8 @@ async function signUp(username, password, tier = "free") {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, password, subscription_tier: tier }),
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.detail || "Sign up failed");
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || `Server error (${res.status})`);
     setSessionToken(data.session_token);
     setCurrentUser(data.username);
     localStorage.setItem(`user_${data.username}_tier`, data.subscription_tier || "free");
@@ -201,8 +201,8 @@ async function signIn(username, password) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, password }),
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.detail || "Sign in failed");
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || `Server error (${res.status})`);
     setSessionToken(data.session_token);
     setCurrentUser(data.username);
     localStorage.setItem(`user_${data.username}_tier`, data.subscription_tier || "free");
@@ -250,6 +250,86 @@ function continueAsGuest() {
   updateUserDisplay();
   updateAiUsageDisplay();
   if (typeof loadSpec === "function") loadSpec();
+}
+
+// =====================
+// DB MOB SYNC HELPERS
+// =====================
+
+/** Fire-and-forget: upsert a mob spec into mob_creations in the DB. */
+async function pushMobToDb(mobName, spec) {
+  const token = getSessionToken();
+  if (!token) return;
+  try {
+    await fetch(`/api/user/mobs/${encodeURIComponent(mobName)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+      body: JSON.stringify({ spec }),
+    });
+  } catch (e) {
+    console.warn("[DB] pushMobToDb failed:", e);
+  }
+}
+
+/** Fire-and-forget: delete a mob from mob_creations in the DB. */
+async function deleteMobFromDb(mobName) {
+  const token = getSessionToken();
+  if (!token) return;
+  try {
+    await fetch(`/api/user/mobs/${encodeURIComponent(mobName)}`, {
+      method: "DELETE",
+      headers: { "Authorization": `Bearer ${token}` },
+    });
+  } catch (e) {
+    console.warn("[DB] deleteMobFromDb failed:", e);
+  }
+}
+
+/**
+ * Fetch all mob_creations (and their mob_versions) for the current user from the DB
+ * and merge them into localStorage so the rest of the app sees them.
+ * DB is the authoritative source; localStorage is updated to match.
+ */
+async function loadUserMobsFromDB() {
+  const token = getSessionToken();
+  if (!token) return;
+  const user = getCurrentUser();
+  if (!user) return;
+  try {
+    const res = await fetch("/api/user/mobs", {
+      headers: { "Authorization": `Bearer ${token}` },
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data.mobs || data.mobs.length === 0) return;
+
+    // Write mob specs into localStorage
+    const userData = getUserData(user);
+    userData.mobs = userData.mobs || {};
+    for (const mob of data.mobs) {
+      userData.mobs[mob.mob_name] = mob.spec;
+    }
+    saveUserData(user, userData);
+
+    // Fetch and store LLM version history for each mob
+    for (const mob of data.mobs) {
+      try {
+        const vRes = await fetch(`/api/user/mobs/${encodeURIComponent(mob.mob_name)}/versions`, {
+          headers: { "Authorization": `Bearer ${token}` },
+        });
+        if (!vRes.ok) continue;
+        const vData = await vRes.json();
+        if (vData.versions && vData.versions.length > 0) {
+          const entries = vData.versions.map(v => ({ ts: v.ts, prompt: v.prompt, spec: v.spec }));
+          localStorage.setItem(`llm_stack_${user}_${mob.mob_name}`, JSON.stringify(entries));
+        }
+      } catch (e) {
+        console.warn(`[DB] Failed to load versions for ${mob.mob_name}:`, e);
+      }
+    }
+  } catch (e) {
+    console.warn("[DB] loadUserMobsFromDB failed:", e);
+  }
 }
 
 // Sync user to Neon DB (fire-and-forget)
@@ -606,8 +686,9 @@ function restoreUserData(file) {
 // Initialize user system on page load
 function initUserSystem() {
   // ── Session validation on load ──
-  validateSession().then((user) => {
+  validateSession().then(async (user) => {
     if (user) {
+      await loadUserMobsFromDB();
       hideAuthModal();
       updateUserDisplay();
       updateAiUsageDisplay();
@@ -673,6 +754,7 @@ function initUserSystem() {
     if (loginBtn) { loginBtn.disabled = false; loginBtn.textContent = "Sign In"; }
     if (result.ok) {
       loginPasswordInput.value = "";
+      await loadUserMobsFromDB();
       hideAuthModal();
       updateUserDisplay();
       updateAiUsageDisplay();
@@ -717,6 +799,7 @@ function initUserSystem() {
     if (result.ok) {
       signupPasswordInput.value = "";
       signupConfirmInput.value = "";
+      await loadUserMobsFromDB();
       hideAuthModal();
       updateUserDisplay();
       updateAiUsageDisplay();
@@ -730,8 +813,7 @@ function initUserSystem() {
   signupConfirmInput?.addEventListener("keypress", e => { if (e.key === "Enter") doSignup(); });
 
   // ── Guest buttons ──
-  document.getElementById("login-guest-btn")?.addEventListener("click", continueAsGuest);
-  document.getElementById("signup-guest-btn")?.addEventListener("click", continueAsGuest);
+  // (guest access removed)
 
   // ── Sign Out ──
   document.getElementById("sign-out-btn")?.addEventListener("click", signOut);

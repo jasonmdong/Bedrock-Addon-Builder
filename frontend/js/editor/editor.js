@@ -208,6 +208,7 @@ async function loadSpec() {
       spec.identifier = "custom:my_first_mob";
       
       saveUserMob(currentMobName, spec);
+      if (typeof pushMobToDb === "function") pushMobToDb(currentMobName, spec);
       await loadMobList();
       // Call selectMob to trigger full UI setup including geometry rendering
       await selectMob(currentMobName);
@@ -276,9 +277,11 @@ async function saveSpec() {
   // If renaming, delete old mob
   if (targetName !== currentMobName && currentMobName) {
     deleteUserMob(currentMobName);
+    if (typeof deleteMobFromDb === "function") deleteMobFromDb(currentMobName);
   }
   
   saveUserMob(targetName, spec);
+  if (typeof pushMobToDb === "function") pushMobToDb(targetName, spec);
   currentMobName = targetName;
   setStatus(`✅ Saved ${currentMobName} locally.`);
   await loadMobList();
@@ -687,6 +690,7 @@ async function deleteMob(event, name) {
   
   if (deleteUserMob(name)) {
     deleteUserMobTexture(name); // Also delete texture from localStorage
+    if (typeof deleteMobFromDb === "function") deleteMobFromDb(name);
     setStatus(`Deleted ${name}`);
     // If we deleted the active mob, reset currentMobName
     if (currentMobName === name) {

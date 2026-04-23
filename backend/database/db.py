@@ -115,19 +115,53 @@ class Database:
 
 
 def run_migrations():
-    """Add auth columns to users table (idempotent — safe to run on every startup)."""
+    """Apply all schema migrations (idempotent — safe to run on every startup)."""
     try:
         conn = get_connection()
         try:
             cur = conn.cursor()
             for stmt in [
+                # Ensure users table exists
+                """
+                CREATE TABLE IF NOT EXISTS users (
+                    username          TEXT PRIMARY KEY,
+                    subscription_tier TEXT NOT NULL DEFAULT 'free'
+                )
+                """,
+                # Auth columns on users table
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT",
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS session_token TEXT",
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS session_expires TIMESTAMPTZ",
+                # mob_creations: one row per (user_id, name)
+                """
+                CREATE TABLE IF NOT EXISTS mob_creations (
+                    id              SERIAL PRIMARY KEY,
+                    user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    name            VARCHAR(100) NOT NULL,
+                    identifier      VARCHAR(255),
+                    current_spec    JSONB NOT NULL DEFAULT '{}',
+                    texture_base64  TEXT,
+                    template_base   VARCHAR(100),
+                    created_at      TIMESTAMP DEFAULT NOW(),
+                    updated_at      TIMESTAMP DEFAULT NOW(),
+                    UNIQUE (user_id, name)
+                )
+                """,
+                # mob_versions: one row per LLM prompt result
+                """
+                CREATE TABLE IF NOT EXISTS mob_versions (
+                    id          SERIAL PRIMARY KEY,
+                    mob_id      INTEGER NOT NULL REFERENCES mob_creations(id) ON DELETE CASCADE,
+                    prompt      TEXT NOT NULL DEFAULT '',
+                    spec        JSONB NOT NULL DEFAULT '{}',
+                    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """,
+                "CREATE INDEX IF NOT EXISTS mob_versions_mob_id_idx ON mob_versions (mob_id)",
             ]:
                 cur.execute(stmt)
             conn.commit()
-            print("[DB] Auth migrations applied")
+            print("[DB] Migrations applied")
         except Exception as e:
             conn.rollback()
             print(f"[DB] Migration warning: {e}")

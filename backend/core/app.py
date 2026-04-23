@@ -62,6 +62,11 @@ from backend.core.routes import (
     auth_login,
     auth_logout,
     auth_me,
+    get_user_mobs,
+    upsert_user_mob,
+    delete_user_mob_db,
+    get_mob_versions,
+    push_mob_version,
 )
 from backend.mctools.routes import (
     mctools_health,
@@ -174,6 +179,13 @@ app.post("/api/auth/signup")(auth_signup)
 app.post("/api/auth/login")(auth_login)
 app.post("/api/auth/logout")(auth_logout)
 app.get("/api/auth/me")(auth_me)
+
+# User mob storage routes (per-user mob_creations + mob_versions)
+app.get("/api/user/mobs")(get_user_mobs)
+app.post("/api/user/mobs/{mob_name}")(upsert_user_mob)
+app.delete("/api/user/mobs/{mob_name}")(delete_user_mob_db)
+app.get("/api/user/mobs/{mob_name}/versions")(get_mob_versions)
+app.post("/api/user/mobs/{mob_name}/versions")(push_mob_version)
 
 # User account routes (demo subscription tier sync)
 app.post("/api/users")(upsert_user)
