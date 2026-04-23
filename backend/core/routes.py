@@ -7,9 +7,13 @@ import os
 from pathlib import Path
 from typing import Optional
 import json
+import secrets
+from datetime import datetime, timezone, timedelta
 import httpx
 
-from fastapi import File, Form, HTTPException, Body, UploadFile, Response
+import secrets
+from datetime import datetime, timezone, timedelta
+from fastapi import File, Form, HTTPException, Body, UploadFile, Response, Request, Request
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, JSONResponse
 import shutil
 
@@ -1879,4 +1883,115 @@ def get_user(username: str):
     row = fetch_one("SELECT username, subscription_tier FROM users WHERE username = %s", (username,))
     if not row:
         return {"username": username, "subscription_tier": "free"}
+    return {"username": row["username"], "subscription_tier": row["subscription_tier"]}
+
+
+# =========================
+# ====== AUTH ROUTES ======
+# =========================
+
+_SESSION_DAYS = 30
+
+
+def _hash_pw(password: str) -> str:
+    import bcrypt
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+
+
+def _verify_pw(password: str, hashed: str) -> bool:
+    import bcrypt
+    return bcrypt.checkpw(password.encode(), hashed.encode())
+
+
+def _new_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def _token_expiry() -> datetime:
+    return datetime.now(timezone.utc) + timedelta(days=_SESSION_DAYS)
+
+
+async def auth_signup(payload: dict = Body(...)):
+    """POST /api/auth/signup — Create account with password."""
+    from backend.database.db import execute_query, fetch_one
+    username = (payload.get("username") or "").strip()
+    password = payload.get("password") or ""
+    tier = payload.get("subscription_tier", "free")
+    if len(username) < 2:
+        raise HTTPException(status_code=400, detail="Username must be at least 2 characters")
+    if len(password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    if tier not in VALID_TIERS:
+        tier = "free"
+    existing = fetch_one("SELECT password_hash FROM users WHERE username = %s", (username,))
+    if existing and existing.get("password_hash"):
+        raise HTTPException(status_code=409, detail="Username already taken")
+    pw_hash = _hash_pw(password)
+    token = _new_token()
+    expires = _token_expiry()
+    execute_query(
+        """
+        INSERT INTO users (username, subscription_tier, password_hash, session_token, session_expires)
+        VALUES (%s, %s, %s, %s, %s)
+        ON CONFLICT (username) DO UPDATE SET
+            subscription_tier = EXCLUDED.subscription_tier,
+            password_hash = EXCLUDED.password_hash,
+            session_token = EXCLUDED.session_token,
+            session_expires = EXCLUDED.session_expires
+        """,
+        (username, tier, pw_hash, token, expires),
+    )
+    return {"username": username, "subscription_tier": tier, "session_token": token}
+
+
+async def auth_login(payload: dict = Body(...)):
+    """POST /api/auth/login — Authenticate and return a session token."""
+    from backend.database.db import execute_query, fetch_one
+    username = (payload.get("username") or "").strip()
+    password = payload.get("password") or ""
+    if not username or not password:
+        raise HTTPException(status_code=400, detail="Username and password are required")
+    row = fetch_one(
+        "SELECT username, subscription_tier, password_hash FROM users WHERE username = %s",
+        (username,),
+    )
+    if not row or not row.get("password_hash"):
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    if not _verify_pw(password, row["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    token = _new_token()
+    expires = _token_expiry()
+    execute_query(
+        "UPDATE users SET session_token = %s, session_expires = %s WHERE username = %s",
+        (token, expires, username),
+    )
+    return {"username": username, "subscription_tier": row["subscription_tier"], "session_token": token}
+
+
+async def auth_logout(request: Request):
+    """POST /api/auth/logout — Invalidate session token."""
+    from backend.database.db import execute_query
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        token = auth[7:]
+        execute_query(
+            "UPDATE users SET session_token = NULL, session_expires = NULL WHERE session_token = %s",
+            (token,),
+        )
+    return {"ok": True}
+
+
+async def auth_me(request: Request):
+    """GET /api/auth/me — Validate session and return user info."""
+    from backend.database.db import fetch_one
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="No token")
+    token = auth[7:]
+    row = fetch_one(
+        "SELECT username, subscription_tier FROM users WHERE session_token = %s AND session_expires > NOW()",
+        (token,),
+    )
+    if not row:
+        raise HTTPException(status_code=401, detail="Session expired or invalid")
     return {"username": row["username"], "subscription_tier": row["subscription_tier"]}

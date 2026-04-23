@@ -112,3 +112,27 @@ class Database:
         else:
             sql = f"SELECT * FROM {table}"
             return fetch_all(sql)
+
+
+def run_migrations():
+    """Add auth columns to users table (idempotent — safe to run on every startup)."""
+    try:
+        conn = get_connection()
+        try:
+            cur = conn.cursor()
+            for stmt in [
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS session_token TEXT",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS session_expires TIMESTAMPTZ",
+            ]:
+                cur.execute(stmt)
+            conn.commit()
+            print("[DB] Auth migrations applied")
+        except Exception as e:
+            conn.rollback()
+            print(f"[DB] Migration warning: {e}")
+        finally:
+            cur.close()
+            conn.close()
+    except RuntimeError as e:
+        print(f"[DB] Skipping migrations (DB not configured): {e}")

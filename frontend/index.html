@@ -18,47 +18,70 @@
 
 <!-- User Selection Modal -->
 
-<div id="user-modal-overlay" class="user-modal-overlay hidden">
-
-  <div class="user-modal">
-
-    <h2>Select User</h2>
-
-    <ul class="user-list" id="user-list">
-
-      <!-- Users will be listed here -->
-
-    </ul>
-
-    <div class="new-user-form">
-
-      <input type="text" id="new-user-input" placeholder="Enter new username..." autocomplete="username">
-
+<!-- Auth Modal (Login / Sign Up) -->
+<div id="auth-modal-overlay" class="user-modal-overlay hidden">
+  <div class="user-modal auth-modal">
+    <div class="auth-brand">
+      <h2>Bedrock Add-on Builder</h2>
+      <p class="tier-poc-note" style="margin:0;">Create and share custom Minecraft mobs.</p>
     </div>
 
-    <p class="tier-poc-note" id="tier-poc-note">
-      <strong>Demo plans</strong> — no payment. Choose a tier to try different limits (POC for future subscriptions).
-    </p>
+    <div class="auth-tabs">
+      <button type="button" class="auth-tab active" id="tab-login-btn">Sign In</button>
+      <button type="button" class="auth-tab" id="tab-signup-btn">Create Account</button>
+    </div>
 
-    <div class="tier-select-cards" id="tier-select-cards">
+    <!-- Sign In panel -->
+    <div id="auth-login-panel">
+      <div class="field" style="margin-top:1rem;">
+        <label>Username</label>
+        <input type="text" id="auth-login-username" placeholder="Your username..." autocomplete="username">
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input type="password" id="auth-login-password" placeholder="Your password..." autocomplete="current-password">
+      </div>
+      <div id="login-error" class="auth-error" style="display:none;"></div>
+      <button type="button" class="primary" id="login-submit-btn" style="width:100%;margin-top:1rem;">Sign In</button>
+      <button type="button" class="ghost" id="login-guest-btn" style="width:100%;margin-top:0.4rem;">Continue as Guest</button>
+    </div>
+
+    <!-- Sign Up panel -->
+    <div id="auth-signup-panel" style="display:none;">
+      <div class="field" style="margin-top:1rem;">
+        <label>Username</label>
+        <input type="text" id="auth-signup-username" placeholder="Choose a username..." autocomplete="username">
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input type="password" id="auth-signup-password" placeholder="At least 6 characters..." autocomplete="new-password">
+      </div>
+      <div class="field">
+        <label>Confirm Password</label>
+        <input type="password" id="auth-signup-confirm" placeholder="Repeat password..." autocomplete="new-password">
+      </div>
+      <p class="tier-poc-note" style="margin-top:0.75rem;">
+        <strong>Demo plans</strong> — no payment. Choose a tier to try different limits.
+      </p>
+      <div class="tier-select-cards" id="tier-select-cards">
         <div class="tier-card" data-tier="free">
-        <div class="tier-card-name">Free</div>
-        <div class="tier-card-desc">5 mobs · 3 history · 20 AI/day</div>
+          <div class="tier-card-name">Free</div>
+          <div class="tier-card-desc">5 mobs · 3 history · 20 AI/day</div>
+        </div>
+        <div class="tier-card" data-tier="creator">
+          <div class="tier-card-name">Creator</div>
+          <div class="tier-card-desc">50 mobs · 20 history · 200 AI/day<br><span class="tier-price">$8–$15/mo (illustrative)</span></div>
+        </div>
+        <div class="tier-card" data-tier="pro">
+          <div class="tier-card-name">Pro</div>
+          <div class="tier-card-desc">Unlimited mobs &amp; AI (demo)<br><span class="tier-price">$20–$40/mo (illustrative)</span></div>
+        </div>
       </div>
-      <div class="tier-card" data-tier="creator">
-        <div class="tier-card-name">Creator</div>
-        <div class="tier-card-desc">50 mobs · 20 history · 200 AI/day<br><span class="tier-price">$8–$15/mo (illustrative)</span></div>
-      </div>
-      <div class="tier-card" data-tier="pro">
-        <div class="tier-card-name">Pro</div>
-        <div class="tier-card-desc">Unlimited mobs &amp; AI (demo)<br><span class="tier-price">$20–$40/mo (illustrative)</span></div>
-      </div>
+      <div id="signup-error" class="auth-error" style="display:none;"></div>
+      <button type="button" class="primary" id="signup-submit-btn" style="width:100%;margin-top:1rem;">Create Account</button>
+      <button type="button" class="ghost" id="signup-guest-btn" style="width:100%;margin-top:0.4rem;">Continue as Guest</button>
     </div>
-
-    <button type="button" class="primary" id="create-user-btn" style="width:100%;margin-top:0.75rem">Create account</button>
-
   </div>
-
 </div>
 
 <!-- Change demo plan (POC — no payment) -->
@@ -148,7 +171,7 @@
     </div>
     <div id="sidebar-usage-line" class="sidebar-usage-line" aria-live="polite"></div>
 
-    <button type="button" class="ghost switch-user-btn" id="switch-user-btn">Switch User</button>
+    <button type="button" class="ghost" id="sign-out-btn">Sign Out</button>
     <button type="button" class="ghost" id="change-plan-btn" style="font-size: 0.85rem; padding: 0.4rem 0.8rem; width: 100%; margin-top: 0.35rem;">Change demo plan</button>
 
     <div class="data-buttons">

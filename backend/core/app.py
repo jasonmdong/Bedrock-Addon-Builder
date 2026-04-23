@@ -58,6 +58,10 @@ from backend.core.routes import (
     check_published_mob,
     llm_animation_generate,
     llm_animation_controller_generate,
+    auth_signup,
+    auth_login,
+    auth_logout,
+    auth_me,
 )
 from backend.mctools.routes import (
     mctools_health,
@@ -95,6 +99,15 @@ app.add_middleware(
 @app.on_event("shutdown")
 def shutdown_event():
     stop_mctools_server()
+
+
+@app.on_event("startup")
+def startup_event():
+    try:
+        from backend.database.db import run_migrations
+        run_migrations()
+    except Exception as e:
+        print(f"[Startup] Migration skipped: {e}")
 
 # =========================
 # ====== API ROUTES =======
@@ -155,6 +168,12 @@ app.post("/api/mctools/write-image-pixel-art")(mctools_write_image_pixel_art)
 # Animation generation routes
 app.post("/api/animation/generate")(llm_animation_generate)
 app.post("/api/animation/controller/generate")(llm_animation_controller_generate)
+
+# Auth routes
+app.post("/api/auth/signup")(auth_signup)
+app.post("/api/auth/login")(auth_login)
+app.post("/api/auth/logout")(auth_logout)
+app.get("/api/auth/me")(auth_me)
 
 # User account routes (demo subscription tier sync)
 app.post("/api/users")(upsert_user)

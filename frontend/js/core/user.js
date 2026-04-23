@@ -7,14 +7,9 @@ const CURRENT_USER_KEY = "current_user";
 const USER_DATA_PREFIX = "user_";
 const USER_DATA_SUFFIX = "_data";
 
-// User Modal Elements
-const userModalOverlay = document.getElementById("user-modal-overlay");
-const userListEl = document.getElementById("user-list");
-const newUserInput = document.getElementById("new-user-input");
-const createUserBtn = document.getElementById("create-user-btn");
+// Persistent UI Elements
 const currentUserDisplay = document.getElementById("current-user-display");
 const currentUserTierBadge = document.getElementById("current-user-tier-badge");
-const switchUserBtn = document.getElementById("switch-user-btn");
 const backupBtn = document.getElementById("backup-btn");
 const restoreBtn = document.getElementById("restore-btn");
 const restoreFileInput = document.getElementById("restore-file-input");
@@ -156,22 +151,105 @@ function getUserTier(username) {
 
 const VALID_SIGNUP_TIERS = new Set(["free", "creator", "pro"]);
 
-// Create a new user (tier = POC plan selection; no payment)
-function createUser(username, tier = "free") {
-  const users = getAppUsers();
-  if (users.includes(username)) {
-    alert("User already exists!");
-    return false;
+// =====================
+// SESSION MANAGEMENT
+// =====================
+
+function getSessionToken() {
+  return localStorage.getItem("auth_session_token");
+}
+
+function setSessionToken(token) {
+  if (token) localStorage.setItem("auth_session_token", token);
+  else localStorage.removeItem("auth_session_token");
+}
+
+function clearSession() {
+  localStorage.removeItem("auth_session_token");
+  localStorage.removeItem(CURRENT_USER_KEY);
+}
+
+// =====================
+// AUTH API CALLS
+// =====================
+
+async function signUp(username, password, tier = "free") {
+  try {
+    const res = await fetch("/api/auth/signup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password, subscription_tier: tier }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Sign up failed");
+    setSessionToken(data.session_token);
+    setCurrentUser(data.username);
+    localStorage.setItem(`user_${data.username}_tier`, data.subscription_tier || "free");
+    if (!getUserData(data.username).mobs) {
+      saveUserData(data.username, { mobs: {}, settings: {} });
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
   }
-  if (!VALID_SIGNUP_TIERS.has(tier)) {
-    tier = "free";
+}
+
+async function signIn(username, password) {
+  try {
+    const res = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Sign in failed");
+    setSessionToken(data.session_token);
+    setCurrentUser(data.username);
+    localStorage.setItem(`user_${data.username}_tier`, data.subscription_tier || "free");
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
   }
-  users.push(username);
-  saveAppUsers(users);
-  saveUserData(username, { mobs: {}, settings: {} });
-  localStorage.setItem(`user_${username}_tier`, tier);
-  syncUserToBackend(username, tier);
-  return true;
+}
+
+async function signOut() {
+  const token = getSessionToken();
+  if (token) {
+    fetch("/api/auth/logout", {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${token}` },
+    }).catch(() => {});
+  }
+  clearSession();
+  updateUserDisplay();
+  updateAiUsageDisplay();
+  showAuthModal();
+}
+
+async function validateSession() {
+  const token = getSessionToken();
+  if (!token) return null;
+  try {
+    const res = await fetch("/api/auth/me", {
+      headers: { "Authorization": `Bearer ${token}` },
+    });
+    if (!res.ok) { clearSession(); return null; }
+    const data = await res.json();
+    setCurrentUser(data.username);
+    localStorage.setItem(`user_${data.username}_tier`, data.subscription_tier || "free");
+    return data;
+  } catch (e) {
+    // Offline — keep local session if we have a username
+    return getCurrentUser() ? { username: getCurrentUser() } : null;
+  }
+}
+
+function continueAsGuest() {
+  if (!getCurrentUser()) setCurrentUser("guest");
+  hideAuthModal();
+  updateUserDisplay();
+  updateAiUsageDisplay();
+  if (typeof loadSpec === "function") loadSpec();
 }
 
 // Sync user to Neon DB (fire-and-forget)
@@ -425,86 +503,21 @@ function deleteUser(username) {
   return false;
 }
 
-// Show user selection modal
-function showUserModal() {
-  if (!userModalOverlay || !userListEl) return;
-  renderUserList();
-  // Always reset tier selection to "free" when the modal opens
-  const tierRoot = document.getElementById("tier-select-cards");
-  tierRoot?.querySelectorAll(".tier-card").forEach(c => c.classList.remove("selected"));
-  tierRoot?.querySelector(".tier-card[data-tier='free']")?.classList.add("selected");
-  userModalOverlay.classList.remove("hidden");
+// Show auth modal
+function showAuthModal() {
+  const overlay = document.getElementById("auth-modal-overlay");
+  overlay?.classList.remove("hidden");
 }
 
-// Hide user selection modal
-function hideUserModal() {
-  if (!userModalOverlay) return;
-  userModalOverlay.classList.add("hidden");
+// Hide auth modal
+function hideAuthModal() {
+  const overlay = document.getElementById("auth-modal-overlay");
+  overlay?.classList.add("hidden");
 }
 
-// Render user list in modal
-function renderUserList() {
-  if (!userListEl) return;
-  const users = getAppUsers();
-  userListEl.innerHTML = "";
-  
-  if (users.length === 0) {
-    userListEl.innerHTML = '<li style="color: var(--muted); text-align: center; padding: 1rem;">No users yet. Create one below.</li>';
-    return;
-  }
-  
-  users.forEach(username => {
-    const li = document.createElement("li");
-    li.className = "user-list-item";
-
-    const nameSpan = document.createElement("span");
-    nameSpan.className = "user-name";
-    nameSpan.textContent = username;
-    li.appendChild(nameSpan);
-
-    const tier = getUserTier(username);
-    const badge = document.createElement("span");
-    badge.className = `user-tier-badge tier-badge-${tier}`;
-    badge.textContent = tier;
-    li.appendChild(badge);
-    
-    const deleteBtn = document.createElement("button");
-    deleteBtn.className = "delete-user-btn";
-    deleteBtn.textContent = "Delete";
-    deleteBtn.onclick = (e) => {
-      e.stopPropagation();
-      if (confirm(`Delete user "${username}" and all their data? This cannot be undone.`)) {
-        deleteUser(username);
-        if (getCurrentUser() === username) {
-          localStorage.removeItem(CURRENT_USER_KEY);
-          updateUserDisplay();
-        }
-        renderUserList();
-      }
-    };
-    li.appendChild(deleteBtn);
-    
-    li.onclick = () => selectUser(username);
-    userListEl.appendChild(li);
-  });
-}
-
-// Select and login as user
-function selectUser(username) {
-  setCurrentUser(username);
-  hideUserModal();
-  updateUserDisplay();
-  updateAiUsageDisplay();
-  // Sync user to backend (upsert) so existing localStorage-only users get persisted
-  const tier = getUserTier(username);
-  syncUserToBackend(username, tier).then(() => {
-    refreshUserTierFromBackend(username).then(() => {
-      updateUserDisplay();
-      updateAiUsageDisplay();
-    });
-  });
-  loadSpec();
-}
+// (Legacy aliases — kept for compatibility)
+const showUserModal = showAuthModal;
+const hideUserModal = hideAuthModal;
 
 // Update UI to show current user and demo tier badge (POC; no payment)
 function updateUserDisplay() {
@@ -592,21 +605,138 @@ function restoreUserData(file) {
 
 // Initialize user system on page load
 function initUserSystem() {
-  const user = getCurrentUser();
-  
-  if (!user) {
-    // No user logged in, show modal
-    showUserModal();
-  } else {
-    updateUserDisplay();
-    updateAiUsageDisplay();
-    const u = getCurrentUser();
-    if (u) refreshUserTierFromBackend(u).then(() => { updateUserDisplay(); updateAiUsageDisplay(); });
-  }
-  
-  // Event listeners for user management (with null checks)
-  switchUserBtn?.addEventListener("click", showUserModal);
+  // ── Session validation on load ──
+  validateSession().then((user) => {
+    if (user) {
+      hideAuthModal();
+      updateUserDisplay();
+      updateAiUsageDisplay();
+      if (typeof loadSpec === "function") loadSpec();
+    } else {
+      showAuthModal();
+    }
+  });
 
+  // ── Tab switching ──
+  const tabLoginBtn = document.getElementById("tab-login-btn");
+  const tabSignupBtn = document.getElementById("tab-signup-btn");
+  const loginPanel = document.getElementById("auth-login-panel");
+  const signupPanel = document.getElementById("auth-signup-panel");
+
+  function showLoginTab() {
+    loginPanel.style.display = "";
+    signupPanel.style.display = "none";
+    tabLoginBtn?.classList.add("active");
+    tabSignupBtn?.classList.remove("active");
+    document.getElementById("login-error").style.display = "none";
+  }
+  function showSignupTab() {
+    loginPanel.style.display = "none";
+    signupPanel.style.display = "";
+    tabLoginBtn?.classList.remove("active");
+    tabSignupBtn?.classList.add("active");
+    document.getElementById("signup-error").style.display = "none";
+    const tierRoot = document.getElementById("tier-select-cards");
+    tierRoot?.querySelectorAll(".tier-card").forEach(c => c.classList.remove("selected"));
+    tierRoot?.querySelector(".tier-card[data-tier='free']")?.classList.add("selected");
+  }
+  tabLoginBtn?.addEventListener("click", showLoginTab);
+  tabSignupBtn?.addEventListener("click", showSignupTab);
+
+  // ── Signup tier cards ──
+  const tierCardRoot = document.getElementById("tier-select-cards");
+  const tierCards = Array.from(tierCardRoot?.querySelectorAll(".tier-card") || []);
+  tierCards.forEach(card => {
+    card.addEventListener("click", () => {
+      tierCards.forEach(c => c.classList.remove("selected"));
+      card.classList.add("selected");
+    });
+  });
+  tierCardRoot?.querySelector(".tier-card[data-tier='free']")?.classList.add("selected");
+
+  // ── Login form ──
+  const loginBtn = document.getElementById("login-submit-btn");
+  const loginUsernameInput = document.getElementById("auth-login-username");
+  const loginPasswordInput = document.getElementById("auth-login-password");
+  const loginError = document.getElementById("login-error");
+
+  async function doLogin() {
+    const username = loginUsernameInput?.value.trim();
+    const password = loginPasswordInput?.value;
+    if (!username || !password) {
+      loginError.textContent = "Please enter username and password.";
+      loginError.style.display = "";
+      return;
+    }
+    if (loginBtn) { loginBtn.disabled = true; loginBtn.textContent = "Signing in..."; }
+    const result = await signIn(username, password);
+    if (loginBtn) { loginBtn.disabled = false; loginBtn.textContent = "Sign In"; }
+    if (result.ok) {
+      loginPasswordInput.value = "";
+      hideAuthModal();
+      updateUserDisplay();
+      updateAiUsageDisplay();
+      if (typeof loadSpec === "function") loadSpec();
+    } else {
+      loginError.textContent = result.error;
+      loginError.style.display = "";
+    }
+  }
+  loginBtn?.addEventListener("click", doLogin);
+  loginPasswordInput?.addEventListener("keypress", e => { if (e.key === "Enter") doLogin(); });
+  loginUsernameInput?.addEventListener("keypress", e => { if (e.key === "Enter") doLogin(); });
+
+  // ── Signup form ──
+  const signupBtn = document.getElementById("signup-submit-btn");
+  const signupUsernameInput = document.getElementById("auth-signup-username");
+  const signupPasswordInput = document.getElementById("auth-signup-password");
+  const signupConfirmInput = document.getElementById("auth-signup-confirm");
+  const signupError = document.getElementById("signup-error");
+
+  async function doSignup() {
+    const username = signupUsernameInput?.value.trim();
+    const password = signupPasswordInput?.value;
+    const confirm = signupConfirmInput?.value;
+    if (!username || username.length < 2) {
+      signupError.textContent = "Username must be at least 2 characters.";
+      signupError.style.display = ""; return;
+    }
+    if (!password || password.length < 6) {
+      signupError.textContent = "Password must be at least 6 characters.";
+      signupError.style.display = ""; return;
+    }
+    if (password !== confirm) {
+      signupError.textContent = "Passwords do not match.";
+      signupError.style.display = ""; return;
+    }
+    const selectedCard = tierCardRoot?.querySelector(".tier-card.selected");
+    const tier = selectedCard?.dataset.tier || "free";
+    if (signupBtn) { signupBtn.disabled = true; signupBtn.textContent = "Creating account..."; }
+    const result = await signUp(username, password, tier);
+    if (signupBtn) { signupBtn.disabled = false; signupBtn.textContent = "Create Account"; }
+    if (result.ok) {
+      signupPasswordInput.value = "";
+      signupConfirmInput.value = "";
+      hideAuthModal();
+      updateUserDisplay();
+      updateAiUsageDisplay();
+      if (typeof loadSpec === "function") loadSpec();
+    } else {
+      signupError.textContent = result.error;
+      signupError.style.display = "";
+    }
+  }
+  signupBtn?.addEventListener("click", doSignup);
+  signupConfirmInput?.addEventListener("keypress", e => { if (e.key === "Enter") doSignup(); });
+
+  // ── Guest buttons ──
+  document.getElementById("login-guest-btn")?.addEventListener("click", continueAsGuest);
+  document.getElementById("signup-guest-btn")?.addEventListener("click", continueAsGuest);
+
+  // ── Sign Out ──
+  document.getElementById("sign-out-btn")?.addEventListener("click", signOut);
+
+  // ── Change demo plan modal ──
   const changePlanOverlay = document.getElementById("change-plan-modal-overlay");
   const changePlanBtn = document.getElementById("change-plan-btn");
   const savePlanBtn = document.getElementById("save-plan-btn");
@@ -614,32 +744,24 @@ function initUserSystem() {
   const changePlanTierCards = Array.from(changePlanTierRoot?.querySelectorAll(".tier-card") || []);
 
   function syncChangePlanSelection(tier) {
-    changePlanTierCards.forEach((c) => {
-      c.classList.toggle("selected", c.dataset.tier === tier);
-    });
+    changePlanTierCards.forEach(c => c.classList.toggle("selected", c.dataset.tier === tier));
   }
 
   changePlanBtn?.addEventListener("click", () => {
     const u = getCurrentUser();
-    if (!u) {
-      alert("Select a user first.");
-      return;
-    }
+    if (!u) { showAuthModal(); return; }
     syncChangePlanSelection(getUserTier(u));
     changePlanOverlay?.classList.remove("hidden");
   });
-
-  changePlanOverlay?.addEventListener("click", (e) => {
+  changePlanOverlay?.addEventListener("click", e => {
     if (e.target === changePlanOverlay) changePlanOverlay.classList.add("hidden");
   });
-
-  changePlanTierCards.forEach((card) => {
+  changePlanTierCards.forEach(card => {
     card.addEventListener("click", () => {
-      changePlanTierCards.forEach((c) => c.classList.remove("selected"));
+      changePlanTierCards.forEach(c => c.classList.remove("selected"));
       card.classList.add("selected");
     });
   });
-
   savePlanBtn?.addEventListener("click", () => {
     const u = getCurrentUser();
     if (!u) return;
@@ -650,55 +772,15 @@ function initUserSystem() {
       setStatus?.(`Demo plan set to ${tier}.`);
     }
   });
-
   document.getElementById("cancel-plan-btn")?.addEventListener("click", () => {
     changePlanOverlay?.classList.add("hidden");
   });
-  
-  // Tier card selection (signup POC — scoped to modal)
-  const tierCardRoot = document.getElementById("tier-select-cards");
-  const tierCards = Array.from(tierCardRoot?.querySelectorAll(".tier-card") || []);
-  tierCards.forEach((card) => {
-    card.addEventListener("click", () => {
-      tierCards.forEach((c) => c.classList.remove("selected"));
-      card.classList.add("selected");
-    });
-  });
-  tierCardRoot?.querySelector(".tier-card[data-tier='free']")?.classList.add("selected");
 
-  createUserBtn?.addEventListener("click", () => {
-    const username = newUserInput.value.trim();
-    if (!username) {
-      alert("Please enter a username.");
-      return;
-    }
-    const selectedCard = tierCardRoot?.querySelector(".tier-card.selected");
-    const tier = selectedCard?.dataset.tier || "free";
-    if (createUser(username, tier)) {
-      newUserInput.value = "";
-      tierCards.forEach((c) => c.classList.remove("selected"));
-      tierCardRoot?.querySelector(".tier-card[data-tier='free']")?.classList.add("selected");
-      selectUser(username);
-    }
-  });
-  
-  newUserInput?.addEventListener("keypress", (e) => {
-    if (e.key === "Enter") {
-      createUserBtn?.click();
-    }
-  });
-  
+  // ── Backup / Restore ──
   backupBtn?.addEventListener("click", backupUserData);
-  
-  restoreBtn?.addEventListener("click", () => {
-    restoreFileInput?.click();
-  });
-  
-  restoreFileInput?.addEventListener("change", (e) => {
+  restoreBtn?.addEventListener("click", () => restoreFileInput?.click());
+  restoreFileInput?.addEventListener("change", e => {
     const file = e.target.files[0];
-    if (file) {
-      restoreUserData(file);
-      restoreFileInput.value = ""; // Reset for next use
-    }
+    if (file) { restoreUserData(file); restoreFileInput.value = ""; }
   });
 }
