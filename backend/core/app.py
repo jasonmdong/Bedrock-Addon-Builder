@@ -73,7 +73,6 @@ from backend.core.routes import (
     list_published_mobs,
     market_page,
     get_published_mob,
-    get_published_mob_texture,
 )
 from backend.mctools.routes import (
     mctools_health,
@@ -204,7 +203,6 @@ app.get("/api/publish/check/{mob_name}/{username}")(check_published_mob)
 app.get("/api/market")(list_published_mobs)
 app.get("/api/market/{mob_name}")(get_published_mob)
 app.get("/api/market")(list_published_mobs)
-app.get("/api/market/{mob_name}/texture")(get_published_mob_texture)
 app.get("/api/market/{mob_name}")(get_published_mob)
 
 # Static routes
