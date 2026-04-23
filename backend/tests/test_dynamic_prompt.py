@@ -21,7 +21,7 @@ def test_dynamic_prompt_smaller_than_legacy_for_common_requests():
     dyn = build_dynamic_context(user_prompt, "entity_logic_ai")
 
     legacy = _get_legacy_system_prompt_for_tests(user_prompt, DEFAULTS, "entity_logic_ai", None, dyn, profile)
-    dynamic = _get_full_system_prompt(user_prompt, DEFAULTS, "entity_logic_ai", None, dyn, profile)
+    dynamic, _, _ = _get_full_system_prompt(user_prompt, DEFAULTS, "entity_logic_ai", None, dyn, profile)
 
     assert len(dynamic) < len(legacy)
     # Ensure the new prompt still contains core guidance + injected intent
@@ -35,13 +35,13 @@ def test_prompt_includes_loot_section_only_when_relevant():
     p_no_loot = "Increase hp by 10."
     prof_no = extract_prompt_intents(p_no_loot, "entity_logic_ai")
     dyn_no = build_dynamic_context(p_no_loot, "entity_logic_ai")
-    prompt_no = _get_full_system_prompt(p_no_loot, base_spec, "entity_logic_ai", None, dyn_no, prof_no)
+    prompt_no, _, _ = _get_full_system_prompt(p_no_loot, base_spec, "entity_logic_ai", None, dyn_no, prof_no)
     assert "LOOT DROPS" not in prompt_no
 
     p_loot = "Make it drop diamonds on death."
     prof_yes = extract_prompt_intents(p_loot, "entity_logic_ai")
     dyn_yes = build_dynamic_context(p_loot, "entity_logic_ai")
-    prompt_yes = _get_full_system_prompt(p_loot, base_spec, "entity_logic_ai", None, dyn_yes, prof_yes)
+    prompt_yes, _, _ = _get_full_system_prompt(p_loot, base_spec, "entity_logic_ai", None, dyn_yes, prof_yes)
     assert "LOOT DROPS" in prompt_yes
 
 
@@ -59,12 +59,21 @@ def test_custom_geometry_triggers_preservation_context():
     }
     assert _has_custom_geometry(spec) is True
 
-    user_prompt = "Increase speed a little."
+    # A visual/appearance prompt should trigger preservation when custom geo exists
+    user_prompt = "Change its texture color to blue."
     prof = extract_prompt_intents(user_prompt, "entity_logic_ai")
     dyn = build_dynamic_context(user_prompt, "entity_logic_ai")
-    prompt = _get_full_system_prompt(user_prompt, spec, "entity_logic_ai", None, dyn, prof)
+    prompt, _, _ = _get_full_system_prompt(user_prompt, spec, "entity_logic_ai", None, dyn, prof)
 
     assert "PRESERVE GEOMETRY ON ITERATION" in prompt
+
+    # A pure stat change should NOT trigger preservation even with custom geo
+    stat_prompt = "Increase speed a little."
+    prof2 = extract_prompt_intents(stat_prompt, "entity_logic_ai")
+    dyn2 = build_dynamic_context(stat_prompt, "entity_logic_ai")
+    prompt2, _, _ = _get_full_system_prompt(stat_prompt, spec, "entity_logic_ai", None, dyn2, prof2)
+
+    assert "PRESERVE GEOMETRY ON ITERATION" not in prompt2
 
 
 if __name__ == "__main__":

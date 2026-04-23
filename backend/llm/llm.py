@@ -303,11 +303,22 @@ def _get_full_system_prompt(
     user_prompt_l = (user_prompt or "").lower()
     has_custom_geo = bool(current_spec) and _has_custom_geometry(current_spec)
 
-    # Decide which base sections to include
-    include_geometry = has_custom_geo
-    include_geometry_preservation = has_custom_geo
+    # Decide which base sections to include.
+    # Geometry/preservation are only injected when the prompt is actually
+    # geometry-related — having a custom geometry model doesn't mean every
+    # prompt needs those sections (e.g. "increase hp by 10" shouldn't).
+    include_geometry = False
+    include_geometry_preservation = False
     include_visuals = False
     include_loot = False
+
+    # Keywords that suggest the user cares about shape/appearance and the LLM
+    # might inadvertently touch geometry fields.
+    _geo_adjacent_keywords = (
+        "texture", "color", "colour", "scale", "size", "shape", "model",
+        "geometry", "bone", "skin", "appearance", "look", "visual",
+    )
+    prompt_touches_visuals = any(k in user_prompt_l for k in _geo_adjacent_keywords)
 
     if intent_profile:
         # Geometry: explicit request OR generic "geometry_edit" signal
@@ -315,7 +326,11 @@ def _get_full_system_prompt(
             s.name == "geometry_edit" for s in intent_profile.signals
         ):
             include_geometry = True
-        if intent_profile.constraints.get("preserve_geometry"):
+        # Preservation: only when mob has custom geo AND prompt could affect appearance
+        if has_custom_geo and (
+            intent_profile.constraints.get("preserve_geometry")
+            or prompt_touches_visuals
+        ):
             include_geometry_preservation = True
 
         # Visuals: explicit request OR "visual_edit" signal
@@ -324,9 +339,25 @@ def _get_full_system_prompt(
         ):
             include_visuals = True
 
+    # Fallback: if no intent profile, still protect custom geometry on visual prompts
+    if has_custom_geo and prompt_touches_visuals and not include_geometry_preservation:
+        include_geometry_preservation = True
+
     # Loot: simple keyword heuristic (not yet a first-class intent)
     if any(k in user_prompt_l for k in ("drop", "drops", "loot", "on death", "upon death")):
         include_loot = True
+
+    sections_included = []
+    if category == "entity_logic_ai":
+        sections_included.append("behavior")
+    if include_geometry:
+        sections_included.append("geometry")
+    if include_geometry_preservation:
+        sections_included.append("geometry_preservation")
+    if include_visuals:
+        sections_included.append("visuals")
+    if include_loot:
+        sections_included.append("loot")
 
     prompt = build_llm_system_prompt(
         include_behavior=(category == "entity_logic_ai"),
@@ -387,16 +418,22 @@ def _get_full_system_prompt(
         intent_names = [i.name for i in dynamic_ctx.intents]
         dyn_tag = f", dynamic_intents={intent_names}"
 
-    if len(prompt) > MAX_SYSTEM_PROMPT_CHARS:
+    char_count = len(prompt)
+    # Rough token estimate: ~4 chars per token
+    token_estimate = char_count // 4
+
+    if char_count > MAX_SYSTEM_PROMPT_CHARS:
         prompt = prompt[:MAX_SYSTEM_PROMPT_CHARS] + "\n... [system prompt truncated for token budget]"
-        print(f"[LLM] WARNING: System prompt truncated from {len(prompt)} to {MAX_SYSTEM_PROMPT_CHARS} chars")
+        print(f"[LLM] WARNING: System prompt truncated to {MAX_SYSTEM_PROMPT_CHARS} chars (~{MAX_SYSTEM_PROMPT_CHARS // 4} tokens)")
 
-    print(f"[LLM] System prompt built for category={category} "
-          f"(context={'yes' if cat_context else 'no'}, "
-          f"schema={'yes' if (cat_schema or (category == 'entity_logic_ai' and SPEC_SCHEMA)) else 'no'}"
-          f"{mcp_tag}{dyn_tag})")
+    print(
+        f"[LLM] Dynamic prompt built | category={category} | "
+        f"sections=[{', '.join(sections_included) if sections_included else 'base'}] | "
+        f"~{token_estimate} tokens ({char_count} chars)"
+        f"{mcp_tag}{dyn_tag}"
+    )
 
-    return prompt
+    return prompt, token_estimate, sections_included
 
 
 def _get_legacy_system_prompt_for_tests(
@@ -512,7 +549,7 @@ def _call_openai(prompt: str, current: dict, api_key: Optional[str],
     """Call OpenAI to rewrite a spec based on a user prompt."""
     print("[LLM] calling OpenAI model", LLM_MODEL_NAME)
     client = _get_openai_client(api_key)
-    sys_prompt = _get_full_system_prompt(prompt, current, category, mcp_context, dynamic_ctx, intent_profile)
+    sys_prompt, _tok, _sec = _get_full_system_prompt(prompt, current, category, mcp_context, dynamic_ctx, intent_profile)
     user_content = f"Current spec:\n{_prepare_spec_for_llm(current)}\n\nInstruction:\n{prompt.strip()}"
     total_chars = len(sys_prompt) + len(user_content)
     print(f"[LLM] Request size: system={len(sys_prompt)} user={len(user_content)} total={total_chars} chars (~{total_chars//4} tokens)")
@@ -559,7 +596,7 @@ def _call_deepseek(prompt: str, current: dict, api_key: Optional[str],
             messages=[
                 {
                     "role": "system",
-                    "content": _get_full_system_prompt(prompt, current, category, mcp_context, dynamic_ctx, intent_profile)
+                    "content": _get_full_system_prompt(prompt, current, category, mcp_context, dynamic_ctx, intent_profile)[0]
                 },
                 {
                     "role": "user",
@@ -600,7 +637,7 @@ def _call_gemini(prompt: str, current: dict, api_key: Optional[str],
             model=GEMINI_MODEL_NAME,
             contents=f"Current spec:\n{_prepare_spec_for_llm(current)}\n\nInstruction:\n{prompt.strip()}",
             config={
-                "system_instruction": _get_full_system_prompt(prompt, current, category, mcp_context, dynamic_ctx, intent_profile),
+                "system_instruction": _get_full_system_prompt(prompt, current, category, mcp_context, dynamic_ctx, intent_profile)[0],
                 "response_mime_type": "application/json"
             }
         )
@@ -639,7 +676,7 @@ def _call_ollama(prompt: str, current: dict, api_key: Optional[str] = None,
         messages = [
             {
                 "role": "system",
-                "content": _get_full_system_prompt(prompt, current, category, mcp_context, dynamic_ctx, intent_profile)
+                "content": _get_full_system_prompt(prompt, current, category, mcp_context, dynamic_ctx, intent_profile)[0]
             },
             {
                 "role": "user",
@@ -691,7 +728,7 @@ def _call_claude(prompt: str, current: dict, api_key: Optional[str],
         response = client.messages.create(
             model=model_to_use,
             max_tokens=2048,
-            system=_get_full_system_prompt(prompt, current, category, mcp_context, dynamic_ctx, intent_profile),
+            system=_get_full_system_prompt(prompt, current, category, mcp_context, dynamic_ctx, intent_profile)[0],
             messages=[
                 {
                     "role": "user",
@@ -880,6 +917,13 @@ def llm_rewrite_spec(prompt: str, current: dict, provider: str,
         pipeline_meta["stages"].append(
             _stage_record("dynamic_context", "skipped", "No dynamic context selected")
         )
+
+    # Capture prompt token count + sections for pipeline metadata
+    _, _prompt_tokens, _prompt_sections = _get_full_system_prompt(
+        effective_prompt, current, category, mcp_ctx, dyn_ctx, intent_profile
+    )
+    pipeline_meta["prompt_tokens"] = _prompt_tokens
+    pipeline_meta["prompt_sections"] = _prompt_sections
 
     start_time = time.time()
     output_spec = None

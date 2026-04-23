@@ -48,7 +48,7 @@ def compare_prompts(prompt: str, category: str = "entity_logic_ai", model: str =
     dynamic_ctx = build_dynamic_context(prompt, category)
 
     legacy_system = _get_legacy_system_prompt_for_tests(prompt, DEFAULTS, category, None, dynamic_ctx, intent_profile)
-    dynamic_system = _get_full_system_prompt(prompt, DEFAULTS, category, None, dynamic_ctx, intent_profile)
+    dynamic_system, _, _ = _get_full_system_prompt(prompt, DEFAULTS, category, None, dynamic_ctx, intent_profile)
     compact_system = _get_compact_system_prompt(category, intent_profile)
     user_message = build_user_message(prompt, DEFAULTS)
 
