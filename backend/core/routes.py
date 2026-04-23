@@ -1924,8 +1924,8 @@ async def auth_signup(payload: dict = Body(...)):
     if tier not in VALID_TIERS:
         tier = "free"
     try:
-        existing = fetch_one("SELECT password_hash FROM users WHERE username = %s", (username,))
-        if existing and existing.get("password_hash"):
+        existing = fetch_one("SELECT username FROM users WHERE username = %s", (username,))
+        if existing:
             raise HTTPException(status_code=409, detail="Username already taken")
         pw_hash = _hash_pw(password)
         token = _new_token()
@@ -1934,11 +1934,6 @@ async def auth_signup(payload: dict = Body(...)):
             """
             INSERT INTO users (username, subscription_tier, password_hash, session_token, session_expires)
             VALUES (%s, %s, %s, %s, %s)
-            ON CONFLICT (username) DO UPDATE SET
-                subscription_tier = EXCLUDED.subscription_tier,
-                password_hash = EXCLUDED.password_hash,
-                session_token = EXCLUDED.session_token,
-                session_expires = EXCLUDED.session_expires
             """,
             (username, tier, pw_hash, token, expires),
         )
