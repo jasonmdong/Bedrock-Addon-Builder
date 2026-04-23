@@ -87,7 +87,7 @@ def _build_and_bundle(res_path: Optional[Path],
         print(f"[BUILD] Using all discovered mobs: {[s.get('short_name') for s in specs]}")
 
     out_dir = Path(tempfile.mkdtemp(prefix="out_"))
-    artifacts = build_addon(specs, out_dir, res_path, beh_path, textures_dir=textures_dir)
+    artifacts = build_addon(specs, out_dir, res_path, beh_path, textures_dir=textures_dir, build_mode=build_mode)
     kind, artifact_path = _select_artifact(artifacts, build_mode)
     return kind, artifact_path, artifacts
 
@@ -157,14 +157,40 @@ async def get_all_template_mob_names():
 
 
 def _normalize_geometry(geometry_data: dict) -> dict:
-    """Convert old-format Bedrock geometry (geometry.X: {...}) to the modern
-    minecraft:geometry array format so all downstream code can use a single check.
-    Old format example:  {"format_version": "1.8.0", "geometry.bat": { ... }}
-    New format example:  {"format_version": "1.21.0", "minecraft:geometry": [{"description": {"identifier": "geometry.bat", ...}, "bones": [...]}]}
+    """Convert old-format Bedrock geometry to the modern minecraft:geometry array format.
+
+    Handles three formats:
+    1. Modern: {"minecraft:geometry": [...]}  → returned as-is
+    2. Old namespaced: {"format_version": "1.8.0", "geometry.bat": {...}}
+    3. Flat/LLM: {"formatVersion": "...", "identifier": "geometry.bat", "bones": [...], "textureSize": [...]}
+       (LLMs sometimes return this compact single-entry format)
     """
     if "minecraft:geometry" in geometry_data:
         return geometry_data  # already new format
 
+    # --- Format 3: flat single-entry (identifier + bones at root) ---
+    if "identifier" in geometry_data and "bones" in geometry_data:
+        identifier = geometry_data.get("identifier", "geometry.custom")
+        bones = geometry_data.get("bones", [])
+        tex_size = geometry_data.get("textureSize", [])
+        tex_w = geometry_data.get("texture_width") or (tex_size[0] if len(tex_size) > 0 else 64)
+        tex_h = geometry_data.get("texture_height") or (tex_size[1] if len(tex_size) > 1 else 64)
+        fmt = geometry_data.get("format_version") or geometry_data.get("formatVersion") or "1.12.0"
+        desc = {
+            "identifier": identifier,
+            "texture_width": int(tex_w),
+            "texture_height": int(tex_h),
+        }
+        for field in ("visible_bounds_width", "visible_bounds_height", "visible_bounds_offset"):
+            if field in geometry_data:
+                desc[field] = geometry_data[field]
+        print(f"[GEOMETRY] Converted flat-format geometry: {identifier}")
+        return {
+            "format_version": fmt,
+            "minecraft:geometry": [{"description": desc, "bones": bones}]
+        }
+
+    # --- Format 2: old namespaced (geometry.X: {...}) ---
     converted_entries = []
     for key, value in geometry_data.items():
         if key == "format_version":
@@ -1924,8 +1950,8 @@ async def auth_signup(payload: dict = Body(...)):
     if tier not in VALID_TIERS:
         tier = "free"
     try:
-        existing = fetch_one("SELECT password_hash FROM users WHERE username = %s", (username,))
-        if existing and existing.get("password_hash"):
+        existing = fetch_one("SELECT username FROM users WHERE username = %s", (username,))
+        if existing:
             raise HTTPException(status_code=409, detail="Username already taken")
         pw_hash = _hash_pw(password)
         token = _new_token()
@@ -1934,11 +1960,6 @@ async def auth_signup(payload: dict = Body(...)):
             """
             INSERT INTO users (username, subscription_tier, password_hash, session_token, session_expires)
             VALUES (%s, %s, %s, %s, %s)
-            ON CONFLICT (username) DO UPDATE SET
-                subscription_tier = EXCLUDED.subscription_tier,
-                password_hash = EXCLUDED.password_hash,
-                session_token = EXCLUDED.session_token,
-                session_expires = EXCLUDED.session_expires
             """,
             (username, tier, pw_hash, token, expires),
         )

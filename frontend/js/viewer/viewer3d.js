@@ -1085,11 +1085,16 @@ function resetAnimation() {
 function loadAnimationsFromSpec(animationJson) {
   const timeline = document.getElementById("animation-timeline");
   const container = document.getElementById("anim-buttons");
+  const clipSelect = document.getElementById("anim-clip-select");
 
-  // If no valid animation data, hide the panel
+  // If no valid animation data, hide the panel and reset dropdown
   if (!animationJson || !animationJson.animations || Object.keys(animationJson.animations).length === 0) {
     if (timeline) timeline.style.display = "none";
     if (container) container.innerHTML = "";
+    if (clipSelect) {
+      clipSelect.innerHTML = '<option value="">— clip —</option>';
+      clipSelect._animRef = null;
+    }
     // Stop any playing animation and reset bones
     if (animationState && animationState.playing) {
       animationState.playing = false;
@@ -1100,36 +1105,80 @@ function loadAnimationsFromSpec(animationJson) {
 
   // Show the timeline panel
   if (timeline) timeline.style.display = "";
-  if (!container) return;
-
-  container.innerHTML = "";
 
   const animations = animationJson.animations;
   const animNames = Object.keys(animations);
 
-  animNames.forEach(fullName => {
-    const btn = document.createElement("button");
-    // Show a short label: "animation.mob.idle" → "idle"
-    const parts = fullName.split(".");
-    btn.textContent = parts[parts.length - 1] || fullName;
-    btn.title = fullName;
-    btn.addEventListener("click", () => {
-      // Highlight active button
-      container.querySelectorAll("button").forEach(b => b.classList.remove("active"));
-      btn.classList.add("active");
-      // Load and auto-play this animation
-      loadAnimation(animations[fullName]);
+  // ── Populate the clip dropdown ──────────────────────────────────────────
+  if (clipSelect) {
+    // Stash the animation map so the change handler can look up by full id
+    clipSelect._animRef = animations;
+
+    clipSelect.innerHTML = '<option value="">— clip —</option>';
+    animNames.forEach(fullName => {
+      const opt = document.createElement("option");
+      opt.value = fullName;
+      // Show short label: "animation.mob.idle" → "idle"
+      const parts = fullName.split(".");
+      opt.textContent = parts[parts.length - 1] || fullName;
+      opt.title = fullName;
+      clipSelect.appendChild(opt);
+    });
+
+    // Wire change event (remove old listener first by replacing the element clone)
+    const newSelect = clipSelect.cloneNode(true);
+    newSelect._animRef = animations;
+    clipSelect.parentNode.replaceChild(newSelect, clipSelect);
+    newSelect.addEventListener("change", () => {
+      const fullName = newSelect.value;
+      if (!fullName || !newSelect._animRef || !newSelect._animRef[fullName]) return;
+      loadAnimation(newSelect._animRef[fullName]);
       animationState.playing = true;
       animationState.lastFrameTime = performance.now();
       updateTimelineUI();
+      // Sync button highlight if buttons are also visible
+      const btns = document.querySelectorAll("#anim-buttons button");
+      btns.forEach(b => {
+        b.classList.toggle("active", b.title === fullName);
+      });
     });
-    container.appendChild(btn);
-  });
 
-  // Auto-select the first animation (load but don't auto-play)
+    // Auto-select first animation in dropdown
+    if (animNames.length > 0) {
+      newSelect.value = animNames[0];
+    }
+  }
+
+  // ── Keep button list in sync (secondary UI) ─────────────────────────────
+  if (container) {
+    container.innerHTML = "";
+    animNames.forEach(fullName => {
+      const btn = document.createElement("button");
+      const parts = fullName.split(".");
+      btn.textContent = parts[parts.length - 1] || fullName;
+      btn.title = fullName;
+      btn.addEventListener("click", () => {
+        container.querySelectorAll("button").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        loadAnimation(animations[fullName]);
+        animationState.playing = true;
+        animationState.lastFrameTime = performance.now();
+        updateTimelineUI();
+        // Sync dropdown
+        const sel = document.getElementById("anim-clip-select");
+        if (sel) sel.value = fullName;
+      });
+      container.appendChild(btn);
+    });
+
+    if (container.children.length > 0) {
+      container.children[0].classList.add("active");
+    }
+  }
+
+  // Auto-load the first animation (but don't auto-play)
   if (animNames.length > 0) {
     loadAnimation(animations[animNames[0]]);
-    container.children[0].classList.add("active");
   }
 }
 
