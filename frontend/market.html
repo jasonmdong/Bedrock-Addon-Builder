@@ -72,9 +72,6 @@ header a:hover { text-decoration: underline; }
   padding: 1.25rem;
   transition: box-shadow 0.2s, transform 0.15s;
   cursor: pointer;
-  display: flex;
-  gap: 1rem;
-  align-items: flex-start;
 }
 .mob-card:hover {
   box-shadow: 0 4px 20px rgba(0,0,0,0.1);
@@ -88,20 +85,6 @@ header a:hover { text-decoration: underline; }
   font-size: 1.15rem;
   margin-bottom: 0.25rem;
   word-break: break-word;
-}
-.mob-card-info {
-  flex: 1;
-  min-width: 0;
-}
-.mob-thumbnail {
-  width: 72px;
-  height: 72px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  object-fit: contain;
-  image-rendering: pixelated;
-  background: var(--border);
-  flex-shrink: 0;
 }
 .mob-meta {
   font-size: 0.85rem;
@@ -188,11 +171,8 @@ if (localStorage.getItem("builder_theme_preference") === "dark") {
       card.className = "mob-card";
 
       const friendlyName = (mob.display_name || mob.short_name || "").replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
-      const textureUrl = `/api/market/${encodeURIComponent(mob.short_name)}/texture`;
 
-      let html = `<img class="mob-thumbnail" src="${textureUrl}" alt="${esc(friendlyName)} texture" loading="lazy">`;
-      html += `<div class="mob-card-info">`;
-      html += `<h2>${esc(friendlyName)}</h2>`;
+      let html = `<h2>${esc(friendlyName)}</h2>`;
       html += `<div class="mob-meta">`;
       if (mob.author) html += `<span>👤 ${esc(mob.author)}</span>`;
       if (mob.published_at) {
@@ -210,7 +190,6 @@ if (localStorage.getItem("builder_theme_preference") === "dark") {
       if (tags.length) {
         html += `<div class="mob-keywords">${tags.map(k => `<span>${esc(k)}</span>`).join("")}</div>`;
       }
-      html += `</div>`; // close mob-card-info
 
       card.innerHTML = html;
       card.addEventListener("click", () => importMob(mob.short_name, card));
