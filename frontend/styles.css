@@ -889,15 +889,18 @@ code { font-family: ui-monospace, SFMono-Regular, Consolas, Menlo, monospace; }
   cursor: pointer;
   text-align: center;
   transition: all 0.2s;
+  user-select: none;
 }
 
 .tier-card:hover {
   border-color: var(--primary);
+  background: var(--secondary-bg);
 }
 
 .tier-card.selected {
   border-color: var(--primary);
-  background: rgba(99, 102, 241, 0.1);
+  background: var(--secondary-bg);
+  box-shadow: 0 0 0 2px var(--primary);
 }
 
 .tier-card-name {

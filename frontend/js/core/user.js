@@ -429,6 +429,10 @@ function deleteUser(username) {
 function showUserModal() {
   if (!userModalOverlay || !userListEl) return;
   renderUserList();
+  // Always reset tier selection to "free" when the modal opens
+  const tierRoot = document.getElementById("tier-select-cards");
+  tierRoot?.querySelectorAll(".tier-card").forEach(c => c.classList.remove("selected"));
+  tierRoot?.querySelector(".tier-card[data-tier='free']")?.classList.add("selected");
   userModalOverlay.classList.remove("hidden");
 }
 
@@ -491,9 +495,13 @@ function selectUser(username) {
   hideUserModal();
   updateUserDisplay();
   updateAiUsageDisplay();
-  refreshUserTierFromBackend(username).then(() => {
-    updateUserDisplay();
-    updateAiUsageDisplay();
+  // Sync user to backend (upsert) so existing localStorage-only users get persisted
+  const tier = getUserTier(username);
+  syncUserToBackend(username, tier).then(() => {
+    refreshUserTierFromBackend(username).then(() => {
+      updateUserDisplay();
+      updateAiUsageDisplay();
+    });
   });
   loadSpec();
 }
@@ -603,7 +611,7 @@ function initUserSystem() {
   const changePlanBtn = document.getElementById("change-plan-btn");
   const savePlanBtn = document.getElementById("save-plan-btn");
   const changePlanTierRoot = document.getElementById("change-plan-tier-cards");
-  const changePlanTierCards = changePlanTierRoot?.querySelectorAll(".tier-card") || [];
+  const changePlanTierCards = Array.from(changePlanTierRoot?.querySelectorAll(".tier-card") || []);
 
   function syncChangePlanSelection(tier) {
     changePlanTierCards.forEach((c) => {
@@ -642,10 +650,14 @@ function initUserSystem() {
       setStatus?.(`Demo plan set to ${tier}.`);
     }
   });
+
+  document.getElementById("cancel-plan-btn")?.addEventListener("click", () => {
+    changePlanOverlay?.classList.add("hidden");
+  });
   
   // Tier card selection (signup POC — scoped to modal)
   const tierCardRoot = document.getElementById("tier-select-cards");
-  const tierCards = tierCardRoot?.querySelectorAll(".tier-card") || [];
+  const tierCards = Array.from(tierCardRoot?.querySelectorAll(".tier-card") || []);
   tierCards.forEach((card) => {
     card.addEventListener("click", () => {
       tierCards.forEach((c) => c.classList.remove("selected"));

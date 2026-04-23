@@ -1384,11 +1384,15 @@ def styles_css():
 def serve_js(filename: str):
     """Serve JavaScript files from frontend/js directory."""
     from backend.core.core import FRONTEND_DIR
-    # Sanitize filename to prevent directory traversal
-    safe_filename = filename.replace("..", "").replace("/", "").replace("\\", "")
-    path = FRONTEND_DIR / "js" / safe_filename
+    js_root = (FRONTEND_DIR / "js").resolve()
+    # Resolve the requested path and ensure it stays within js_root
+    try:
+        path = (js_root / filename).resolve()
+        path.relative_to(js_root)  # raises ValueError if outside js_root
+    except (ValueError, Exception):
+        raise HTTPException(status_code=404, detail=f"JS file not found: {filename}")
     if not path.exists() or not path.is_file():
-        raise HTTPException(status_code=404, detail=f"JS file not found: {safe_filename}")
+        raise HTTPException(status_code=404, detail=f"JS file not found: {filename}")
     return FileResponse(path, media_type="application/javascript")
 
 
@@ -1874,5 +1878,5 @@ def get_user(username: str):
     from backend.database.db import fetch_one
     row = fetch_one("SELECT username, subscription_tier FROM users WHERE username = %s", (username,))
     if not row:
-        raise HTTPException(status_code=404, detail="User not found")
+        return {"username": username, "subscription_tier": "free"}
     return {"username": row["username"], "subscription_tier": row["subscription_tier"]}

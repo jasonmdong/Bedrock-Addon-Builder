@@ -20,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
 # Import route handlers
-from backend.api.routes import (
+from backend.core.routes import (
     upsert_user,
     get_user,
     get_mobs,
@@ -56,9 +56,8 @@ from backend.api.routes import (
     launch_test_stop,
     publish_mob_to_database,
     check_published_mob,
-    llm_generate_animation_endpoint,
-    llm_generate_animation_controller_endpoint,
-    llm_generate_animations_full_endpoint,
+    llm_animation_generate,
+    llm_animation_controller_generate,
 )
 from backend.mctools.routes import (
     mctools_health,
@@ -154,9 +153,8 @@ app.post("/api/mctools/write-image-svg")(mctools_write_image_svg)
 app.post("/api/mctools/write-image-pixel-art")(mctools_write_image_pixel_art)
 
 # Animation generation routes
-app.post("/api/animation/generate")(llm_generate_animation_endpoint)
-app.post("/api/animation/controller/generate")(llm_generate_animation_controller_endpoint)
-app.post("/api/animation/generate-full")(llm_generate_animations_full_endpoint)
+app.post("/api/animation/generate")(llm_animation_generate)
+app.post("/api/animation/controller/generate")(llm_animation_controller_generate)
 
 # User account routes (demo subscription tier sync)
 app.post("/api/users")(upsert_user)
