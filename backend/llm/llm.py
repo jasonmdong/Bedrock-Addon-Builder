@@ -639,7 +639,7 @@ def _call_gemini(prompt: str, current: dict, api_key: Optional[str],
                 model=GEMINI_MODEL_NAME,
                 contents=f"Current spec:\n{_prepare_spec_for_llm(current)}\n\nInstruction:\n{prompt.strip()}",
                 config={
-                    "system_instruction": _get_full_system_prompt(category, mcp_context, dynamic_ctx, intent_profile),
+                    "system_instruction": _get_full_system_prompt(prompt, current, category, mcp_context, dynamic_ctx, intent_profile),
                     "response_mime_type": "application/json"
                 }
             )
