@@ -25,6 +25,9 @@ McpGettingStarted/
 # Sample mob exports
 SampleElephant/
 
+# Blockbench project files (local only)
+blockbench/
+
 # Temp test files
 test_mctools.py
 
