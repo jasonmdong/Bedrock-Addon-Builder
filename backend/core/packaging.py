@@ -109,7 +109,7 @@ def create_mcworld(out_dir: Path,
     import sys
 
     # Ensure MCP tools are importable
-    mcp_root = Path(__file__).resolve().parents[2] / "MCP" / "mcp_server"
+    mcp_root = Path(__file__).resolve().parents[2] / "docs" / "MCP" / "mcp_server"
     if str(mcp_root) not in sys.path:
         sys.path.insert(0, str(mcp_root))
 

@@ -635,11 +635,12 @@ def _call_gemini(prompt: str, current: dict, api_key: Optional[str],
         try:
             client = genai.Client(api_key=key)
 
+            sys_prompt, _, _ = _get_full_system_prompt(prompt, current, category, mcp_context, dynamic_ctx, intent_profile)
             response = client.models.generate_content(
                 model=GEMINI_MODEL_NAME,
                 contents=f"Current spec:\n{_prepare_spec_for_llm(current)}\n\nInstruction:\n{prompt.strip()}",
                 config={
-                    "system_instruction": _get_full_system_prompt(prompt, current, category, mcp_context, dynamic_ctx, intent_profile),
+                    "system_instruction": sys_prompt,
                     "response_mime_type": "application/json"
                 }
             )

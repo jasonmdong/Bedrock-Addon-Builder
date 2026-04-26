@@ -780,6 +780,7 @@ def patch_behavior_pack(beh_root: Path, specs: list[dict]):
 
         # Auto-wire minecraft:loot if loot_drops exists but component missing
         if loot_drops and "minecraft:loot" not in comps:
+            mob_name = spec.get("short_name", "unknown_mob")
             comps["minecraft:loot"] = {
                 "table": f"loot_tables/entities/{mob_name}.json"
             }
