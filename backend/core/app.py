@@ -56,6 +56,9 @@ from backend.core.routes import (
     launch_test_stop,
     publish_mob_to_database,
     check_published_mob,
+    list_published_mobs,
+    market_page,
+    get_published_mob,
     llm_animation_generate,
     llm_animation_controller_generate,
     auth_signup,
@@ -67,6 +70,9 @@ from backend.core.routes import (
     delete_user_mob_db,
     get_mob_versions,
     push_mob_version,
+    list_published_mobs,
+    market_page,
+    get_published_mob,
 )
 from backend.mctools.routes import (
     mctools_health,
@@ -194,9 +200,14 @@ app.get("/api/users/{username}")(get_user)
 # Publish routes (save user mobs to database for RAG)
 app.post("/api/publish")(publish_mob_to_database)
 app.get("/api/publish/check/{mob_name}/{username}")(check_published_mob)
+app.get("/api/market")(list_published_mobs)
+app.get("/api/market/{mob_name}")(get_published_mob)
+app.get("/api/market")(list_published_mobs)
+app.get("/api/market/{mob_name}")(get_published_mob)
 
 # Static routes
 app.get("/")(index)
+app.get("/market")(market_page)
 app.get("/styles.css")(styles_css)
 app.get("/js/{filename:path}")(serve_js)
 app.get("/healthz")(healthz)

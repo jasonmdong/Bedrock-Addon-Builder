@@ -28,14 +28,23 @@ import json
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 
-# Local imports (same pattern as main.py)
-import API_KEY
+# Local imports — deferred to avoid ModuleNotFoundError when called from the web server.
+# Only API_KEY and neon_db are always needed; the rest are used inside functions.
+try:
+    import API_KEY
+except ImportError:
+    API_KEY = None
+
 import neon_db
-import get_bone_data
-import get_vector_embeddings
-import mob_descriptions
-import mob_keywords
-import mob_complexity
+
+def _import_helpers():
+    """Lazy-import optional helper modules that may not be installed."""
+    import get_bone_data
+    import get_vector_embeddings
+    import mob_descriptions
+    import mob_keywords
+    import mob_complexity
+    return get_bone_data, get_vector_embeddings, mob_descriptions, mob_keywords, mob_complexity
 
 
 # Default database connection string (same as main.py)
@@ -48,7 +57,9 @@ def publish_user_mob(
     prompts: List[str],
     geometry: Dict[str, Any],
     db_connection: Optional[neon_db.NeonDatabaseConnection] = None,
-    api_key: Optional[str] = None
+    api_key: Optional[str] = None,
+    mob_spec: Optional[Dict[str, Any]] = None,
+    texture_data: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Publish a user-created mob to the database.
@@ -76,7 +87,10 @@ def publish_user_mob(
         )
     """
     # Get API key
-    api_key = api_key or API_KEY.MY_API_KEY
+    api_key = api_key or (API_KEY.MY_API_KEY if API_KEY else os.environ.get("OPENAI_API_KEY"))
+    
+    # Lazy-import optional helper modules
+    get_bone_data, get_vector_embeddings, mob_descriptions, mob_keywords, mob_complexity = _import_helpers()
     
     # Track if we created the connection (so we know to close it)
     created_connection = False
@@ -147,7 +161,9 @@ def publish_user_mob(
             bone_metadata=bone_metadata,
             complexity_score=complexity_score,
             is_official=False,             # User mobs are not official
-            creation_date=datetime.now().isoformat()
+            creation_date=datetime.now().isoformat(),
+            mob_spec=mob_spec,
+            texture_data=texture_data
         )
         
         if success:
@@ -222,7 +238,9 @@ def update_user_mob(
     prompts: List[str],
     geometry: Dict[str, Any],
     db_connection: Optional[neon_db.NeonDatabaseConnection] = None,
-    api_key: Optional[str] = None
+    api_key: Optional[str] = None,
+    mob_spec: Optional[Dict[str, Any]] = None,
+    texture_data: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Update an existing published mob with new data.
@@ -240,7 +258,11 @@ def update_user_mob(
     Returns:
         Dict with success status and mob details
     """
-    api_key = api_key or API_KEY.MY_API_KEY
+    api_key = api_key or (API_KEY.MY_API_KEY if API_KEY else os.environ.get("OPENAI_API_KEY"))
+    
+    # Lazy-import optional helper modules
+    get_bone_data, get_vector_embeddings, mob_descriptions, mob_keywords, mob_complexity = _import_helpers()
+    
     created_connection = False
     
     try:
@@ -289,7 +311,9 @@ def update_user_mob(
             mob_embedding=embedding,
             bone_metadata=bone_metadata,
             complexity_score=complexity_score,
-            creation_date=datetime.now().isoformat()
+            creation_date=datetime.now().isoformat(),
+            mob_spec=mob_spec,
+            texture_data=texture_data
         )
         
         if success:
@@ -318,7 +342,9 @@ def publish_or_update_mob(
     username: str,
     prompts: List[str],
     geometry: Dict[str, Any],
-    api_key: Optional[str] = None
+    api_key: Optional[str] = None,
+    mob_spec: Optional[Dict[str, Any]] = None,
+    texture_data: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Publish a new mob or update if it already exists.
@@ -335,7 +361,7 @@ def publish_or_update_mob(
     Returns:
         Dict with success status and mob details
     """
-    api_key = api_key or API_KEY.MY_API_KEY
+    api_key = api_key or (API_KEY.MY_API_KEY if API_KEY else os.environ.get("OPENAI_API_KEY"))
     
     # Create a single connection for both operations
     connection_string = os.environ.get('DATABASE_URL', DEFAULT_CONNECTION_STRING)
@@ -347,10 +373,10 @@ def publish_or_update_mob(
     try:
         if check_mob_exists(mob_name, username, db):
             print(f"Mob {mob_name}_{username} exists, updating...")
-            return update_user_mob(mob_name, username, prompts, geometry, db, api_key)
+            return update_user_mob(mob_name, username, prompts, geometry, db, api_key, mob_spec, texture_data)
         else:
             print(f"Mob {mob_name}_{username} is new, publishing...")
-            return publish_user_mob(mob_name, username, prompts, geometry, db, api_key)
+            return publish_user_mob(mob_name, username, prompts, geometry, db, api_key, mob_spec, texture_data)
     finally:
         db.disconnect()
 

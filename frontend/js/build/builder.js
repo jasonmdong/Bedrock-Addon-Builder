@@ -395,8 +395,111 @@ function initBuildHandlers() {
     localStorage.setItem(BUILD_MODE_KEY, buildModeSelect.value);
   });
 
+  // --- Publish Mob ---
+  initPublishMob();
+
   // --- One-Click Play (.mcworld) ---
   initPlayWorld();
+}
+
+// ---------------------------------------------------------------------------
+// Publish Mob to Database
+// ---------------------------------------------------------------------------
+const publishMobBtn = document.getElementById("publish-mob-btn");
+const publishStatusEl = document.getElementById("publish-status");
+
+function _setPublishStatus(text, color) {
+  if (publishStatusEl) {
+    publishStatusEl.style.display = text ? "block" : "none";
+    publishStatusEl.innerHTML = text;
+    publishStatusEl.style.color = color || "var(--text)";
+  }
+}
+
+function initPublishMob() {
+  publishMobBtn?.addEventListener("click", async (e) => {
+    e.preventDefault();
+
+    const user = getCurrentUser();
+    if (!user) {
+      _setPublishStatus("Please select or create a user first.", "var(--danger)");
+      return;
+    }
+
+    if (!currentMobName) {
+      _setPublishStatus("No mob selected. Click a mob in the sidebar first.", "var(--danger)");
+      return;
+    }
+
+    // Save current spec first
+    const saved = await saveSpec();
+    if (saved === null) return;
+
+    const spec = getUserMob(currentMobName);
+    if (!spec) {
+      _setPublishStatus("Could not load spec for " + currentMobName, "var(--danger)");
+      return;
+    }
+
+    // Gather LLM prompt history
+    const llmHistory = typeof readLlmStack === "function"
+      ? readLlmStack(user, currentMobName)
+      : [];
+    const prompts = llmHistory.map(entry => entry.prompt).filter(Boolean);
+
+    // Get texture as base64 data URL
+    const textureData = typeof getUserMobTexture === "function"
+      ? getUserMobTexture(currentMobName)
+      : null;
+
+    // Get geometry (prefer viewer's copy, then spec's geometry_json)
+    let geometry = spec.geometry_json || {};
+    const geoCopyEl = document.getElementById("geometry-copy");
+    if (geoCopyEl && geoCopyEl.dataset.json) {
+      try {
+        const viewerGeo = JSON.parse(geoCopyEl.dataset.json);
+        if (viewerGeo && viewerGeo["minecraft:geometry"]) {
+          geometry = viewerGeo;
+        }
+      } catch (_) { /* ignore */ }
+    }
+
+    publishMobBtn.disabled = true;
+    publishMobBtn.textContent = "Publishing...";
+    _setPublishStatus("Publishing to database...", "#f59e0b");
+
+    try {
+      const res = await fetch("/api/publish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mob_name: currentMobName,
+          username: user,
+          prompts: prompts,
+          geometry: geometry,
+          spec: spec,
+          texture_data: textureData
+        })
+      });
+
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        _setPublishStatus("Publish failed: " + (data.detail || res.statusText), "var(--danger)");
+        return;
+      }
+
+      _setPublishStatus(
+        `Published <strong>${data.mob_name || currentMobName}</strong> successfully!`,
+        "#10b981"
+      );
+    } catch (err) {
+      _setPublishStatus("Network error: " + err.message, "var(--danger)");
+    } finally {
+      publishMobBtn.disabled = false;
+      publishMobBtn.textContent = "📤 Publish Mob";
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------
